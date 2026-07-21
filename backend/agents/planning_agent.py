@@ -1,7 +1,7 @@
 """Planning Agent.
 
 Responsibility (PRD §7): packing list + weather-driven adjustments + day pacing.
-Data source: weather_service.get_weather (mock_weather.json).
+Data source: destination-aware AI seasonal weather estimates.
 Output shape: {"packing_list": [...], "weather_summary": str, "pacing_notes": str} (+ daily weather).
 """
 from services.weather_service import get_weather
@@ -12,6 +12,7 @@ SYSTEM_PROMPT = (
     "You are the Planning Agent in a multi-agent trip planner. Given a destination, the trip "
     "dates, a per-day weather forecast, and the traveler's activity style, produce practical "
     "trip logistics. "
+    "Use the exact destination only and never mention weather or logistics for another city. "
     "Return ONLY a JSON object with keys: "
     "packing_list (array of concise item strings tailored to the weather and activities), and "
     "pacing_notes (2-3 sentences on how to pace the days given the weather and trip length)."
@@ -45,6 +46,8 @@ def run(trip_input: dict) -> dict:
         "destination": trip_input["location"],
         "num_days": len(days),
         "activity_styles": styles,
+        "all_preferences": trip_input.get("preferences", {}),
+        "time_constraints": trip_input.get("time_constraints", ""),
         "weather": weather,
     })
 
@@ -60,4 +63,6 @@ def run(trip_input: dict) -> dict:
         "weather_summary": weather["summary"],
         "pacing_notes": pacing,
         "daily_weather": weather["daily"],
+        "destination": trip_input["location"],
+        "verification_required": weather.get("verification_required", True),
     }

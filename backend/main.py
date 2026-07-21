@@ -10,6 +10,7 @@ Run from the backend/ directory:
     uvicorn main:app --reload
 """
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from dotenv import find_dotenv, load_dotenv
 from fastapi import FastAPI, HTTPException
@@ -97,8 +98,15 @@ def plan_stream(trip: TripInput):
         try:
             for name in AGENT_ORDER:
                 yield _sse({"type": "agent_start", "agent": name})
-                outputs[name] = orchestrator.run_single_agent(name, trip_input)
-                yield _sse({"type": "agent_done", "agent": name, "output": outputs[name]})
+            with ThreadPoolExecutor(max_workers=len(AGENT_ORDER)) as executor:
+                futures = {
+                    executor.submit(orchestrator.run_single_agent, name, trip_input): name
+                    for name in AGENT_ORDER
+                }
+                for future in as_completed(futures):
+                    name = futures[future]
+                    outputs[name] = future.result()
+                    yield _sse({"type": "agent_done", "agent": name, "output": outputs[name]})
 
             yield _sse({"type": "agent_start", "agent": "orchestrator"})
             result = orchestrator.reconcile_and_synthesize(trip_input, outputs)

@@ -11,6 +11,7 @@ Public API:
     plan(trip_input)                     -> runs everything end to end
 """
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from agents import (
     activity_agent,
@@ -22,7 +23,6 @@ from agents import (
 )
 from agents.base import trip_days
 from llm.deepseek_client import chat_json
-from services.budget_service import get_cost_index
 
 _AGENTS = {
     "budget": budget_agent.run,
@@ -36,13 +36,18 @@ _AGENTS = {
 SYNTHESIS_PROMPT = (
     "You are the Orchestrator of a multi-agent trip planner. You are given the finalized "
     "outputs of six specialist agents (transportation, housing, food per day, activities, "
-    "weather, pacing). Produce a coherent day-by-day itinerary. "
+    "weather, pacing). Produce a coherent day-by-day itinerary for the EXACT destination supplied. "
+    "Use ONLY the supplied lodging, meals, transportation, and activities; never invent or import "
+    "places from another city/country. Never repeat an activity or venue while distinct supplied "
+    "choices exist. Include every requested date exactly once and no other dates. "
     "Return ONLY a JSON object with keys: "
     "summary (2-3 sentence overview of the trip), and "
     "schedule (array, one object per day, each with: day (int, 1-based), date (YYYY-MM-DD), "
     "title (short theme for the day), and items (array of {time, type, title, detail})). "
     "type is one of: arrival, departure, lodging, meal, activity. Weave meals and activities "
     "into a natural daily flow and respect the arrival/departure days."
+    " For activity, meal, and lodging items, copy the supplied name EXACTLY into title so "
+    "verification labels are preserved. Use at most one supplied activity per day."
 )
 
 
@@ -52,8 +57,36 @@ def run_single_agent(name: str, trip_input: dict) -> dict:
     return _AGENTS[name](trip_input)
 
 
-def _local_transport_estimate(trip_input: dict, num_days: int) -> float:
-    index = get_cost_index(trip_input["location"])
+LEGACY_TOKYO_MARKERS = {
+    "tokyo", "asakusa", "shibuya", "ginza", "shinjuku", "akihabara",
+    "senso-ji", "nrt", "haneda", "mt. fuji", "hakone", "teamlab planets",
+}
+
+
+def _has_legacy_tokyo_content(value, destination: str) -> bool:
+    destination_text = destination.casefold()
+    if "tokyo" in destination_text or "japan" in destination_text:
+        return False
+    serialized = json.dumps(value, ensure_ascii=False).casefold()
+    return any(marker in serialized for marker in LEGACY_TOKYO_MARKERS)
+
+
+def _validate_agent_geography(trip_input: dict, outputs: dict) -> None:
+    destination = trip_input["location"].strip()
+    for agent, output in outputs.items():
+        output_destination = str(output.get("destination", destination)).strip()
+        if output_destination.casefold() != destination.casefold():
+            raise ValueError(
+                f"{agent.title()} Agent returned data for '{output_destination}' instead of '{destination}'."
+            )
+    if _has_legacy_tokyo_content(outputs, destination):
+        raise ValueError(
+            f"Geography guard rejected stale Tokyo/Japan data for a {destination} trip. Please retry."
+        )
+
+
+def _local_transport_estimate(outputs: dict, num_days: int) -> float:
+    index = outputs.get("budget", {}).get("cost_index", {})
     return round(index["daily_index"].get("local_transport", 0) * num_days, 2)
 
 
@@ -70,7 +103,7 @@ def _reconcile_budget(trip_input: dict, outputs: dict, log: list) -> dict:
     transport_cost = outputs["transportation"]["cost"]
     food_cost = outputs["food"]["cost"]
     activity_cost = outputs["activity"]["cost"]
-    local_transport = _local_transport_estimate(trip_input, num_days)
+    local_transport = _local_transport_estimate(outputs, num_days)
     fixed = transport_cost + food_cost + activity_cost + local_transport
 
     housing = outputs["housing"]
@@ -164,7 +197,7 @@ def _fallback_schedule(trip_input: dict, outputs: dict) -> dict:
                           "detail": f"Land at {transport.get('arrival_airport', 'the airport')}, "
                                     f"check in at {housing['name']} ({housing.get('area', '')})."})
         day_meals = meals_by_day.get(date, {}).get("meals", [])
-        act = activities[i % len(activities)] if activities else None
+        act = activities[i] if i < len(activities) else None
         if day_meals:
             items.append({"time": "08:30", "type": "meal", "title": day_meals[0]["name"],
                           "detail": f"{day_meals[0]['cuisine']} in {day_meals[0]['area']}"})
@@ -193,7 +226,47 @@ def _fallback_schedule(trip_input: dict, outputs: dict) -> dict:
     }
 
 
+def _valid_synthesis(trip_input: dict, synth: dict | None, outputs: dict) -> bool:
+    if not isinstance(synth, dict) or not isinstance(synth.get("schedule"), list):
+        return False
+    days = trip_days(trip_input)
+    schedule = synth["schedule"]
+    if len(schedule) != len(days):
+        return False
+    if [day.get("date") for day in schedule] != days:
+        return False
+    allowed_activities = {
+        activity["name"].strip().casefold()
+        for activity in outputs["activity"]["recommended"]
+    }
+    allowed_meals = {
+        meal["name"].strip().casefold()
+        for daily in outputs["food"]["daily_meals"]
+        for meal in daily["meals"]
+    }
+    activity_titles = []
+    for day in schedule:
+        if not isinstance(day.get("items"), list):
+            return False
+        for item in day["items"]:
+            if item.get("type") == "activity":
+                title = str(item.get("title", "")).strip().casefold()
+                if not title or title not in allowed_activities:
+                    return False
+                activity_titles.append(title)
+            if item.get("type") == "meal":
+                title = str(item.get("title", "")).strip().casefold()
+                if not title or title not in allowed_meals:
+                    return False
+    if len(activity_titles) != min(len(days), len(allowed_activities)):
+        return False
+    if len(activity_titles) != len(set(activity_titles)):
+        return False
+    return not _has_legacy_tokyo_content(synth, trip_input["location"])
+
+
 def reconcile_and_synthesize(trip_input: dict, outputs: dict) -> dict:
+    _validate_agent_geography(trip_input, outputs)
     reasoning_log = []
     # Capture each agent's own reasoning for the audit trail.
     label = {"budget": "Budget", "transportation": "Transportation", "housing": "Housing",
@@ -206,12 +279,20 @@ def reconcile_and_synthesize(trip_input: dict, outputs: dict) -> dict:
         reasoning_log.append({"agent": "Budget", "note": f"⚠ {w}"})
 
     cost = _reconcile_budget(trip_input, outputs, reasoning_log)
+    for warning in outputs.get("budget", {}).get("warnings", []):
+        entry = {"agent": "Budget", "note": f"⚠ {warning}"}
+        if entry not in reasoning_log:
+            reasoning_log.append(entry)
 
     # One DeepSeek synthesis call for the day-by-day schedule (with deterministic fallback).
     synth = None
     try:
         payload = {
             "destination": trip_input["location"],
+            "strict_destination_rule": (
+                f"Every place must be in {trip_input['location']} or a clearly identified day trip "
+                f"departing from {trip_input['location']}. Do not use any other destination's data."
+            ),
             "dates": trip_input["dates"],
             "arrival": outputs["transportation"]["recommended"],
             "lodging": outputs["housing"]["recommended"],
@@ -221,7 +302,7 @@ def reconcile_and_synthesize(trip_input: dict, outputs: dict) -> dict:
             "pacing_notes": outputs["planning"]["pacing_notes"],
         }
         synth = chat_json(SYNTHESIS_PROMPT, json.dumps(payload, ensure_ascii=False), temperature=0.5)
-        if "schedule" not in synth or not synth["schedule"]:
+        if not _valid_synthesis(trip_input, synth, outputs):
             synth = None
     except Exception:
         synth = None
@@ -239,10 +320,21 @@ def reconcile_and_synthesize(trip_input: dict, outputs: dict) -> dict:
         "weather_summary": outputs["planning"]["weather_summary"],
         "reasoning_log": reasoning_log,
         "agent_outputs": outputs,
+        "verification_notice": (
+            "Travel data is AI-generated planning guidance, not live inventory. Verify prices, "
+            "availability, opening hours, visas, transport schedules, and bookings before travel."
+        ),
     }
 
 
 def plan(trip_input: dict) -> dict:
-    """Run all six agents, then reconcile and synthesize the final itinerary."""
-    outputs = {name: run_single_agent(name, trip_input) for name in _AGENTS}
+    """Run independent specialist agents concurrently, then synthesize."""
+    outputs = {}
+    with ThreadPoolExecutor(max_workers=len(_AGENTS)) as executor:
+        futures = {
+            executor.submit(run_single_agent, name, trip_input): name
+            for name in _AGENTS
+        }
+        for future in as_completed(futures):
+            outputs[futures[future]] = future.result()
     return reconcile_and_synthesize(trip_input, outputs)

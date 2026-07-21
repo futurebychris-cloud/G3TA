@@ -1,7 +1,7 @@
 """Budget Agent.
 
 Responsibility (PRD §7): track running total, flag overspend, allocate per-category caps.
-Data source: budget_service.get_cost_index (mock_budget_db.json).
+Data source: destination-aware AI cost estimates.
 Output shape: {"daily_caps": {...}, "warnings": [...]} (+ reasoning & context fields).
 """
 from services.budget_service import get_cost_index
@@ -46,7 +46,12 @@ def run(trip_input: dict, overflow: float | None = None) -> dict:
     num_days = len(days)
     total = float(trip_input["budget"]["total"])
     currency = trip_input["budget"].get("currency", "USD")
-    index = get_cost_index(trip_input["location"])
+    index = get_cost_index(
+        trip_input["location"],
+        trip_input.get("origin", ""),
+        trip_input.get("dates", {}),
+        currency,
+    )
 
     payload = {
         "total_budget": total,
@@ -55,6 +60,11 @@ def run(trip_input: dict, overflow: float | None = None) -> dict:
         "estimated_flight_cost": index.get("flight_reference"),
         "destination_daily_cost_index": index["daily_index"],
         "cost_level": index.get("cost_level"),
+        "destination": trip_input["location"],
+        "origin": trip_input.get("origin", ""),
+        "dates": trip_input["dates"],
+        "all_preferences": trip_input.get("preferences", {}),
+        "time_constraints": trip_input.get("time_constraints", ""),
     }
     if overflow:
         payload["overflow_to_trim"] = overflow
@@ -77,4 +87,6 @@ def run(trip_input: dict, overflow: float | None = None) -> dict:
     result["num_days"] = num_days
     result["total_budget"] = total
     result["currency"] = currency
+    result["destination"] = trip_input["location"]
+    result["cost_index"] = index
     return result

@@ -1,7 +1,7 @@
 """Transportation Agent.
 
 Responsibility (PRD §7): recommend flight/train/car option(s) within budget.
-Data source: flights_service.get_flight_options (mock_flights.json).
+Data source: destination-aware AI transportation estimates.
 Output shape: {"options": [...], "recommended": {...}, "cost": number} (+ reasoning).
 """
 from services.flights_service import get_flight_options
@@ -14,19 +14,30 @@ SYSTEM_PROMPT = (
     "of stops against their total budget and preferences. "
     "Return ONLY a JSON object with keys: recommended_id (the id of your pick), and reasoning "
     "(one sentence on why). Choose an option that leaves room in the budget for lodging, food, "
-    "and activities."
+    "and activities. The route MUST start at the supplied origin and end at the supplied exact "
+    "destination; reject anything for another city or country. Treat schedules and prices as "
+    "estimates requiring verification."
 )
 
 
 def run(trip_input: dict) -> dict:
     origin = trip_input.get("origin", "New York")
-    options = get_flight_options(origin, trip_input["location"], trip_input["dates"])
+    transport_types = trip_input.get("preferences", {}).get("transportation_type", [])
+    options = get_flight_options(
+        origin,
+        trip_input["location"],
+        trip_input["dates"],
+        trip_input.get("budget", {}),
+        transport_types,
+    )
 
     payload = {
         "origin": origin,
         "destination": trip_input["location"],
         "total_budget": trip_input["budget"],
         "preferences": trip_input.get("preferences", {}),
+        "dates": trip_input["dates"],
+        "time_constraints": trip_input.get("time_constraints", ""),
         "options": options,
     }
     result = llm_reason(SYSTEM_PROMPT, payload)
@@ -48,4 +59,6 @@ def run(trip_input: dict) -> dict:
         "recommended": recommended,
         "cost": recommended["price"],
         "reasoning": reasoning,
+        "destination": trip_input["location"],
+        "verification_required": True,
     }
