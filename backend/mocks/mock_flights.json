@@ -1,0 +1,11 @@
+{
+  "destination": "Tokyo",
+  "note": "Mock round-trip flight data (USD). Prices are per traveler, round-trip. Replace with a real Amadeus/Skyscanner call in backend/services/flights_service.py without changing this shape.",
+  "options": [
+    { "id": "fl_ana_01", "carrier": "ANA", "price": 985, "duration": "11h 25m", "departure_time": "10:40", "arrival_airport": "HND", "stops": 0 },
+    { "id": "fl_jal_01", "carrier": "Japan Airlines", "price": 1040, "duration": "11h 40m", "departure_time": "13:15", "arrival_airport": "NRT", "stops": 0 },
+    { "id": "fl_ua_01", "carrier": "United", "price": 820, "duration": "13h 05m", "departure_time": "11:50", "arrival_airport": "NRT", "stops": 1 },
+    { "id": "fl_dl_01", "carrier": "Delta", "price": 760, "duration": "14h 20m", "departure_time": "07:30", "arrival_airport": "HND", "stops": 1 },
+    { "id": "fl_zip_01", "carrier": "ZIPAIR", "price": 690, "duration": "12h 10m", "departure_time": "17:05", "arrival_airport": "NRT", "stops": 0 }
+  ]
+}

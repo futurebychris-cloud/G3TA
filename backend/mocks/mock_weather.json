@@ -1,0 +1,19 @@
+{
+  "destination": "Tokyo",
+  "note": "Mock climate template by month. weather_service.py maps requested trip dates onto this template to produce a per-day forecast. Replace with a real OpenWeather/Tomorrow.io call without changing the service's return shape.",
+  "monthly": {
+    "1":  { "condition": "clear/cold", "high_c": 10, "low_c": 2,  "rain_chance": 0.2 },
+    "2":  { "condition": "clear/cold", "high_c": 11, "low_c": 3,  "rain_chance": 0.2 },
+    "3":  { "condition": "mild/cherry-blossom", "high_c": 14, "low_c": 5, "rain_chance": 0.3 },
+    "4":  { "condition": "mild/spring", "high_c": 19, "low_c": 10, "rain_chance": 0.3 },
+    "5":  { "condition": "warm/pleasant", "high_c": 23, "low_c": 15, "rain_chance": 0.35 },
+    "6":  { "condition": "humid/rainy-season", "high_c": 26, "low_c": 19, "rain_chance": 0.6 },
+    "7":  { "condition": "hot/humid", "high_c": 30, "low_c": 23, "rain_chance": 0.45 },
+    "8":  { "condition": "hot/humid", "high_c": 31, "low_c": 24, "rain_chance": 0.4 },
+    "9":  { "condition": "warm/typhoon-season", "high_c": 27, "low_c": 21, "rain_chance": 0.5 },
+    "10": { "condition": "mild/clear", "high_c": 22, "low_c": 15, "rain_chance": 0.3 },
+    "11": { "condition": "cool/autumn-foliage", "high_c": 17, "low_c": 9, "rain_chance": 0.25 },
+    "12": { "condition": "clear/cold", "high_c": 12, "low_c": 4, "rain_chance": 0.2 }
+  },
+  "daily_variation_c": 2
+}
