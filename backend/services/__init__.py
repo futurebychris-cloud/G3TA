@@ -1,7 +1,6 @@
-"""Data-source service layer.
+"""Destination-aware data-source service layer.
 
-Every external data source is wrapped in one function with a fixed signature.
-Agents call ONLY these functions — never the mock files directly — so a teammate
-can swap a mock for a real API by editing just the file here. See README
-"Adding Real APIs" for the full contract table.
+Until live provider APIs are connected, services ask DeepSeek for planning
+estimates tied to the exact trip request and mark every record for verification.
+Real API adapters can replace individual services without changing agent output.
 """

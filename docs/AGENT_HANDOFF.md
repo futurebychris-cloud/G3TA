@@ -5,9 +5,10 @@ Read it before extending an agent or wiring a new data source. A teammate's own
 AI coding agent should be able to work from this file alone.
 
 Every agent exposes `run(trip_input: dict) -> dict` in `backend/agents/<name>_agent.py`.
-Every agent reads its data through exactly one function in `backend/services/`
-(never a mock file directly). The Orchestrator is the only component that sees all
-six outputs together.
+Every agent reads its data through a destination-aware function in `backend/services/`.
+Until real provider APIs are connected, those services generate DeepSeek estimates
+and mark them `verification_required`. The Orchestrator is the only component that
+sees all six outputs together and enforces destination isolation.
 
 ---
 
@@ -15,12 +16,12 @@ six outputs together.
 
 ```json
 {
-  "location": "Tokyo",
+  "location": "Shanghai",
   "origin": "New York",
   "dates": { "start": "2026-04-10", "end": "2026-04-14" },
   "budget": { "total": 2500, "currency": "USD" },
   "preferences": {
-    "bites": ["ramen", "sushi"],
+    "bites": ["Thai", "American"],
     "transportation_type": ["flight"],
     "activity_style": ["cultural", "adventure"]
   },
@@ -111,7 +112,7 @@ six outputs together.
 ```json
 {
   "packing_list": ["Warm jacket", "Compact umbrella", "…"],
-  "weather_summary": "Tokyo: mild/spring. Avg high ~19°C. …",
+  "weather_summary": "AI seasonal estimate for Shanghai: mild spring conditions …",
   "pacing_notes": "With 5 days, keep one flexible afternoon …",
   "daily_weather": [ { "date", "condition", "high_c", "low_c", "rain_chance" } ]
 }
@@ -127,7 +128,7 @@ to synthesize the schedule. Final itinerary object:
 
 ```json
 {
-  "destination": "Tokyo",
+  "destination": "Shanghai",
   "dates": { "start": "...", "end": "..." },
   "summary": "…",
   "schedule": [ { "day": 1, "date": "2026-04-10", "title": "…", "items": [ { "time", "type", "title", "detail" } ] } ],

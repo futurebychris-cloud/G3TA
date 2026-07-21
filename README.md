@@ -2,8 +2,8 @@
 
 > NYU Shanghai AI Pre-College final project — a **base plate** for the team build.
 > Six specialist AI agents + an orchestrator turn a single trip request into a
-> complete, auditable itinerary. The MVP runs on **mock data**; teammates swap in
-> real APIs one file at a time without touching agent logic.
+> complete, auditable itinerary. Until live provider APIs are connected, DeepSeek
+> generates destination-specific planning estimates that are explicitly marked for verification.
 
 **LLM:** DeepSeek (`deepseek-chat`, OpenAI-compatible endpoint).
 
@@ -12,23 +12,27 @@
 ## What it does
 
 You enter a destination, dates, budget, and preferences. Six agents each own one
-domain and run in parallel-ish sequence, then an **Orchestrator** merges their
+domain and run concurrently, then an **Orchestrator** merges their
 outputs into one day-by-day itinerary:
 
-| Agent | Owns | Data source (MVP) |
+| Agent | Owns | Current data source |
 |---|---|---|
-| Budget | per-category daily caps, overspend warnings | `mock_budget_db.json` |
-| Transportation | flight recommendation within budget | `mock_flights.json` |
-| Housing | lodging recommendation | `mock_hotels.json` |
-| Food | day-by-day meals matching cuisine prefs | `mock_food.json` |
-| Activity | activities matching style prefs | `mock_activities.json` |
-| Planning | packing list, weather, pacing | `mock_weather.json` |
+| Budget | per-category daily caps, overspend warnings | DeepSeek destination estimate |
+| Transportation | route recommendation within budget | DeepSeek route estimate |
+| Housing | lodging recommendation | DeepSeek destination estimate |
+| Food | day-by-day meals matching cuisine prefs | DeepSeek destination estimate |
+| Activity | distinct activities matching style prefs | DeepSeek destination estimate |
+| Planning | packing list, seasonal weather, pacing | DeepSeek seasonal estimate |
 
 The demo-able insight (PRD §13): when the combined plan **breaks the budget**, the
 Orchestrator downgrades lodging and records *why* in a **reasoning log** you can
-point at — e.g. *"Housing Agent's first pick 'Ginza Grand Luxe' broke the budget by
-$691; substituted 'Asakusa View Ryokan' to fit."* That's the proof this is genuinely
-multi-agent, not one prompt with extra UI.
+point at. A geography guard rejects outputs for the wrong destination, and schedule
+validation prevents repeated or invented activities from reaching the UI.
+
+> **Accuracy note:** DeepSeek does not provide live inventory. Prices, schedules,
+> availability, opening hours, coordinates, and named venues must be verified before
+> booking. Each generated record and final itinerary carries this warning. Connect real
+> provider APIs under `backend/services/` when keys become available.
 
 > **Scope note:** This is a one-shot orchestrator/worker pipeline, **not** an
 > AI-Town-style persistent simulation. See PRD §14 for the gap analysis and the
@@ -48,7 +52,6 @@ multi-agent, not one prompt with extra UI.
 │   ├── orchestrator.py       runs 6 agents, reconciles budget, synthesizes itinerary
 │   ├── agents/               the six specialist agents (each: input → service → DeepSeek → output)
 │   ├── services/             ← THE SWAP POINT for real APIs (see below)
-│   ├── mocks/                static JSON demo data (Tokyo)
 │   └── llm/deepseek_client.py single DeepSeek entry point
 └── docs/AGENT_HANDOFF.md     exact input/output contract for every agent
 ```
@@ -83,14 +86,13 @@ npm install
 npm run dev                                            # http://localhost:5173
 ```
 
-Open http://localhost:5173, hit **Plan my trip** (the form is pre-filled with the
-Tokyo demo), and watch the six agents run.
+Open http://localhost:5173, enter any destination, and watch the six agents run.
 
 ### Offline sanity check (no key needed)
 
 `backend/_smoke_test.py` stubs the LLM to force the deterministic fallbacks and runs
-the full orchestration — useful to verify wiring and the budget-downgrade logic
-without spending tokens:
+the full orchestration for Shanghai and asserts that no retired Tokyo data leaks
+into the result. It does not spend tokens:
 
 ```bash
 cd backend && python3 _smoke_test.py
@@ -100,31 +102,29 @@ cd backend && python3 _smoke_test.py
 
 ## Adding Real APIs
 
-**This is the whole point of the base plate.** Every external data source is
-wrapped in one function under `backend/services/`. Agents call **only** these
-functions — never the mock files — so replacing a mock with a real API means
-editing exactly one file and keeping the return shape. Nothing in `agents/` changes.
+Every external data source is wrapped under `backend/services/`. Today those
+services use destination-specific DeepSeek estimates. Replacing one with a live
+API means editing that service while keeping its return shape; agent logic stays intact.
 
 Set the matching key in `.env` (`FLIGHTS_API_KEY`, `HOTELS_API_KEY`, `WEATHER_API_KEY`,
 `MAPS_API_KEY`, …), then replace the function body:
 
 | Service function (file) | Signature | Must return |
 |---|---|---|
-| `flights_service.get_flight_options` | `(origin, destination, dates) -> list[dict]` | `[{"id","carrier","price","duration","departure_time","arrival_airport","stops"}]` |
-| `hotels_service.get_hotel_options` | `(destination, dates, max_price_per_night=None) -> list[dict]` | `[{"id","name","price_per_night","rating","area","lat","lng","tags"}]` |
-| `food_service.get_food_options` | `(destination, cuisine_tags=None) -> list[dict]` | `[{"id","name","cuisine","price","meal_type","area","rating","tags"}]` |
-| `activities_service.get_activity_options` | `(destination, activity_styles=None) -> list[dict]` | `[{"id","name","style","price","duration","area","lat","lng","tags"}]` |
+| `flights_service.get_flight_options` | `(origin, destination, dates, budget=None, transport_types=None)` | `[{"id","carrier","mode","price","duration","departure_time","arrival_airport","stops"}]` |
+| `hotels_service.get_hotel_options` | `(destination, dates, max_price_per_night=None, budget=None, preferences=None)` | `[{"id","name","price_per_night","rating","area","lat","lng","tags"}]` |
+| `food_service.get_food_options` | `(destination, cuisine_tags=None, num_days=5, ...)` | `[{"id","name","cuisine","cuisine_family","price","meal_type","area","rating","tags"}]` |
+| `activities_service.get_activity_options` | `(destination, activity_styles=None, requested_count=6, ...)` | `[{"id","name","style","price","duration","area","lat","lng","tags"}]` |
 | `weather_service.get_weather` | `(destination, dates) -> dict` | `{"summary": str, "daily": [{"date","condition","high_c","low_c","rain_chance"}]}` |
-| `budget_service.get_cost_index` | `(destination) -> dict` | `{"currency","cost_level","daily_index":{"food","activity","housing","local_transport"},"flight_reference"}` |
+| `budget_service.get_cost_index` | `(destination, origin="", dates=None, currency="USD")` | `{"currency","cost_level","daily_index":{"food","activity","housing","local_transport"},"flight_reference"}` |
 
 Example (flights):
 
 ```python
 # backend/services/flights_service.py
-def get_flight_options(origin, destination, dates) -> list[dict]:
-    # BEFORE (MVP): return load_mock("mock_flights.json")["options"]
-    # AFTER: call Amadeus/Skyscanner with os.getenv("FLIGHTS_API_KEY"),
-    #        then map the provider's response into the shape above.
+def get_flight_options(origin, destination, dates, budget=None, transport_types=None):
+    # Replace the DeepSeek estimate with Amadeus/Skyscanner data, then map the
+    # provider response into the existing normalized option shape.
     ...
 ```
 
