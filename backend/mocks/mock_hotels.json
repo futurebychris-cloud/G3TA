@@ -1,0 +1,11 @@
+{
+  "destination": "Tokyo",
+  "note": "Mock lodging data (USD per night). Replace with a real Booking/Expedia call in backend/services/hotels_service.py without changing this shape.",
+  "options": [
+    { "id": "ht_shinjuku_business", "name": "Shinjuku Granbell Hotel", "price_per_night": 155, "rating": 4.3, "area": "Shinjuku", "lat": 35.6938, "lng": 139.7034, "tags": ["central", "nightlife", "transit"] },
+    { "id": "ht_asakusa_ryokan", "name": "Asakusa View Ryokan", "price_per_night": 110, "rating": 4.5, "area": "Asakusa", "lat": 35.7148, "lng": 139.7967, "tags": ["traditional", "cultural", "quiet"] },
+    { "id": "ht_shibuya_tower", "name": "Shibuya Sky Tower Hotel", "price_per_night": 240, "rating": 4.6, "area": "Shibuya", "lat": 35.6595, "lng": 139.7005, "tags": ["central", "shopping", "premium"] },
+    { "id": "ht_ueno_hostel", "name": "Ueno Nordic Hostel", "price_per_night": 55, "rating": 4.1, "area": "Ueno", "lat": 35.7138, "lng": 139.7770, "tags": ["budget", "transit", "social"] },
+    { "id": "ht_ginza_luxe", "name": "Ginza Grand Luxe", "price_per_night": 320, "rating": 4.8, "area": "Ginza", "lat": 35.6717, "lng": 139.7650, "tags": ["luxury", "shopping", "central"] }
+  ]
+}
