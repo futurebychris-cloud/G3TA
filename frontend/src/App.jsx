@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ArrowLeft,
   BrainCircuit,
@@ -9,7 +9,6 @@ import {
   ListChecks,
   Luggage,
   Map,
-  Menu,
   Route,
   ShieldAlert,
   Sparkles,
@@ -23,6 +22,16 @@ import BudgetView from './components/BudgetView.jsx'
 import PackingList from './components/PackingList.jsx'
 import ReasoningLog from './components/ReasoningLog.jsx'
 import OrbitGlobe from './components/OrbitGlobe.jsx'
+import AccessibilityButton from './components/accessibility/AccessibilityButton.jsx'
+import AccessibilityPanel from './components/accessibility/AccessibilityPanel.jsx'
+import AccessibilityOnboarding from './components/accessibility/AccessibilityOnboarding.jsx'
+import ConfirmationDialog from './components/accessibility/ConfirmationDialog.jsx'
+import EmergencyInformation from './components/accessibility/EmergencyInformation.jsx'
+import LineFocusReader from './components/accessibility/LineFocusReader.jsx'
+import NextStepHelper from './components/accessibility/NextStepHelper.jsx'
+import ReadAloudButton from './components/accessibility/ReadAloudButton.jsx'
+import { useAccessibilitySettings } from './accessibility/AccessibilityContext.jsx'
+import { formatAccessibleDate, formatAccessibleMoney } from './utils/accessibility.js'
 
 const AGENTS = ['budget', 'transportation', 'housing', 'food', 'activity', 'planning', 'orchestrator']
 
@@ -45,10 +54,10 @@ function Brand() {
   )
 }
 
-function AppHeader({ step, onReset }) {
+function AppHeader({ step, onReset, onAccessibility, accessibilityButtonRef }) {
   return (
     <header className="site-header">
-      <button className="brand-button" type="button" onClick={step === 'input' ? undefined : onReset}>
+      <button className="brand-button" type="button" onClick={onReset} aria-label="G3TA trip planner home">
         <Brand />
       </button>
       <div className="header-actions">
@@ -58,7 +67,7 @@ function AppHeader({ step, onReset }) {
             <ArrowLeft size={16} /> New journey
           </button>
         )}
-        <button className="menu-button" type="button" aria-label="Open menu"><Menu size={20} /></button>
+        <AccessibilityButton onClick={onAccessibility} buttonRef={accessibilityButtonRef} />
       </div>
     </header>
   )
@@ -66,7 +75,7 @@ function AppHeader({ step, onReset }) {
 
 function Landing({ onSubmit }) {
   return (
-    <main className="landing">
+    <main className="landing" id="main-content" tabIndex="-1">
       <section className="hero">
         <div className="hero-copy">
           <div className="eyebrow"><Sparkles size={15} /> Multi-agent trip design</div>
@@ -126,10 +135,23 @@ function Landing({ onSubmit }) {
 }
 
 function ResultHeader({ result }) {
+  const { settings } = useAccessibilitySettings()
   const start = new Date(`${result.dates.start}T00:00:00`)
   const end = new Date(`${result.dates.end}T00:00:00`)
   const duration = Math.max(1, Math.round((end - start) / 86400000) + 1)
-  const dateLabel = `${start.toLocaleDateString('en', { month: 'short', day: 'numeric' })} — ${end.toLocaleDateString('en', { month: 'short', day: 'numeric', year: 'numeric' })}`
+  const dateLabel = settings.easyReading
+    ? `${formatAccessibleDate(result.dates.start)} to ${formatAccessibleDate(result.dates.end)}`
+    : `${start.toLocaleDateString('en', { month: 'short', day: 'numeric' })} — ${end.toLocaleDateString('en', { month: 'short', day: 'numeric', year: 'numeric' })}`
+  const totalLabel = formatAccessibleMoney(result.cost.currency, result.cost.total)
+  const spokenSummary = [
+    `Trip to ${result.destination}`,
+    `Dates: ${dateLabel}`,
+    `Duration: ${duration} days`,
+    `Estimated total: ${totalLabel}`,
+    result.cost.within_budget ? 'Status: within budget' : 'Status: needs review',
+    result.summary,
+    result.verification_notice,
+  ]
 
   return (
     <section className="trip-masthead">
@@ -141,16 +163,19 @@ function ResultHeader({ result }) {
         </div>
         <div className="trip-stamp" aria-hidden="true"><span>G3</span><small>PLANNED<br />WITH AI</small></div>
       </div>
-      <p className="trip-summary">{result.summary}</p>
+      <div className="result-heading-actions">
+        <ReadAloudButton id="trip-summary" text={spokenSummary} label={`trip summary for ${result.destination}`} />
+      </div>
+      <LineFocusReader text={result.summary} className="trip-summary" />
       <div className="trip-facts">
         <div><CalendarDays size={18} /><span><small>DATES</small>{dateLabel}</span></div>
         <div><Route size={18} /><span><small>DURATION</small>{duration} days</span></div>
-        <div><CircleDollarSign size={18} /><span><small>ESTIMATED</small>{result.cost.currency} {result.cost.total.toLocaleString()}</span></div>
+        <div><CircleDollarSign size={18} aria-hidden="true" /><span><small>ESTIMATED</small>{totalLabel}</span></div>
         <div><Check size={18} /><span><small>STATUS</small>{result.cost.within_budget ? 'Within budget' : 'Needs review'}</span></div>
       </div>
       {result.verification_notice && (
-        <div className="verification-banner">
-          <ShieldAlert size={18} />
+        <div className="verification-banner" role="note" aria-label="Planning estimate warning">
+          <ShieldAlert size={18} aria-hidden="true" />
           <span><strong>Planning estimate</strong>{result.verification_notice}</span>
         </div>
       )}
@@ -159,21 +184,50 @@ function ResultHeader({ result }) {
 }
 
 export default function App() {
+  const { settings } = useAccessibilitySettings()
   const [step, setStep] = useState('input')
   const [statuses, setStatuses] = useState({})
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
   const [tab, setTab] = useState('itinerary')
+  const [accessibilityOpen, setAccessibilityOpen] = useState(false)
+  const [resetConfirmationOpen, setResetConfirmationOpen] = useState(false)
+  const [showAllTabs, setShowAllTabs] = useState(false)
+  const accessibilityButtonRef = useRef(null)
+  const requestControllerRef = useRef(null)
+  const isSenior = settings.preset === 'senior'
+  const visibleTabs = isSenior && !showAllTabs
+    ? TABS.filter(({ id }) => ['itinerary', 'map', 'packing'].includes(id))
+    : TABS
+
+  const closeAccessibility = useCallback(() => setAccessibilityOpen(false), [])
+
+  useEffect(() => {
+    if (!isSenior && showAllTabs) setShowAllTabs(false)
+    if (isSenior && !showAllTabs && !['itinerary', 'map', 'packing'].includes(tab)) {
+      setTab('itinerary')
+    }
+  }, [isSenior, showAllTabs, tab])
 
   async function handleSubmit(tripInput) {
     setError(null)
     setResult(null)
     setStatuses(Object.fromEntries(AGENTS.map((agent) => [agent, 'pending'])))
     setStep('progress')
-    window.scrollTo({ top: 0, behavior: 'smooth' })
+    setShowAllTabs(false)
+    window.scrollTo({ top: 0, behavior: settings.reducedMotion ? 'auto' : 'smooth' })
 
+    requestControllerRef.current?.abort()
+    const controller = new AbortController()
+    requestControllerRef.current = controller
     try {
-      await streamPlan(tripInput, (event) => {
+      await streamPlan({
+        ...tripInput,
+        accessibility: {
+          easy_reading: settings.easyReading,
+          preset: settings.preset,
+        },
+      }, (event) => {
         if (event.type === 'agent_start') {
           setStatuses((current) => ({ ...current, [event.agent]: 'running' }))
         } else if (event.type === 'agent_done') {
@@ -185,48 +239,137 @@ export default function App() {
         } else if (event.type === 'error') {
           setError(event.message)
         }
-      })
+      }, { signal: controller.signal })
     } catch (requestError) {
-      setError(requestError.message)
+      if (requestError.name !== 'AbortError') setError(requestError.message)
+    } finally {
+      if (requestControllerRef.current === controller) requestControllerRef.current = null
     }
   }
 
-  function reset() {
+  function completeReset() {
+    requestControllerRef.current?.abort()
+    requestControllerRef.current = null
     setStep('input')
     setResult(null)
     setError(null)
     setTab('itinerary')
-    window.scrollTo({ top: 0, behavior: 'smooth' })
+    setShowAllTabs(false)
+    setResetConfirmationOpen(false)
+    window.scrollTo({ top: 0, behavior: settings.reducedMotion ? 'auto' : 'smooth' })
+  }
+
+  function requestReset() {
+    if (isSenior && step !== 'input') {
+      setResetConfirmationOpen(true)
+      return
+    }
+    completeReset()
+  }
+
+  function selectTab(event, id, index, tabs) {
+    if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
+      event.preventDefault()
+      const direction = event.key === 'ArrowRight' ? 1 : -1
+      const nextIndex = (index + direction + tabs.length) % tabs.length
+      setTab(tabs[nextIndex].id)
+      document.getElementById(`trip-tab-${tabs[nextIndex].id}`)?.focus()
+    } else if (event.key === 'Home' || event.key === 'End') {
+      event.preventDefault()
+      const nextIndex = event.key === 'Home' ? 0 : tabs.length - 1
+      setTab(tabs[nextIndex].id)
+      document.getElementById(`trip-tab-${tabs[nextIndex].id}`)?.focus()
+    } else if (event.key === 'Enter' || event.key === ' ') {
+      setTab(id)
+    }
   }
 
   return (
     <div className={`app-shell view-${step}`}>
-      <AppHeader step={step} onReset={reset} />
+      <a className="skip-link" href="#main-content">Skip to main content</a>
+      <AppHeader
+        step={step}
+        onReset={requestReset}
+        onAccessibility={() => setAccessibilityOpen(true)}
+        accessibilityButtonRef={accessibilityButtonRef}
+      />
+      <AccessibilityPanel
+        open={accessibilityOpen}
+        onClose={closeAccessibility}
+        returnFocusRef={accessibilityButtonRef}
+      />
+      <AccessibilityOnboarding />
+      <ConfirmationDialog
+        open={resetConfirmationOpen}
+        title="Start a new journey?"
+        description="Your current trip will leave this screen. You can cancel and keep reading it."
+        onCancel={() => setResetConfirmationOpen(false)}
+        onConfirm={completeReset}
+      />
 
       {step === 'input' && <Landing onSubmit={handleSubmit} />}
 
       {step === 'progress' && (
-        <main className="progress-page">
-          <ProgressTracker agents={AGENTS} statuses={statuses} error={error} onRetry={reset} />
+        <main className="progress-page" id="main-content" tabIndex="-1">
+          <ProgressTracker agents={AGENTS} statuses={statuses} error={error} onRetry={requestReset} />
         </main>
       )}
 
       {step === 'result' && result && (
-        <main className="result-page">
+        <main className="result-page" id="main-content" tabIndex="-1">
           <ResultHeader result={result} />
 
-          <nav className="result-tabs" aria-label="Trip details">
-            {TABS.map(({ id, label, icon: Icon }) => (
-              <button key={id} className={tab === id ? 'result-tab active' : 'result-tab'} onClick={() => setTab(id)}>
+          {isSenior && (
+            <div className="senior-result-actions" aria-label="Important trip tools">
+              <EmergencyInformation result={result} />
+            </div>
+          )}
+
+          <div className="result-tabs" role="tablist" aria-label="Trip details">
+            {visibleTabs.map(({ id, label, icon: Icon }, index) => (
+              <button
+                id={`trip-tab-${id}`}
+                key={id}
+                type="button"
+                role="tab"
+                aria-selected={tab === id}
+                aria-controls="trip-tab-panel"
+                tabIndex={tab === id ? 0 : -1}
+                className={tab === id ? 'result-tab active' : 'result-tab'}
+                onClick={() => setTab(id)}
+                onKeyDown={(event) => selectTab(event, id, index, visibleTabs)}
+              >
                 <Icon size={17} strokeWidth={1.8} />
                 {label}
               </button>
             ))}
-          </nav>
+          </div>
+          {isSenior && (
+            <button
+              className="show-more-sections"
+              type="button"
+              aria-expanded={showAllTabs}
+              onClick={() => setShowAllTabs((current) => !current)}
+            >
+              {showAllTabs ? 'Show fewer trip sections' : 'Show all trip sections'}
+            </button>
+          )}
 
-          <section className="result-panel">
+          <section
+            id="trip-tab-panel"
+            className="result-panel"
+            role="tabpanel"
+            aria-labelledby={`trip-tab-${tab}`}
+            tabIndex="0"
+          >
             {tab === 'itinerary' && <ItineraryView result={result} />}
-            {tab === 'map' && <MapView points={result.map_points} result={result} />}
+            {tab === 'map' && (
+              <MapView
+                points={result.map_points}
+                result={result}
+                agentOutputs={result.agent_outputs}
+              />
+            )}
             {tab === 'budget' && <BudgetView cost={result.cost} budgetAgent={result.agent_outputs.budget} />}
             {tab === 'packing' && (
               <PackingList
@@ -237,6 +380,14 @@ export default function App() {
             )}
             {tab === 'reasoning' && <ReasoningLog log={result.reasoning_log} />}
           </section>
+          {['open_meteo_forecast', 'mixed'].includes(result.weather_source) && (
+            <p className="weather-attribution">
+              Weather data by <a href="https://open-meteo.com/" target="_blank" rel="noreferrer">Open-Meteo.com</a>
+              {' · '}<a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noreferrer">CC BY 4.0</a>
+              {' · '}normalized for this itinerary by G3TA
+            </p>
+          )}
+          {isSenior && <NextStepHelper result={result} />}
         </main>
       )}
 

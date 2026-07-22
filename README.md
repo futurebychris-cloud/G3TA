@@ -2,8 +2,8 @@
 
 > NYU Shanghai AI Pre-College final project — a **base plate** for the team build.
 > Six specialist AI agents + an orchestrator turn a single trip request into a
-> complete, auditable itinerary. Until live provider APIs are connected, DeepSeek
-> generates destination-specific planning estimates that are explicitly marked for verification.
+> complete, auditable itinerary. Open-Meteo supplies live weather forecasts; DeepSeek
+> generates the remaining destination-specific planning estimates, explicitly marked for verification.
 
 **LLM:** DeepSeek (`deepseek-chat`, OpenAI-compatible endpoint).
 
@@ -23,14 +23,64 @@ outputs into one day-by-day itinerary:
 | Housing | lodging recommendation | DeepSeek destination estimate |
 | Food | day-by-day meals matching cuisine prefs | DeepSeek destination estimate |
 | Activity | distinct activities matching style prefs | DeepSeek destination estimate |
-| Planning | packing list, seasonal weather, pacing | DeepSeek seasonal estimate |
+| Planning | packing list, daily weather, pacing | Open-Meteo forecast + labeled seasonal fallback |
 
 The demo-able insight (PRD §13): when the combined plan **breaks the budget**, the
 Orchestrator downgrades lodging and records *why* in a **reasoning log** you can
 point at. A geography guard rejects outputs for the wrong destination, and schedule
 validation prevents repeated or invented activities from reaching the UI.
 
-> **Accuracy note:** DeepSeek does not provide live inventory. Prices, schedules,
+## Accessibility options
+
+Use the **Accessibility** button in the top-right header to choose independent reading and
+interaction tools. A first-run setup offers **Standard**, **Easy Reading**, **Senior Mode**, and
+**Voice First** as optional starting points. Standard remains the default, and every setting can
+still be changed independently after selecting a preset. Available options are:
+
+- Easy Reading, Bigger Text, More Text Spacing, and High Contrast;
+- Reduce Motion and a system-based reading font (`Arial, Verdana, Tahoma, sans-serif`);
+- one-line or three-line Line Focus;
+- Read Aloud controls with adjustable reading speed;
+- browser voice input beside the destination field.
+
+### Senior Mode
+
+Senior Mode builds on the same accessibility settings; it does not create a separate theme or
+duplicate the speech and reading systems. Selecting it enables Bigger Text, More Text Spacing,
+High Contrast, Reduce Motion, Easy Reading, Read Aloud at `0.9×`, Reading Font, and three-line
+Line Focus. Users can then override any one of those choices from the Accessibility panel.
+
+In trip results, Senior Mode also provides larger touch targets and travel facts, a smaller set of
+primary trip sections, and short **Top Recommendation**, **Best Value**, and **Closest** place
+choices with a button to reveal the full list. It adds brief explanations for common travel terms,
+a confirmation before leaving the current trip, one-tap Emergency Information, and a floating
+**What do I do next?** helper. The emergency card labels missing provider data for verification;
+it does not invent phone numbers, street addresses, or embassy details.
+
+Read Aloud controls cover itinerary days, important flight and hotel events, directions, packing,
+and emergency information. They only speak after the user presses a control. Senior Mode's Easy
+Reading instructions and frontend formatting must never change dates, times, prices, locations,
+routes, reservation details, or other factual travel data.
+
+Settings are validated and stored together in browser `localStorage` under
+`g3ta-accessibility-settings-v1`. If storage is blocked, they continue working for the current
+session. **Reset to defaults** removes all selected presentation modes.
+
+Voice input uses the browser Web Speech Recognition API and is mainly available in Chromium and
+some Safari versions; it is generally unavailable in Firefox. Read Aloud uses the browser Speech
+Synthesis API, whose voices and pause/resume behavior vary by browser and operating system. Both
+features fail safely and keep normal typing and reading available. No paid speech service is used.
+
+The optional reading font uses installed system fonts. OpenDyslexic is not downloaded or required.
+Easy Reading always has deterministic frontend structure as a fallback. When its optional DeepSeek
+prompt instruction is used, it explicitly requires every date, time, price, location, warning,
+duration, flight number, and factual detail to remain unchanged and prohibits adding facts.
+
+This feature set improves accessibility but is not a claim of complete WCAG conformance. Keyboard,
+screen-reader, browser zoom, voice permission, and operating-system voice behavior should still be
+reviewed manually in supported browsers.
+
+> **Accuracy note:** Open-Meteo forecasts are live model data, but DeepSeek does not provide live inventory. Prices, schedules,
 > availability, opening hours, coordinates, and named venues must be verified before
 > booking. Each generated record and final itinerary carries this warning. Connect real
 > provider APIs under `backend/services/` when keys become available.
@@ -99,16 +149,41 @@ into the result. It does not spend tokens:
 cd backend && python3 _smoke_test.py
 ```
 
+### Accessibility tests
+
+The frontend uses Vitest, jsdom, and React Testing Library for settings and preset persistence,
+first-run setup, dialog focus, keyboard behavior, accessible names, immediate-next-step formatting,
+and speech fallbacks:
+
+```bash
+cd frontend
+npm test
+npm run build
+```
+
+Backend easy-reading factual-preservation and weather tests run with:
+
+```bash
+PYTHONPATH=backend backend/.venv/bin/python -m unittest discover -s backend/tests -v
+```
+
 ---
 
 ## Adding Real APIs
 
-Every external data source is wrapped under `backend/services/`. Today those
-services use destination-specific DeepSeek estimates. Replacing one with a live
-API means editing that service while keeping its return shape; agent logic stays intact.
+Every external data source is wrapped under `backend/services/`. Most services use
+destination-specific DeepSeek estimates. Weather is the first live integration: it geocodes
+arbitrary destinations and requests up to 16 forecast days from Open-Meteo without an API key.
+Dates outside that window, or requests made while Open-Meteo is unavailable, retain a clearly
+labeled seasonal estimate. Replacing another service means editing that service while keeping
+its return shape; agent logic stays intact.
 
-Set the matching key in `.env` (`FLIGHTS_API_KEY`, `HOTELS_API_KEY`, `WEATHER_API_KEY`,
-`MAPS_API_KEY`, …), then replace the function body:
+Open-Meteo data is normalized into the app's daily schema and attributed in the result UI under
+the [CC BY 4.0 licence](https://open-meteo.com/en/license). The free endpoint is for this
+non-commercial educational demo; use an appropriate paid endpoint and key for commercial use.
+
+Set the matching key in `.env` (`FLIGHTS_API_KEY`, `HOTELS_API_KEY`, `MAPS_API_KEY`, …),
+then replace the function body. Open-Meteo does not require a key for this non-commercial demo:
 
 | Service function (file) | Signature | Must return |
 |---|---|---|
@@ -116,7 +191,7 @@ Set the matching key in `.env` (`FLIGHTS_API_KEY`, `HOTELS_API_KEY`, `WEATHER_AP
 | `hotels_service.get_hotel_options` | `(destination, dates, max_price_per_night=None, budget=None, preferences=None)` | `[{"id","name","price_per_night","rating","area","lat","lng","tags"}]` |
 | `food_service.get_food_options` | `(destination, cuisine_tags=None, num_days=5, ...)` | `[{"id","name","cuisine","cuisine_family","price","meal_type","area","rating","tags"}]` |
 | `activities_service.get_activity_options` | `(destination, activity_styles=None, requested_count=6, ...)` | `[{"id","name","style","price","duration","area","lat","lng","tags"}]` |
-| `weather_service.get_weather` | `(destination, dates) -> dict` | `{"summary": str, "daily": [{"date","condition","high_c","low_c","rain_chance"}]}` |
+| `weather_service.get_weather` | `(destination, dates) -> dict` | `{"summary","source","location","daily":[{"date","condition","high_c","low_c","rain_chance","precipitation_mm","snowfall_cm","wind_speed_max_kmh","uv_index_max","source"}]}` |
 | `budget_service.get_cost_index` | `(destination, origin="", dates=None, currency="USD")` | `{"currency","cost_level","daily_index":{"food","activity","housing","local_transport"},"flight_reference"}` |
 
 Example (flights):
