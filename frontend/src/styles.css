@@ -564,19 +564,21 @@ button { -webkit-tap-highlight-color: transparent; }
 .result-tab:hover { color: var(--ink); background: var(--paper); }
 .result-tab.active { color: white; background: var(--ink); }
 .result-panel { padding: 54px; border: 1px solid rgba(10, 32, 52, 0.08); border-radius: var(--radius-lg); background: var(--white); box-shadow: var(--shadow); }
+.weather-attribution { margin: 14px 8px 0; color: var(--muted); font-size: .62rem; text-align: right; }
+.weather-attribution a { color: var(--ink); text-underline-offset: 2px; }
 .panel-heading { margin-bottom: 48px; padding-bottom: 30px; border-bottom: 1px solid var(--line); }
 .panel-heading h2 { font-size: clamp(2.2rem, 4vw, 4rem); }
 
 /* Itinerary */
 .day-stack { display: flex; flex-direction: column; gap: 22px; }
 .day-plan { border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
-.day-plan-head { min-height: 112px; display: grid; grid-template-columns: 70px 1fr auto; align-items: center; gap: 22px; padding: 22px 28px; background: var(--paper); }
+.day-plan-head { min-height: 112px; display: grid; grid-template-columns: 70px 1fr auto auto; align-items: center; gap: 22px; padding: 22px 28px; background: var(--paper); }
 .day-counter { width: 58px; height: 58px; display: flex; flex-direction: column; align-items: center; justify-content: center; border-radius: 50%; background: var(--ink); color: white; font-size: 1.15rem; font-weight: 850; }
 .day-counter small { color: var(--lime); font-size: 0.48rem; letter-spacing: 0.12em; }
 .day-plan-head p { display: flex; align-items: center; gap: 6px; margin: 0 0 5px; color: var(--muted); font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.07em; }
 .day-plan-head h3 { margin: 0; font-size: 1.35rem; letter-spacing: -0.03em; }
 .day-route-label { padding: 7px 11px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.08em; }
-.day-events { padding: 8px 28px; }
+.day-events { margin: 0; padding: 8px 28px; list-style: none; }
 .event-row { min-height: 105px; display: grid; grid-template-columns: 76px 40px 1fr 30px; gap: 14px; align-items: center; border-bottom: 1px solid var(--line); }
 .event-row:last-child { border-bottom: 0; }
 .event-row time { color: var(--muted); font-size: 0.71rem; font-weight: 700; }
