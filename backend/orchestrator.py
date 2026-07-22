@@ -57,6 +57,14 @@ def run_single_agent(name: str, trip_input: dict) -> dict:
     return _AGENTS[name](trip_input)
 
 
+def with_budget_guidance(trip_input: dict, budget_output: dict) -> dict:
+    """Attach internal caps without changing the public trip-input contract."""
+    return {
+        **trip_input,
+        "_budget_caps": dict(budget_output.get("daily_caps", {})),
+    }
+
+
 LEGACY_TOKYO_MARKERS = {
     "tokyo", "asakusa", "shibuya", "ginza", "shinjuku", "akihabara",
     "senso-ji", "nrt", "haneda", "mt. fuji", "hakone", "teamlab planets",
@@ -114,6 +122,23 @@ def _reconcile_budget(trip_input: dict, outputs: dict, log: list) -> dict:
         overflow = grand_total - total_budget
         # Re-query the Budget Agent for tightened caps (recorded for the UI).
         outputs["budget"] = budget_agent.run(trip_input, overflow=overflow)
+
+        # Food used to be selected independently from the displayed daily cap.
+        # Re-plan it against any tightened cap before attempting a lodging downgrade.
+        previous_food_cost = food_cost
+        outputs["food"] = food_agent.run(with_budget_guidance(trip_input, outputs["budget"]))
+        food_cost = outputs["food"]["cost"]
+        fixed = transport_cost + food_cost + activity_cost + local_transport
+        grand_total = fixed + housing_cost
+        if food_cost < previous_food_cost:
+            log.append({
+                "agent": "Orchestrator",
+                "note": (
+                    f"Food choices were reduced from {previous_food_cost:.0f} to {food_cost:.0f} "
+                    f"{currency} to obey the revised daily food cap."
+                ),
+            })
+        overflow = max(grand_total - total_budget, 0)
 
         # Try to downgrade lodging: the priciest hotel that still lets the plan fit.
         nights = housing.get("nights", max(num_days - 1, 1))
@@ -328,12 +353,14 @@ def reconcile_and_synthesize(trip_input: dict, outputs: dict) -> dict:
 
 
 def plan(trip_input: dict) -> dict:
-    """Run independent specialist agents concurrently, then synthesize."""
-    outputs = {}
-    with ThreadPoolExecutor(max_workers=len(_AGENTS)) as executor:
+    """Set budget caps first, then run the five recommendation agents concurrently."""
+    outputs = {"budget": budget_agent.run(trip_input)}
+    guided_input = with_budget_guidance(trip_input, outputs["budget"])
+    remaining_agents = {name: agent for name, agent in _AGENTS.items() if name != "budget"}
+    with ThreadPoolExecutor(max_workers=len(remaining_agents)) as executor:
         futures = {
-            executor.submit(run_single_agent, name, trip_input): name
-            for name in _AGENTS
+            executor.submit(agent, guided_input): name
+            for name, agent in remaining_agents.items()
         }
         for future in as_completed(futures):
             outputs[futures[future]] = future.result()

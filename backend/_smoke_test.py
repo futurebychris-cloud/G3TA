@@ -9,6 +9,7 @@ import json
 import agents.base as agent_base
 import orchestrator
 import services._ai as service_ai
+from agents import food_agent
 
 
 def _offline(*args, **kwargs):
@@ -75,4 +76,32 @@ scheduled_activity_names = [
 assert len(scheduled_activity_names) == 13
 assert len(scheduled_activity_names) == len(set(scheduled_activity_names))
 
+# Regression matrix: food limits are dynamic for any trip length/cap, not a
+# special-case $60 value. The displayed total must equal the sum of meal prices.
+food_cap_cases = [
+    (3, 12.50),
+    (6, 10),
+    (9, 35),
+]
+for case_days, daily_cap in food_cap_cases:
+    case_trip = {
+        **trip,
+        "dates": {"start": "2026-04-10", "end": f"2026-04-{9 + case_days:02d}"},
+        "_budget_caps": {"food": daily_cap},
+    }
+    food_result = food_agent.run(case_trip)
+    meal_prices = [
+        meal["price"]
+        for day in food_result["daily_meals"]
+        for meal in day["meals"]
+    ]
+    assert len(meal_prices) == case_days * 3
+    assert round(sum(meal_prices), 2) == food_result["cost"]
+    assert food_result["cost"] <= daily_cap * case_days, (
+        case_days,
+        daily_cap,
+        food_result["cost"],
+    )
+
 print("SHANGHAI_DESTINATION_ISOLATION_OK")
+print("DYNAMIC_FOOD_CAP_MATRIX_OK", food_cap_cases)

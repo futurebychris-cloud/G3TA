@@ -96,12 +96,20 @@ def plan_stream(trip: TripInput):
     def generate():
         outputs = {}
         try:
-            for name in AGENT_ORDER:
+            # Budget must finish first so every recommendation agent receives the
+            # category limits it is expected to respect.
+            yield _sse({"type": "agent_start", "agent": "budget"})
+            outputs["budget"] = orchestrator.run_single_agent("budget", trip_input)
+            yield _sse({"type": "agent_done", "agent": "budget", "output": outputs["budget"]})
+
+            guided_input = orchestrator.with_budget_guidance(trip_input, outputs["budget"])
+            remaining_agents = [name for name in AGENT_ORDER if name != "budget"]
+            for name in remaining_agents:
                 yield _sse({"type": "agent_start", "agent": name})
-            with ThreadPoolExecutor(max_workers=len(AGENT_ORDER)) as executor:
+            with ThreadPoolExecutor(max_workers=len(remaining_agents)) as executor:
                 futures = {
-                    executor.submit(orchestrator.run_single_agent, name, trip_input): name
-                    for name in AGENT_ORDER
+                    executor.submit(orchestrator.run_single_agent, name, guided_input): name
+                    for name in remaining_agents
                 }
                 for future in as_completed(futures):
                     name = futures[future]
