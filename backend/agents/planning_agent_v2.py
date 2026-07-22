@@ -77,9 +77,9 @@ def _geocode_city(city: str) -> tuple[float, float]:
         if data.get("results"):
             r = data["results"][0]
             return r["latitude"], r["longitude"]
-    except Exception:
-        pass
-    return 39.9042, 116.4074  # Default: Beijing
+    except Exception as exc:
+        raise RuntimeError(f"Could not geocode planning destination '{city}'.") from exc
+    raise RuntimeError(f"Could not geocode planning destination '{city}'.")
 
 
 def _fetch_open_meteo_weather(lat: float, lng: float, start: str, end: str) -> dict:

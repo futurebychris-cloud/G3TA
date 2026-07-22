@@ -16,6 +16,40 @@ TRIP = {
 
 
 class OrchestrationContractTests(unittest.TestCase):
+    def test_japanese_cuisine_does_not_trigger_tokyo_geography_guard(self):
+        trip = {**TRIP, "location": "Milan, Italy"}
+        outputs = {
+            "food": {
+                "destination": "Milan, Italy",
+                "reasoning": "The traveler requested Japanese cuisine.",
+                "daily_meals": [{
+                    "meals": [{
+                        "name": "Tokyo Sushi Milano",
+                        "cuisine": "Japanese",
+                        "area": "Brera, Milan",
+                    }],
+                }],
+            },
+            "activity": {
+                "destination": "Milan, Italy",
+                "recommended": [{"name": "Duomo", "location": "Milan, Italy"}],
+            },
+        }
+
+        orchestrator._validate_agent_geography(trip, outputs)
+
+    def test_actual_tokyo_location_is_still_rejected_for_milan(self):
+        trip = {**TRIP, "location": "Milan, Italy"}
+        outputs = {
+            "activity": {
+                "destination": "Milan, Italy",
+                "recommended": [{"name": "Demo attraction", "location": "Tokyo, Japan"}],
+            },
+        }
+
+        with self.assertRaisesRegex(ValueError, "stale Tokyo/Japan data"):
+            orchestrator._validate_agent_geography(trip, outputs)
+
     def test_budget_guidance_is_attached_without_mutating_public_input(self):
         guided = orchestrator.with_budget_guidance(
             TRIP,

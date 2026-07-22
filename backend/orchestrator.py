@@ -11,6 +11,7 @@ Public API:
     plan(trip_input)                     -> runs everything end to end
 """
 import json
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from agents import (
@@ -93,13 +94,53 @@ LEGACY_TOKYO_MARKERS = {
     "senso-ji", "nrt", "haneda", "mt. fuji", "hakone", "teamlab planets",
 }
 
+# Only values in fields that actually describe geography belong in the legacy
+# data guard. Preferences and prose may legitimately contain words such as
+# "Japanese" or the name of a restaurant such as "Tokyo Sushi" in another city.
+_GEOGRAPHY_FIELDS = {
+    "airport",
+    "arrival_airport",
+    "departure_airport",
+    "area",
+    "city",
+    "country",
+    "destination",
+    "from",
+    "location",
+    "origin",
+    "to",
+    "weather_location",
+}
+
+
+def _geography_values(value) -> list[str]:
+    evidence: list[str] = []
+
+    def collect(item, *, geographic: bool = False) -> None:
+        if isinstance(item, dict):
+            for key, child in item.items():
+                collect(child, geographic=geographic or str(key).casefold() in _GEOGRAPHY_FIELDS)
+        elif isinstance(item, list):
+            for child in item:
+                collect(child, geographic=geographic)
+        elif geographic and item is not None:
+            evidence.append(str(item))
+
+    collect(value)
+    return evidence
+
+
+def _contains_marker(text: str, marker: str) -> bool:
+    # Token boundaries are essential: "japan" must not match "Japanese".
+    return re.search(rf"(?<!\w){re.escape(marker)}(?!\w)", text, re.IGNORECASE) is not None
+
 
 def _has_legacy_tokyo_content(value, destination: str) -> bool:
     destination_text = destination.casefold()
-    if "tokyo" in destination_text or "japan" in destination_text:
+    if _contains_marker(destination_text, "tokyo") or _contains_marker(destination_text, "japan"):
         return False
-    serialized = json.dumps(value, ensure_ascii=False).casefold()
-    return any(marker in serialized for marker in LEGACY_TOKYO_MARKERS)
+    geographic_text = "\n".join(_geography_values(value)).casefold()
+    return any(_contains_marker(geographic_text, marker) for marker in LEGACY_TOKYO_MARKERS)
 
 
 def _validate_agent_geography(trip_input: dict, outputs: dict) -> None:
