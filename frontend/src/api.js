@@ -1,7 +1,7 @@
 // Talks to the FastAPI backend. Uses the streaming endpoint so the UI can show
 // each agent completing in real time (Server-Sent Events over a fetch stream).
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000'
+const API_BASE = import.meta.env.VITE_API_BASE || ''
 
 // Streams the full plan. Calls onEvent(evt) for each SSE message:
 //   {type:'agent_start', agent}
@@ -39,4 +39,71 @@ export async function streamPlan(tripInput, onEvent) {
       onEvent(payload)
     }
   }
+}
+
+// Streams the 4-stage hotel booking search. Calls onEvent(evt) for each SSE message:
+//   {type:'booking_stage', stage:'search'|'filtering'|'outputting', status, source?, count?}
+//   {type:'booking_results', hotels:[...]}
+//   {type:'error', message}
+export async function streamBookingSearch(req, onEvent) {
+  const resp = await fetch(`${API_BASE}/booking/search`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  })
+  if (!resp.ok || !resp.body) {
+    const detail = await resp.text().catch(() => resp.statusText)
+    throw new Error(`Backend error (${resp.status}): ${detail}`)
+  }
+  const reader = resp.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const chunks = buffer.split('\n\n')
+    buffer = chunks.pop()
+    for (const chunk of chunks) {
+      const line = chunk.split('\n').find((l) => l.startsWith('data:'))
+      if (!line) continue
+      const payload = JSON.parse(line.slice(5).trim())
+      onEvent(payload)
+    }
+  }
+}
+
+// Confirm a selected hotel: drive the Ctrip Playwright booking to the payment step.
+export async function confirmBooking(req) {
+  const resp = await fetch(`${API_BASE}/booking/confirm`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  })
+  if (!resp.ok) {
+    const detail = await resp.text().catch(() => resp.statusText)
+    throw new Error(`Booking confirm failed (${resp.status}): ${detail}`)
+  }
+  return resp.json()
+}
+
+// Mark a stored route as paid (user paid in their own WeChat/Alipay).
+export async function markBookingPaid(routeId, orderNo) {
+  const resp = await fetch(`${API_BASE}/booking/mark_paid`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ route_id: routeId, order_no: orderNo }),
+  })
+  if (!resp.ok) {
+    const detail = await resp.text().catch(() => resp.statusText)
+    throw new Error(`Mark paid failed (${resp.status}): ${detail}`)
+  }
+  return resp.json()
+}
+
+// List all stored confirmed routes (audit trail).
+export async function getBookingRoutes() {
+  const resp = await fetch(`${API_BASE}/booking/routes`)
+  if (!resp.ok) throw new Error(`Failed to load routes (${resp.status})`)
+  return resp.json()
 }
