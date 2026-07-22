@@ -62,6 +62,33 @@ describe('route planning helpers', () => {
     })
   })
 
+  it('rejects out-of-range coordinates before building routes', () => {
+    const model = buildRouteModel({
+      schedule: [{ day: 1, title: 'Safe day', items: [
+        { type: 'activity', title: 'Invalid stop' },
+        { type: 'activity', title: 'Valid stop' },
+      ] }],
+      map_points: [
+        { label: 'Invalid stop', type: 'activity', lat: 120, lng: 139.7 },
+        { label: 'Valid stop', type: 'activity', lat: 35.7, lng: 139.7 },
+      ],
+    })
+    expect(model.days[0].stops.map((stop) => stop.label)).toEqual(['Valid stop'])
+  })
+
+  it('uses transport map points from the latest backend when route_points are absent', () => {
+    const model = buildRouteModel({
+      map_points: [
+        { label: 'Hangzhou', type: 'transport', lat: 30.2741, lng: 120.1551 },
+        { label: 'New York', type: 'transport', lat: 40.7128, lng: -74.006 },
+      ],
+      agent_outputs: { transportation: { recommended: { type: 'flight' } } },
+    })
+
+    expect(model.transportationRoute.title).toBe('Flight overview')
+    expect(model.transportationRoute.stops.map((stop) => stop.role)).toEqual(['departure', 'arrival'])
+  })
+
   it('centers a route that only has one known stop', () => {
     const [point] = projectPoints([{ label: 'Hotel', lat: 35.7, lng: 139.7 }], 800, 420, 56)
     expect(point.x).toBe(400)

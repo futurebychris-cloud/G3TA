@@ -1194,3 +1194,508 @@ button { -webkit-tap-highlight-color: transparent; }
   .aircraft-static { display: block; }
   .aircraft-contrail { stroke-dasharray: 9 91; stroke-dashoffset: -68; }
 }
+
+/* ----------------------------------------------------------------------- */
+/* Booking panel (Housing Agent → real-data booking flow)                   */
+/* ----------------------------------------------------------------------- */
+.booking-panel { max-width: 980px; margin: 0 auto; padding-bottom: 40px; }
+
+.booking-controls {
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
+  margin: 22px 0 18px;
+  flex-wrap: wrap;
+}
+.cap-field { display: flex; flex-direction: column; gap: 6px; font-size: .8rem; color: var(--muted); }
+.cap-field input {
+  width: 200px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--white);
+  color: var(--ink);
+}
+
+.booking-stages { margin: 6px 0 18px; }
+
+.source-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(128, 202, 255, 0.14);
+  border: 1px solid rgba(128, 202, 255, 0.5);
+  color: var(--ink-2);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  font-size: .82rem;
+  margin-bottom: 18px;
+}
+.source-note strong { color: var(--ink); }
+
+.hotel-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 14px;
+  margin-top: 8px;
+}
+.hotel-card {
+  position: relative;
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  cursor: pointer;
+  transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease;
+}
+.hotel-card:hover { transform: translateY(-3px); box-shadow: var(--shadow); }
+.hotel-card.selected { border-color: var(--coral); box-shadow: 0 0 0 2px rgba(255, 104, 71, .25); }
+.hotel-card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.hotel-card-head h4 { margin: 0; font-size: .98rem; line-height: 1.25; }
+.src-badge {
+  font-size: .62rem;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  padding: 3px 7px;
+  border-radius: 999px;
+  white-space: nowrap;
+  background: var(--paper-2);
+  color: var(--muted);
+}
+.src-badge.ctrip { background: rgba(255, 106, 71, .16); color: var(--coral-deep); }
+.src-badge.api { background: rgba(206, 242, 111, .3); color: #4d6b00; }
+.src-badge.openstreetmap { background: rgba(128, 202, 255, .22); color: #0a5aa0; }
+.hotel-meta { display: flex; gap: 12px; font-size: .8rem; color: var(--muted); }
+.hotel-meta .rating { color: var(--sand); font-weight: 600; }
+.hotel-price { font-size: .92rem; color: var(--ink); }
+.hotel-price strong { font-size: 1.05rem; }
+.hotel-price .no-price { color: var(--muted); font-style: italic; font-size: .82rem; }
+.hotel-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.hotel-tags .tag {
+  font-size: .68rem;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--paper-2);
+  color: var(--muted);
+}
+.select-btn {
+  margin-top: 4px;
+  border: 1px solid var(--coral);
+  background: transparent;
+  color: var(--coral-deep);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease;
+}
+.select-btn:hover, .hotel-card.selected .select-btn { background: var(--coral); color: #fff; }
+
+/* --- Extended hotel detail styles --- */
+.hotel-image {
+  width: 100%;
+  height: 150px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--paper-2);
+}
+.hotel-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.hotel-image-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  opacity: 0.4;
+}
+
+.hotel-stars {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: .78rem;
+  color: var(--sand);
+  font-weight: 600;
+}
+
+.hotel-desc {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  font-size: .76rem;
+  color: var(--ink-2);
+  line-height: 1.45;
+}
+.hotel-desc svg { flex-shrink: 0; margin-top: 1px; opacity: 0.5; }
+
+.hotel-map-links {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: .75rem;
+  color: var(--muted);
+}
+.hotel-map-links a {
+  color: var(--sky);
+  text-decoration: none;
+  font-weight: 500;
+}
+.hotel-map-links a:hover { text-decoration: underline; }
+
+.hotel-price .total-cost {
+  display: block;
+  font-size: .76rem;
+  color: var(--ink-2);
+  margin-top: 2px;
+}
+.hotel-price .discount-badge {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: .7rem;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(206, 242, 111, .35);
+  color: #4d6b00;
+  font-weight: 600;
+}
+
+.hotel-labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.label-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: .67rem;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(128, 202, 255, .15);
+  color: #0a5aa0;
+  white-space: nowrap;
+}
+.label-more {
+  background: var(--paper-2);
+  color: var(--muted);
+}
+
+.hotel-rooms {
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.rooms-heading {
+  font-size: .7rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.room-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: .74rem;
+}
+.room-name { font-weight: 600; color: var(--ink); }
+.room-price {
+  color: var(--coral-deep);
+  font-weight: 600;
+  font-size: .8rem;
+}
+.room-bed { color: var(--muted); font-size: .7rem; }
+.room-includes {
+  color: #2c7a3d;
+  font-size: .68rem;
+  background: rgba(44, 122, 61, .1);
+  padding: 1px 6px;
+  border-radius: 999px;
+}
+.room-more { font-size: .68rem; color: var(--muted); }
+
+.confirm-box {
+  margin-top: 26px;
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 22px;
+}
+.confirm-box h3 { margin: 0 0 14px; font-size: 1.05rem; }
+.id-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.id-grid label { display: flex; flex-direction: column; gap: 6px; font-size: .78rem; color: var(--muted); }
+.id-grid input {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+  color: var(--ink);
+}
+.pay-toggle { display: flex; gap: 10px; margin: 16px 0; }
+.pay-toggle button {
+  flex: 1;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+  cursor: pointer;
+  font-weight: 600;
+}
+.pay-toggle button.active { border-color: var(--coral); background: rgba(255, 104, 71, .12); color: var(--coral-deep); }
+.confirm-btn {
+  width: 100%;
+  padding: 12px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--coral);
+  color: #fff;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.confirm-btn:disabled { opacity: .7; cursor: default; }
+.confirm-result { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
+.confirm-result .ok { color: #2c7a3d; font-weight: 600; }
+.confirm-result .fail { color: var(--coral-deep); }
+.confirm-result .muted { color: var(--muted); font-size: .82rem; }
+.paid-btn {
+  margin-top: 8px;
+  padding: 10px 16px;
+  border: 1px solid #2c7a3d;
+  background: #2c7a3d;
+  color: #fff;
+  border-radius: var(--radius-sm);
+  font-weight: 700;
+  cursor: pointer;
+}
+.spin { animation: booking-spin 1s linear infinite; }
+@keyframes booking-spin { to { transform: rotate(360deg); } }
+
+/* --- Real Leaflet map --- */
+.leaflet-map-container {
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: 0 4px 24px rgba(0,0,0,.08);
+}
+.custom-map-marker {
+  background: transparent !important;
+  border: none !important;
+}
+.leaflet-popup-content-wrapper {
+  border-radius: 10px;
+  font-family: inherit;
+}
+.leaflet-popup-content {
+  margin: 10px 14px;
+  font-size: .82rem;
+  line-height: 1.5;
+}
+
+/* --- Itinerary event thumbnails --- */
+.event-row {
+  grid-template-columns: 76px 40px 1fr 52px 30px;
+}
+.event-thumb {
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--paper-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.event-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.event-thumb-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.3;
+  color: var(--muted);
+}
+
+/* --- Daily weather cards --- */
+.daily-weather-section {
+  margin-bottom: 28px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 24px;
+}
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 16px;
+}
+.section-header h3 {
+  margin: 2px 0 0;
+  font-size: 1rem;
+  font-weight: 650;
+}
+.weather-source {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: .68rem;
+  color: var(--muted);
+  background: var(--paper-2);
+  padding: 4px 10px;
+  border-radius: 20px;
+}
+.daily-weather-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 10px;
+}
+.daily-weather-card {
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 14px;
+  position: relative;
+  overflow: hidden;
+}
+.dw-date {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.dw-day {
+  font-size: .72rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+.dw-condition {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: .7rem;
+  color: var(--muted);
+}
+.dw-temps {
+  display: flex;
+  align-items: baseline;
+  gap: 3px;
+  margin-bottom: 4px;
+}
+.dw-high {
+  font-size: 1.3rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+.dw-sep {
+  font-size: .85rem;
+  color: var(--muted);
+  font-weight: 400;
+}
+.dw-low {
+  font-size: .95rem;
+  color: var(--muted);
+  font-weight: 500;
+}
+.dw-details {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: .68rem;
+}
+.dw-rain {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  color: #4285F4;
+}
+.dw-precip {
+  color: var(--muted);
+}
+.dw-bar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  height: 3px;
+  background: linear-gradient(90deg, #4285F4, #80caff);
+  border-radius: 0 0 var(--radius-sm) 0;
+  transition: width .4s ease;
+}
+
+/* --- Health advisory --- */
+.health-advisory-section {
+  margin-bottom: 24px;
+}
+.health-advisory-card {
+  background: rgba(255, 182, 102, .12);
+  border: 1px solid rgba(255, 182, 102, .3);
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+.health-advisory-card p {
+  margin: 4px 0 0;
+  font-size: .82rem;
+  line-height: 1.5;
+}
+
+/* --- Route hint button in place-index --- */
+.route-hint-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--paper);
+  color: var(--sky);
+  font-size: .64rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .15s;
+}
+.route-hint-btn:hover {
+  background: var(--sky);
+  color: #fff;
+  border-color: var(--sky);
+}
+
+/* --- Over-budget indicator --- */
+.over-budget {
+  color: var(--coral-deep) !important;
+  font-weight: 700;
+}
+
+/* --- Responsive fixes for new components --- */
+@media (max-width: 768px) {
+  .event-row {
+    grid-template-columns: 54px 34px 1fr 30px;
+    gap: 9px;
+  }
+  .event-thumb { display: none; }
+  .daily-weather-grid {
+    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  }
+  .daily-weather-card { padding: 10px; }
+  .dw-high { font-size: 1.1rem; }
+  .dw-low { font-size: .82rem; }
+  .id-grid { grid-template-columns: 1fr; }
+}

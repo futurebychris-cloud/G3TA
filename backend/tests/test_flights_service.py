@@ -179,6 +179,5 @@ class FlightsServiceTests(unittest.TestCase):
         self.assertTrue(all(option["arrival_airport"] == "JFK" for option in options))
         self.assertTrue(all(option["arrival_lat"] == 40.6413 for option in options))
 
-
 if __name__ == "__main__":
     unittest.main()

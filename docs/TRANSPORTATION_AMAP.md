@@ -79,3 +79,4 @@ npm run dev
 
 Real keys must never be committed. For production, replace the local plaintext
 security-code setup with AMap's server-proxy security mode.
+Any key that has appeared in Git history must be treated as exposed and rotated before reuse.

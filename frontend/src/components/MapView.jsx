@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { MapPin } from 'lucide-react'
+import { MapPin, Navigation } from 'lucide-react'
 import { useAccessibilitySettings } from '../accessibility/AccessibilityContext.jsx'
 import ReadAloudButton from './accessibility/ReadAloudButton.jsx'
 
@@ -31,6 +31,7 @@ const TRANSPORT_ROUTE_MODES = [
 const ROLE_LABEL = {
   departure: 'Departure point',
   arrival: 'Arrival point',
+  transfer: 'Transfer point',
   start: 'Start from hotel',
   visit: 'Activity stop',
   return: 'Return to hotel',
@@ -118,8 +119,8 @@ function StaticRoutePreview({ route }) {
 function TransportationSummary({ result, transportation }) {
   const recommended = transportation.recommended || {}
   const summary = transportation.route_summary || {
-    origin: result.agent_outputs?.transportation?.route_summary?.origin || 'Origin',
-    destination: result.destination,
+    origin: recommended.from || result.agent_outputs?.transportation?.route_summary?.origin || 'Origin',
+    destination: recommended.to || result.destination,
     departure_airport: recommended.departure_airport,
     arrival_airport: recommended.arrival_airport,
     carrier: recommended.carrier,
@@ -148,6 +149,15 @@ function TransportationSummary({ result, transportation }) {
       {transportation.coverage?.note && <p className="transport-note">{transportation.coverage.note}</p>}
     </section>
   )
+}
+
+function amapPlaceUrl(point) {
+  return `https://uri.amap.com/marker?position=${point.lng},${point.lat}&name=${encodeURIComponent(point.label)}&src=G3TA&callnative=0`
+}
+
+function amapRouteUrl(from, to, routeMode) {
+  const mode = routeMode === 'walking' ? 'walk' : 'car'
+  return `https://uri.amap.com/navigation?from=${from.lng},${from.lat},${encodeURIComponent(from.label)}&to=${to.lng},${to.lat},${encodeURIComponent(to.label)}&mode=${mode}&policy=1&src=G3TA&callnative=0`
 }
 
 export default function MapView({ points = EMPTY_POINTS, result = null, agentOutputs = null }) {
@@ -463,6 +473,19 @@ export default function MapView({ points = EMPTY_POINTS, result = null, agentOut
                 <span>
                   <strong>{stop.label}</strong>
                   <small>{ROLE_LABEL[stop.role] || stop.area || stop.type}</small>
+                  {stop.star_rating != null && <small>★ {stop.star_rating} stars</small>}
+                  {stop.ticket_price != null && <small>¥{stop.ticket_price} ticket</small>}
+                  <a
+                    className="route-hint-btn"
+                    href={index > 0
+                      ? amapRouteUrl(activeRoute.stops[index - 1], stop, routeMode)
+                      : amapPlaceUrl(stop)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <Navigation size={11} />
+                    {index > 0 ? `Route from ${activeRoute.stops[index - 1].label}` : 'Open in AMap'}
+                  </a>
                 </span>
               </li>
             ))}

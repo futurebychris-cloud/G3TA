@@ -27,7 +27,10 @@ def _route_point(option: dict, prefix: str, label: str, role: str) -> dict | Non
     """Build one optional airport map point without making coordinates mandatory."""
     lat = option.get(f"{prefix}_lat")
     lng = option.get(f"{prefix}_lng")
+    coordinate_system = str(option.get("coordinate_system") or "").casefold().replace("_", "-").replace(" ", "")
     if (
+        coordinate_system not in {"gcj-02", "gcj02", "amap", "amap-compatible"}
+        or
         isinstance(lat, bool)
         or isinstance(lng, bool)
         or not isinstance(lat, (int, float))
@@ -44,7 +47,7 @@ def _route_point(option: dict, prefix: str, label: str, role: str) -> dict | Non
         "role": role,
         "lat": lat,
         "lng": lng,
-        "coordinate_system": option.get("coordinate_system", "AMap-compatible"),
+        "coordinate_system": "GCJ-02",
     }
 
 

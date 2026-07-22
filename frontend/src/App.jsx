@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ArrowLeft,
+  BedDouble,
   BrainCircuit,
   CalendarDays,
   Check,
@@ -21,6 +22,7 @@ import MapView from './components/MapView.jsx'
 import BudgetView from './components/BudgetView.jsx'
 import PackingList from './components/PackingList.jsx'
 import ReasoningLog from './components/ReasoningLog.jsx'
+import BookingPanel from './components/BookingPanel.jsx'
 import OrbitGlobe from './components/OrbitGlobe.jsx'
 import AccessibilityButton from './components/accessibility/AccessibilityButton.jsx'
 import AccessibilityPanel from './components/accessibility/AccessibilityPanel.jsx'
@@ -39,6 +41,7 @@ const TABS = [
   { id: 'itinerary', label: 'Itinerary', icon: Route },
   { id: 'map', label: 'Places', icon: Map },
   { id: 'budget', label: 'Budget', icon: CircleDollarSign },
+  { id: 'stay', label: 'Book stay', icon: BedDouble },
   { id: 'packing', label: 'Packing', icon: Luggage },
   { id: 'reasoning', label: 'Agent log', icon: ListChecks },
 ]
@@ -413,12 +416,15 @@ export default function App() {
                 agentOutputs={result.agent_outputs}
               />
             )}
+            {tab === 'stay' && activeTrip && <BookingPanel trip={activeTrip} />}
             {tab === 'budget' && <BudgetView cost={result.cost} budgetAgent={result.agent_outputs.budget} />}
             {tab === 'packing' && (
               <PackingList
                 items={result.packing_list}
                 weather={result.weather_summary}
                 pacing={result.agent_outputs.planning.pacing_notes}
+                dailyWeather={result.agent_outputs.planning.daily_weather}
+                healthAdvice={result.agent_outputs.planning.health_advice}
               />
             )}
             {tab === 'reasoning' && <ReasoningLog log={result.reasoning_log} />}

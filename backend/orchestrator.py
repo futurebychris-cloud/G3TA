@@ -22,6 +22,7 @@ from agents import (
     transportation_agent,
 )
 from agents.base import trip_days
+from booking.shared_db import init_shared_db, save_trip
 from llm.deepseek_client import chat_json
 from llm.easy_reading import easy_reading_enabled, with_easy_reading
 from services._geography import (
@@ -128,14 +129,22 @@ def _validate_agent_geography(trip_input: dict, outputs: dict) -> None:
         if not isinstance(record, dict):
             continue
         path = f"transportation.{key}"
-        if origin and "origin" in record:
-            _expect_location("Transportation", f"{path}.origin", record["origin"], origin, "route origin", route)
-        if "destination" in record:
-            _expect_location(
-                "Transportation", f"{path}.destination", record["destination"],
-                destination, "destination", route,
-            )
-        for field, expected in (("departure_airport", origin), ("arrival_airport", destination)):
+        for field, expected, role in (
+            ("origin", origin, "route origin"),
+            ("from", origin, "route origin"),
+            ("destination", destination, "destination"),
+            ("to", destination, "destination"),
+        ):
+            if expected and field in record:
+                _expect_location(
+                    "Transportation", f"{path}.{field}", record[field], expected, role, route,
+                )
+        for field, expected in (
+            ("departure_airport", origin),
+            ("from", origin),
+            ("arrival_airport", destination),
+            ("to", destination),
+        ):
             marker = tokyo_endpoint_marker(record.get(field))
             if marker and not location_allows_tokyo_airport(expected):
                 raise ValueError(
@@ -177,90 +186,243 @@ def _validate_agent_geography(trip_input: dict, outputs: dict) -> None:
                 )
 
 
-def _local_transport_estimate(outputs: dict, num_days: int) -> float:
-    index = outputs.get("budget", {}).get("cost_index", {})
-    return round(index["daily_index"].get("local_transport", 0) * num_days, 2)
-
-
 def _reconcile_budget(trip_input: dict, outputs: dict, log: list) -> dict:
-    """Ensure the combined plan fits the budget; downgrade lodging if not.
+    """Reconcile real agent costs into a unified budget breakdown.
 
-    Returns the cost breakdown and mutates `outputs['housing']` / appends to `log`
-    when a substitution is made.
+    Key design decision (v2.1): The budget breakdown uses REAL costs from each
+    specialist agent (transport, housing, food, activity), NOT the budget agent's
+    theoretical allocations. The budget agent's pie_data is still used for the
+    ring chart, and its allocations serve as a reference for overflow detection.
+
+    Returns: {currency, total, budget, within_budget, breakdown, pie_data,
+              allocations, expense_items}
     """
     num_days = len(trip_days(trip_input))
     total_budget = float(trip_input["budget"]["total"])
     currency = trip_input["budget"].get("currency", "USD")
 
-    transport_cost = outputs["transportation"]["cost"]
-    food_cost = outputs["food"]["cost"]
-    activity_cost = outputs["activity"]["cost"]
-    local_transport = _local_transport_estimate(outputs, num_days)
-    fixed = transport_cost + food_cost + activity_cost + local_transport
+    # ---- Step 0: Check for scraping failures ----
+    transport_agent = outputs.get("transportation", {})
+    scrape_status = transport_agent.get("scrape_status", "ok")
+    transport_errors = transport_agent.get("errors", [])
 
-    housing = outputs["housing"]
-    housing_cost = housing["cost"]
-    grand_total = fixed + housing_cost
+    if scrape_status == "failed":
+        log.append({
+            "agent": "Transportation",
+            "note": (
+                f"⚠ ALL transport scraping FAILED. No real prices available. "
+                f"Errors: {'; '.join(transport_errors[:3])}. "
+                f"The cost breakdown EXCLUDES transportation — you MUST book "
+                f"transport separately. Try again or check Ctrip/12306 manually."
+            ),
+        })
+    elif scrape_status == "partial":
+        log.append({
+            "agent": "Transportation",
+            "note": (
+                f"⚠ Partial transport data: some sources failed. "
+                f"{'; '.join(transport_errors[:2])}. "
+                f"Prices shown are from the working source only."
+            ),
+        })
+
+    # ---- Step 1: Extract REAL costs from each agent ----
+    # Transport (intercity flights/trains)
+    transport_cost = float(transport_agent.get("cost", 0) or 0)
+    transport_recommended = transport_agent.get("recommended", {})
+
+    # Fallback: if transport scraping failed, estimate from city distance
+    if transport_cost <= 0:
+        origin = trip_input.get("origin", "")
+        dest = trip_input["location"]
+        if origin and dest:
+            try:
+                from services.gaode_service import city_distance_km, CITY_COST_KM
+                dist = city_distance_km(origin, dest)
+                transport_cost = round(dist * CITY_COST_KM, 2)
+                log.append({
+                    "agent": "Transportation",
+                    "note": (
+                        f"Transport scraping unavailable — estimated {currency} {transport_cost:,.0f} "
+                        f"based on ~{dist:.0f}km distance ({CITY_COST_KM} {currency}/km)."
+                    ),
+                })
+            except Exception:
+                # Hard fallback: 600 CNY for domestic China routes
+                transport_cost = 600.0
+                log.append({
+                    "agent": "Transportation",
+                    "note": "Transport cost estimated at 600 CNY (scraping unavailable).",
+                })
+
+    # Local transport
+    local_transport = float(transport_agent.get("local_transport_cost", 0) or 0)
+    if local_transport <= 0:
+        # fallback: use budget agent's daily estimate OR tier-based
+        index = outputs.get("budget", {}).get("cost_index", {})
+        daily_idx = index.get("daily_index", {}) if index else {}
+        local_transport = round(float(daily_idx.get("local_transport", 30)) * num_days, 2)
+        if local_transport <= 0:
+            local_transport = round(30.0 * num_days, 2)  # hard floor
+
+    # Housing — use the REAL scraped price; only guard against absurd scraping
+    # artifacts (>= 100k CNY/night) by swapping to the cheapest real-priced option.
+    housing_agent = outputs.get("housing", {})
+    housing_cost = housing_agent.get("cost")
+    h_rec = housing_agent.get("recommended") or {}
+    nights = max(num_days - 1, 1)
+
+    _MAX_REALISTIC_PRICE_PER_NIGHT = 100000  # safety net for scraping artifacts only
+    price_per = h_rec.get("price_per_night") if isinstance(h_rec, dict) else None
+    if price_per and float(price_per) > _MAX_REALISTIC_PRICE_PER_NIGHT:
+        log.append({
+            "agent": "Orchestrator",
+            "note": (
+                f"Filtered an absurd Ctrip price for {h_rec.get('name', 'hotel')} "
+                f"({currency} {float(price_per):,.0f}/night — clearly a scraping artifact). "
+                f"Swapped to the cheapest real-priced option."
+            ),
+        })
+        options = housing_agent.get("options", []) or []
+        valid_opts = [
+            o for o in options
+            if o.get("price_per_night") and 0 < float(o["price_per_night"]) < _MAX_REALISTIC_PRICE_PER_NIGHT
+        ]
+        if valid_opts:
+            h_rec = min(valid_opts, key=lambda o: o["price_per_night"])
+            housing_agent["recommended"] = h_rec
+            price_per = h_rec.get("price_per_night")
+
+    if housing_cost is None or (isinstance(housing_cost, (int, float)) and housing_cost > _MAX_REALISTIC_PRICE_PER_NIGHT * nights):
+        if price_per:
+            housing_cost = float(price_per) * nights
+        else:
+            # No real price available — be honest, do NOT fabricate an estimate.
+            housing_cost = 0.0
+            log.append({
+                "agent": "Orchestrator",
+                "note": (
+                    "未获取到真实房价，住宿费用暂不计入预算，请到携程平台核实真实价格后再预订。"
+                ),
+            })
+    housing_cost = float(housing_cost)
+
+    # Food
+    food_agent_out = outputs.get("food", {})
+    food_cost = float(food_agent_out.get("cost", 0) or 0)
+    # If food cost is unreasonably high (>5000/day), cap it
+    if food_cost > 5000 * num_days:
+        food_cost = 500 * num_days  # reasonable CNY estimate
+        log.append({
+            "agent": "Orchestrator",
+            "note": f"Food cost capped at {currency} 500/day (unrealistic input detected).",
+        })
+
+    # Activity
+    activity_agent_out = outputs.get("activity", {})
+    activity_cost = float(activity_agent_out.get("cost", 0) or 0)
+
+    # ---- Step 2: Build expense line items for frontend ----
+    expense_items = []
+    if transport_cost > 0:
+        expense_items.append({
+            "category": "transportation", "label": "Intercity transport",
+            "detail": f"{transport_recommended.get('carrier', '')} "
+                      f"{transport_recommended.get('flight_number', transport_recommended.get('train_number', ''))} "
+                      f"{transport_recommended.get('from', '')} → {transport_recommended.get('to', '')}",
+            "amount": round(transport_cost, 2), "currency": currency,
+        })
+    if housing_cost > 0:
+        h_rec = housing_agent.get("recommended") or {}
+        nights = max(num_days - 1, 1)
+        expense_items.append({
+            "category": "housing", "label": "Accommodation",
+            "detail": f"{h_rec.get('name', 'Hotel')} × {nights} nights",
+            "amount": round(housing_cost, 2), "currency": currency,
+        })
+    if food_cost > 0:
+        expense_items.append({
+            "category": "food", "label": "Food & dining",
+            "detail": f"{num_days} days of meals",
+            "amount": round(food_cost, 2), "currency": currency,
+        })
+    if activity_cost > 0:
+        act_recs = activity_agent_out.get("recommended", [])
+        act_names = ", ".join(a.get("name", "") for a in (act_recs or [])[:3])
+        expense_items.append({
+            "category": "activity", "label": "Activities & experiences",
+            "detail": act_names if act_names else f"{len(act_recs or [])} activities",
+            "amount": round(activity_cost, 2), "currency": currency,
+        })
+    if local_transport > 0:
+        expense_items.append({
+            "category": "local_transport", "label": "Local transport",
+            "detail": f"{num_days} days (metro, taxi, bus)",
+            "amount": round(local_transport, 2), "currency": currency,
+        })
+
+    # ---- Step 3: Grand total & overflow check ----
+    grand_total = transport_cost + housing_cost + food_cost + activity_cost + local_transport
 
     if grand_total > total_budget:
         overflow = grand_total - total_budget
-        # Re-query the Budget Agent for tightened caps (recorded for the UI).
-        outputs["budget"] = budget_agent.run(trip_input, overflow=overflow)
+        log.append({
+            "agent": "Orchestrator",
+            "note": (
+                f"Plan costs {currency} {grand_total:,.0f}, exceeding "
+                f"{total_budget:,.0f} budget by {overflow:,.0f}. "
+                f"Consider downgrading housing or reducing activities."
+            ),
+        })
 
-        # Food used to be selected independently from the displayed daily cap.
-        # Re-plan it against any tightened cap before attempting a lodging downgrade.
-        previous_food_cost = food_cost
-        outputs["food"] = food_agent.run(with_budget_guidance(trip_input, outputs["budget"]))
-        food_cost = outputs["food"]["cost"]
-        fixed = transport_cost + food_cost + activity_cost + local_transport
-        grand_total = fixed + housing_cost
-        if food_cost < previous_food_cost:
-            log.append({
-                "agent": "Orchestrator",
-                "note": (
-                    f"Food choices were reduced from {previous_food_cost:.0f} to {food_cost:.0f} "
-                    f"{currency} to obey the revised daily food cap."
-                ),
-            })
-        overflow = max(grand_total - total_budget, 0)
-
-        # Try to downgrade lodging: the priciest hotel that still lets the plan fit.
-        nights = housing.get("nights", max(num_days - 1, 1))
+        # Try to downgrade lodging
+        nights = max(num_days - 1, 1)
+        options = housing_agent.get("options", [])
         affordable = [
-            o for o in housing["options"]
-            if fixed + o["price_per_night"] * nights <= total_budget
+            o for o in options
+            if o.get("price_per_night") is not None
+            and (grand_total - housing_cost + o["price_per_night"] * nights) <= total_budget
         ]
-        original = housing["recommended"]
         if affordable:
             substitute = max(affordable, key=lambda o: o["price_per_night"])
-            if substitute["id"] != original["id"]:
-                housing["recommended"] = substitute
-                housing["cost"] = substitute["price_per_night"] * nights
-                housing_cost = housing["cost"]
+            original = housing_agent.get("recommended") or {}
+            if original and substitute.get("id") != original.get("id"):
+                housing_agent["recommended"] = substitute
+                housing_cost = substitute["price_per_night"] * nights
+                housing_agent["cost"] = housing_cost
+                # Update expense item
+                for item in expense_items:
+                    if item["category"] == "housing":
+                        item["amount"] = round(housing_cost, 2)
+                        item["detail"] = f"{substitute.get('name', 'Hotel')} × {nights} nights"
+                grand_total = transport_cost + housing_cost + food_cost + activity_cost + local_transport
                 log.append({
                     "agent": "Orchestrator",
                     "note": (
-                        f"Housing Agent's first pick '{original['name']}' "
-                        f"(${original['price_per_night']}/night, ${original['price_per_night'] * nights} total) "
-                        f"broke the budget by ${overflow:.0f}. Substituted '{substitute['name']}' "
-                        f"(${substitute['price_per_night']}/night) to fit within {total_budget:.0f} {currency}."
+                        f"Downgraded housing from '{original.get('name', 'unknown')}' "
+                        f"to '{substitute['name']}' ({currency} {substitute['price_per_night']}/night) "
+                        f"to fit budget."
                     ),
                 })
         else:
-            # Even the cheapest lodging can't close the gap — flag it honestly.
-            cheapest = min(housing["options"], key=lambda o: o["price_per_night"])
-            if cheapest["id"] != original["id"]:
-                housing["recommended"] = cheapest
-                housing["cost"] = cheapest["price_per_night"] * nights
-                housing_cost = housing["cost"]
+            priced = [o for o in options if o.get("price_per_night") is not None]
+            if priced:
+                cheapest = min(priced, key=lambda o: o["price_per_night"])
+                housing_agent["recommended"] = cheapest
+                housing_cost = cheapest["price_per_night"] * nights
+                housing_agent["cost"] = housing_cost
+                grand_total = transport_cost + housing_cost + food_cost + activity_cost + local_transport
             log.append({
                 "agent": "Orchestrator",
                 "note": (
-                    f"Plan still exceeds the {total_budget:.0f} {currency} budget even with the "
-                    f"cheapest lodging. Consider raising the budget or shortening the trip."
+                    f"Plan still exceeds {total_budget:.0f} {currency} budget even with "
+                    f"cheapest lodging. Consider raising budget or shortening trip."
                 ),
             })
-        grand_total = fixed + housing_cost
+
+    # ---- Step 4: Build return value ----
+    budget_agent_out = outputs.get("budget", {})
+    budget_alloc = budget_agent_out.get("allocations", {})
 
     return {
         "currency": currency,
@@ -272,22 +434,139 @@ def _reconcile_budget(trip_input: dict, outputs: dict, log: list) -> dict:
             "housing": round(housing_cost, 2),
             "food": round(food_cost, 2),
             "activity": round(activity_cost, 2),
-            "local_transport": local_transport,
+            "local_transport": round(local_transport, 2),
         },
+        "pie_data": budget_agent_out.get("pie_data", []),
+        "allocations": budget_alloc if budget_alloc else {},
+        "expense_items": expense_items,
     }
 
 
-def _map_points(outputs: dict) -> list:
+def _legacy_local_transport(outputs: dict, num_days: int) -> float:
+    index = outputs.get("budget", {}).get("cost_index", {})
+    daily = index.get("daily_index", {}) if index else {}
+    return round(daily.get("local_transport", 0) * num_days, 2)
+
+
+def _map_points(outputs: dict, destination: str = "") -> list:
     points = []
-    h = outputs["housing"]["recommended"]
-    if "lat" in h:
-        points.append({"label": h["name"], "type": "housing", "area": h.get("area"),
-                       "lat": h["lat"], "lng": h["lng"]})
-    for a in outputs["activity"]["recommended"]:
-        if "lat" in a:
-            points.append({"label": a["name"], "type": "activity", "area": a.get("area"),
-                           "lat": a["lat"], "lng": a["lng"]})
+    city = destination or outputs.get("activity", {}).get("destination", "")
+
+    # Get city center coordinates first (fallback for any missing lat/lng)
+    city_center = None
+    if city:
+        try:
+            from services.gaode_service import geocode_city
+            city_center = geocode_city(city)
+        except Exception:
+            pass
+
+    # ---- Housing ----
+    h = outputs["housing"].get("recommended", {})
+    if h and h.get("name"):
+        # If no lat/lng, try to geocode the hotel name
+        if not ("lat" in h and h.get("lat") and "lng" in h and h.get("lng")):
+            try:
+                from services.gaode_service import geocode_poi
+                coords = geocode_poi(h.get("name", ""), city)
+                if coords:
+                    h["lat"] = coords[0]
+                    h["lng"] = coords[1]
+                elif city_center:
+                    h["lat"] = city_center[0]
+                    h["lng"] = city_center[1]
+            except Exception:
+                if city_center:
+                    h["lat"] = city_center[0]
+                    h["lng"] = city_center[1]
+
+        if "lat" in h and h.get("lat") and h.get("lng"):
+            images = h.get("images", [])
+            points.append({
+                "label": h["name"], "type": "housing", "area": h.get("area", city),
+                "lat": h["lat"], "lng": h["lng"],
+                "image": images[0] if images else None,
+                "description": h.get("description", ""),
+                "star_rating": h.get("star_rating"),
+                "url": h.get("url", ""),
+            })
+
+    # ---- Activities (geocode if needed) ----
+    activities = outputs["activity"].get("recommended", [])
+    if activities:
+        try:
+            from services.gaode_service import geocode_activities
+            geocode_activities(activities, city)
+        except Exception as e:
+            print(f"[orchestrator] activity geocoding failed (non-fatal): {e}")
+
+        for a in activities:
+            # If still no lat/lng after geocoding, use city center
+            if not ("lat" in a and a.get("lat") and "lng" in a and a.get("lng")):
+                if city_center:
+                    a["lat"] = city_center[0]
+                    a["lng"] = city_center[1]
+                else:
+                    continue  # skip this activity entirely
+
+            act_images = a.get("images", [])
+            points.append({
+                "label": a["name"], "type": "activity",
+                "area": a.get("area", a.get("location", city)),
+                "lat": a["lat"], "lng": a["lng"],
+                "image": act_images[0] if act_images else (a.get("image_url") or None),
+                "description": a.get("description", ""),
+                "ticket_price": a.get("ticket_price"),
+                "url": a.get("url", ""),
+            })
+
+    # ---- Transport (airport/station) ----
+    transport_rec = outputs["transportation"].get("recommended", {})
+    if transport_rec:
+        from_loc = transport_rec.get("from", "")
+        to_loc = transport_rec.get("to", "")
+        for loc_name in [from_loc, to_loc]:
+            if not loc_name:
+                continue
+            try:
+                from services.gaode_service import geocode_city
+                coords = geocode_city(loc_name)
+                if coords:
+                    points.append({
+                        "label": f"{loc_name} (Station/Airport)",
+                        "type": "transport",
+                        "area": loc_name,
+                        "lat": coords[0],
+                        "lng": coords[1],
+                        "description": f"{transport_rec.get('carrier', 'Transport')} {transport_rec.get('flight_number', transport_rec.get('train_number', ''))}",
+                        "url": "",
+                    })
+            except Exception:
+                pass
+
+    # ---- Fallback: always show city center if no points at all ----
+    if len(points) == 0 and city_center:
+        points.append({
+            "label": city, "type": "activity", "area": city,
+            "lat": city_center[0], "lng": city_center[1],
+            "description": "City center",
+        })
+
     return points
+
+
+def _meal_title(meal: dict) -> str:
+    """v1 uses 'name' for restaurant; v2 uses 'name' for dish + 'restaurant' for venue."""
+    return meal.get("restaurant", meal.get("name", ""))
+
+def _meal_area(meal: dict) -> str:
+    return meal.get("area", meal.get("restaurant_location", ""))
+
+def _meal_detail(meal: dict) -> str:
+    dish = meal.get("dish_category", "") or meal.get("name", "")
+    cuisine = meal.get("cuisine", "")
+    area = _meal_area(meal)
+    return f"{cuisine} {dish} in {area}".strip()
 
 
 OUTDOOR_ACTIVITY_MARKERS = {
@@ -297,13 +576,17 @@ OUTDOOR_ACTIVITY_MARKERS = {
 
 
 def _activity_is_outdoor(activity: dict) -> bool:
-    values = [activity.get("name", ""), activity.get("style", ""), *(activity.get("tags") or [])]
+    values = [
+        activity.get("name", ""),
+        activity.get("style", activity.get("type", "")),
+        *(activity.get("tags") or []),
+    ]
     content = " ".join(str(value) for value in values).casefold()
     return any(marker in content for marker in OUTDOOR_ACTIVITY_MARKERS)
 
 
 def _weather_score(day: dict) -> tuple:
-    """Lower values indicate a better day for an outdoor activity."""
+    """Return a sortable score where lower values are better for outdoor plans."""
     condition = str(day.get("condition", "")).casefold()
     severity = 1 if any(
         marker in condition for marker in ("thunder", "hail", "heavy", "freezing")
@@ -319,10 +602,13 @@ def _weather_score(day: dict) -> tuple:
 
 
 def _weather_activity_assignment(days: list[str], activities: list[dict], weather: list[dict]) -> dict:
-    """Map outdoor activities to the best weather dates and indoor activities to the rest."""
+    """Put outdoor activities on the clearest supplied dates, then fill indoor plans."""
     activities = activities[:len(days)]
     weather_by_date = {day.get("date"): day for day in weather}
-    ranked_days = sorted(days, key=lambda value: _weather_score(weather_by_date.get(value, {"date": value})))
+    ranked_days = sorted(
+        days,
+        key=lambda value: _weather_score(weather_by_date.get(value, {"date": value})),
+    )
     outdoor = [activity for activity in activities if _activity_is_outdoor(activity)]
     indoor = [activity for activity in activities if not _activity_is_outdoor(activity)]
 
@@ -350,37 +636,43 @@ def _weather_detail(day: dict | None) -> str:
 def _apply_weather_activity_order(synth: dict, trip_input: dict, outputs: dict) -> None:
     """Enforce weather-aware activity placement for both LLM and fallback schedules."""
     days = trip_days(trip_input)
-    activities = outputs["activity"]["recommended"]
+    activities = outputs["activity"].get("recommended", [])
     weather = outputs["planning"].get("daily_weather", [])
     assignment = _weather_activity_assignment(days, activities, weather)
-    activity_records = {activity["name"].strip().casefold(): activity for activity in activities}
+    activity_records = {
+        activity["name"].strip().casefold(): activity
+        for activity in activities
+        if activity.get("name")
+    }
     weather_by_date = {day.get("date"): day for day in weather}
 
     existing_items = {}
     slots = {}
-    for day in synth["schedule"]:
+    for day in synth.get("schedule", []):
         retained = []
         for item in day.get("items", []):
             if item.get("type") == "activity":
-                existing_items[item.get("title", "").strip().casefold()] = item
+                existing_items[str(item.get("title", "")).strip().casefold()] = item
                 slots.setdefault(day.get("date"), len(retained))
             else:
                 retained.append(item)
         day["items"] = retained
 
-    for day in synth["schedule"]:
+    for day in synth.get("schedule", []):
         activity = assignment.get(day.get("date"))
-        if not activity:
+        if not activity or not activity.get("name"):
             continue
         key = activity["name"].strip().casefold()
         item = dict(existing_items.get(key) or {
             "time": "10:30",
             "type": "activity",
             "title": activity["name"],
-            "detail": f"{activity.get('style', 'activity')} · {activity.get('duration', '')} · "
-                      f"{activity.get('area', '')}",
+            "detail": (
+                f"{activity.get('style', activity.get('type', 'activity'))} · "
+                f"{activity.get('duration', '')} · "
+                f"{activity.get('area', activity.get('location', ''))}"
+            ).strip(" ·"),
         })
-        # Preserve the exact supplied name even if the synthesizer changed capitalization.
         item["title"] = activity_records[key]["name"]
         weather_note = _weather_detail(weather_by_date.get(day.get("date")))
         if weather_note and "Weather (" not in str(item.get("detail", "")):
@@ -397,40 +689,45 @@ def _fallback_schedule(trip_input: dict, outputs: dict) -> dict:
     )
     meals_by_day = {d["date"]: d for d in outputs["food"]["daily_meals"]}
     housing = outputs["housing"]["recommended"]
-    transport = outputs["transportation"]["recommended"]
+    transport = outputs["transportation"]["recommended"] or {}
 
     schedule = []
     for i, date in enumerate(days):
         items = []
         if i == 0:
+            carrier = transport.get("carrier", "Flight")
+            from_loc = transport.get("from", trip_input.get("origin", ""))
+            hotel_name = housing.get("name", "your hotel") if housing else "your hotel"
             items.append({"time": "Morning", "type": "arrival",
-                          "title": f"Arrive via {transport['carrier']}",
-                          "detail": f"Land at {transport.get('arrival_airport', 'the airport')}, "
-                                    f"check in at {housing['name']} ({housing.get('area', '')})."})
+                          "title": f"Arrive via {carrier}",
+                          "detail": f"{f'From {from_loc}. ' if from_loc else ''}"
+                                    f"Check in at {hotel_name}."})
         day_meals = meals_by_day.get(date, {}).get("meals", [])
         act = activity_by_date.get(date)
         if day_meals:
-            items.append({"time": "08:30", "type": "meal", "title": day_meals[0]["name"],
-                          "detail": f"{day_meals[0]['cuisine']} in {day_meals[0]['area']}"})
+            items.append({"time": "08:30", "type": "meal", "title": _meal_title(day_meals[0]),
+                          "detail": _meal_detail(day_meals[0])})
         if act:
+            act_style = act.get("style", act.get("type", ""))
+            act_area = act.get("area", act.get("location", ""))
             items.append({"time": "10:30", "type": "activity", "title": act["name"],
-                          "detail": f"{act['style']} · {act.get('duration', '')} · {act.get('area', '')}"})
+                          "detail": f"{act_style} · {act.get('duration', '')} · {act_area}".strip(" ·")})
         if len(day_meals) > 1:
-            items.append({"time": "13:00", "type": "meal", "title": day_meals[1]["name"],
-                          "detail": f"{day_meals[1]['cuisine']} in {day_meals[1]['area']}"})
+            items.append({"time": "13:00", "type": "meal", "title": _meal_title(day_meals[1]),
+                          "detail": _meal_detail(day_meals[1])})
         if len(day_meals) > 2:
-            items.append({"time": "19:00", "type": "meal", "title": day_meals[2]["name"],
-                          "detail": f"{day_meals[2]['cuisine']} in {day_meals[2]['area']}"})
+            items.append({"time": "19:00", "type": "meal", "title": _meal_title(day_meals[2]),
+                          "detail": _meal_detail(day_meals[2])})
         if i == len(days) - 1:
             items.append({"time": "Evening", "type": "departure",
-                          "title": f"Depart via {transport['carrier']}",
+                          "title": f"Depart via {carrier}",
                           "detail": "Head to the airport for your return flight."})
         schedule.append({"day": i + 1, "date": date,
                          "title": act["name"] if act else "Explore", "items": items})
 
     return {
         "summary": (
-            f"A {len(days)}-day trip to {trip_input['location']} staying at {housing['name']}, "
+            f"A {len(days)}-day trip to {trip_input['location']} staying at {hotel_name}, "
             f"balancing {outputs['planning']['weather_summary']}"
         ),
         "schedule": schedule,
@@ -451,7 +748,7 @@ def _valid_synthesis(trip_input: dict, synth: dict | None, outputs: dict) -> boo
         for activity in outputs["activity"]["recommended"]
     }
     allowed_meals = {
-        meal["name"].strip().casefold()
+        _meal_title(meal).strip().casefold()
         for daily in outputs["food"]["daily_meals"]
         for meal in daily["meals"]
     }
@@ -549,32 +846,52 @@ def reconcile_and_synthesize(trip_input: dict, outputs: dict) -> dict:
         "summary": synth.get("summary", ""),
         "schedule": synth["schedule"],
         "cost": cost,
-        "map_points": _map_points(outputs),
+        "map_points": _map_points(outputs, trip_input["location"]),
         "packing_list": outputs["planning"]["packing_list"],
         "weather_summary": outputs["planning"]["weather_summary"],
         "daily_weather": outputs["planning"].get("daily_weather", []),
-        "pacing_notes": outputs["planning"]["pacing_notes"],
+        "pacing_notes": outputs["planning"].get("pacing_notes", []),
         "weather_source": outputs["planning"].get("weather_source"),
         "weather_location": outputs["planning"].get("weather_location"),
         "reasoning_log": reasoning_log,
         "agent_outputs": outputs,
+        "transport_scrape_status": outputs.get("transportation", {}).get("scrape_status", "ok"),
+        "transport_errors": outputs.get("transportation", {}).get("errors", []),
         "verification_notice": (
-            "Travel data is AI-generated planning guidance, not live inventory. Verify prices, "
-            "availability, opening hours, visas, transport schedules, and bookings before travel."
+            "All prices are sourced from real-time Playwright scraping of "
+            "Ctrip (携程) and other booking platforms. Verify before booking."
         ),
     }
 
 
 def plan(trip_input: dict) -> dict:
-    """Set budget caps first, then run the five recommendation agents concurrently."""
-    outputs = {"budget": budget_agent.run(trip_input)}
-    guided_input = with_budget_guidance(trip_input, outputs["budget"])
-    remaining_agents = {name: agent for name, agent in _AGENTS.items() if name != "budget"}
-    with ThreadPoolExecutor(max_workers=len(remaining_agents)) as executor:
+    """Run independent specialist agents concurrently, then synthesize."""
+    # Initialize shared database and save trip metadata
+    init_shared_db()
+    import hashlib
+    trip_id = hashlib.sha256(
+        f"{trip_input['location']}{trip_input['dates']['start']}{trip_input.get('origin','')}".encode()
+    ).hexdigest()[:12]
+    save_trip(
+        trip_id=trip_id,
+        location=trip_input["location"],
+        origin=trip_input.get("origin", ""),
+        start_date=trip_input["dates"]["start"],
+        end_date=trip_input["dates"]["end"],
+        total_budget=float(trip_input["budget"]["total"]),
+        currency=trip_input["budget"].get("currency", "CNY"),
+    )
+    # Inject trip_id into the input so all agents can use it
+    trip_input["trip_id"] = trip_id
+
+    outputs = {}
+    with ThreadPoolExecutor(max_workers=len(_AGENTS)) as executor:
         futures = {
-            executor.submit(agent, guided_input): name
-            for name, agent in remaining_agents.items()
+            executor.submit(run_single_agent, name, trip_input): name
+            for name in _AGENTS
         }
         for future in as_completed(futures):
             outputs[futures[future]] = future.result()
-    return reconcile_and_synthesize(trip_input, outputs)
+    result = reconcile_and_synthesize(trip_input, outputs)
+    result["trip_id"] = trip_id
+    return result
