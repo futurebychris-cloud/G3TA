@@ -23,6 +23,7 @@ from agents import (
 )
 from agents.base import trip_days
 from llm.deepseek_client import chat_json
+from llm.easy_reading import easy_reading_enabled, with_easy_reading
 
 _AGENTS = {
     "budget": budget_agent.run,
@@ -47,7 +48,9 @@ SYNTHESIS_PROMPT = (
     "type is one of: arrival, departure, lodging, meal, activity. Weave meals and activities "
     "into a natural daily flow and respect the arrival/departure days."
     " For activity, meal, and lodging items, copy the supplied name EXACTLY into title so "
-    "verification labels are preserved. Use at most one supplied activity per day."
+    "verification labels are preserved. Use at most one supplied activity per day. Assign "
+    "outdoor, nature, walking, cycling, hiking, and adventure activities to the clearest supplied "
+    "weather days; prefer indoor activities on rainy, snowy, stormy, or very windy days."
 )
 
 
@@ -206,9 +209,111 @@ def _map_points(outputs: dict) -> list:
     return points
 
 
+OUTDOOR_ACTIVITY_MARKERS = {
+    "adventure", "bike", "cycling", "garden", "hike", "hiking", "nature", "outdoor",
+    "park", "trail", "walking", "waterfront",
+}
+
+
+def _activity_is_outdoor(activity: dict) -> bool:
+    values = [activity.get("name", ""), activity.get("style", ""), *(activity.get("tags") or [])]
+    content = " ".join(str(value) for value in values).casefold()
+    return any(marker in content for marker in OUTDOOR_ACTIVITY_MARKERS)
+
+
+def _weather_score(day: dict) -> tuple:
+    """Lower values indicate a better day for an outdoor activity."""
+    condition = str(day.get("condition", "")).casefold()
+    severity = 1 if any(
+        marker in condition for marker in ("thunder", "hail", "heavy", "freezing")
+    ) else 0
+    return (
+        severity,
+        float(day.get("rain_chance") or 0),
+        float(day.get("precipitation_mm") or 0),
+        float(day.get("snowfall_cm") or 0),
+        float(day.get("wind_speed_max_kmh") or 0),
+        day.get("date", ""),
+    )
+
+
+def _weather_activity_assignment(days: list[str], activities: list[dict], weather: list[dict]) -> dict:
+    """Map outdoor activities to the best weather dates and indoor activities to the rest."""
+    activities = activities[:len(days)]
+    weather_by_date = {day.get("date"): day for day in weather}
+    ranked_days = sorted(days, key=lambda value: _weather_score(weather_by_date.get(value, {"date": value})))
+    outdoor = [activity for activity in activities if _activity_is_outdoor(activity)]
+    indoor = [activity for activity in activities if not _activity_is_outdoor(activity)]
+
+    assignment = {}
+    for activity, activity_date in zip(outdoor, ranked_days):
+        assignment[activity_date] = activity
+    remaining_days = [value for value in days if value not in assignment]
+    for activity, activity_date in zip(indoor, remaining_days):
+        assignment[activity_date] = activity
+    return assignment
+
+
+def _weather_detail(day: dict | None) -> str:
+    if not day:
+        return ""
+    try:
+        rain = f"{round(float(day.get('rain_chance', 0)) * 100):.0f}% rain"
+        temperatures = f"{day['low_c']:.0f}–{day['high_c']:.0f}°C"
+    except (KeyError, TypeError, ValueError):
+        return ""
+    label = "seasonal estimate" if day.get("source") == "deepseek_seasonal_estimate" else "forecast"
+    return f"Weather ({label}): {day.get('condition', 'conditions vary')}, {temperatures}, {rain}."
+
+
+def _apply_weather_activity_order(synth: dict, trip_input: dict, outputs: dict) -> None:
+    """Enforce weather-aware activity placement for both LLM and fallback schedules."""
+    days = trip_days(trip_input)
+    activities = outputs["activity"]["recommended"]
+    weather = outputs["planning"].get("daily_weather", [])
+    assignment = _weather_activity_assignment(days, activities, weather)
+    activity_records = {activity["name"].strip().casefold(): activity for activity in activities}
+    weather_by_date = {day.get("date"): day for day in weather}
+
+    existing_items = {}
+    slots = {}
+    for day in synth["schedule"]:
+        retained = []
+        for item in day.get("items", []):
+            if item.get("type") == "activity":
+                existing_items[item.get("title", "").strip().casefold()] = item
+                slots.setdefault(day.get("date"), len(retained))
+            else:
+                retained.append(item)
+        day["items"] = retained
+
+    for day in synth["schedule"]:
+        activity = assignment.get(day.get("date"))
+        if not activity:
+            continue
+        key = activity["name"].strip().casefold()
+        item = dict(existing_items.get(key) or {
+            "time": "10:30",
+            "type": "activity",
+            "title": activity["name"],
+            "detail": f"{activity.get('style', 'activity')} · {activity.get('duration', '')} · "
+                      f"{activity.get('area', '')}",
+        })
+        # Preserve the exact supplied name even if the synthesizer changed capitalization.
+        item["title"] = activity_records[key]["name"]
+        weather_note = _weather_detail(weather_by_date.get(day.get("date")))
+        if weather_note and "Weather (" not in str(item.get("detail", "")):
+            item["detail"] = f"{str(item.get('detail', '')).strip()} {weather_note}".strip()
+        slot = min(slots.get(day.get("date"), len(day["items"])), len(day["items"]))
+        day["items"].insert(slot, item)
+
+
 def _fallback_schedule(trip_input: dict, outputs: dict) -> dict:
     days = trip_days(trip_input)
     activities = outputs["activity"]["recommended"]
+    activity_by_date = _weather_activity_assignment(
+        days, activities, outputs["planning"].get("daily_weather", [])
+    )
     meals_by_day = {d["date"]: d for d in outputs["food"]["daily_meals"]}
     housing = outputs["housing"]["recommended"]
     transport = outputs["transportation"]["recommended"]
@@ -222,7 +327,7 @@ def _fallback_schedule(trip_input: dict, outputs: dict) -> dict:
                           "detail": f"Land at {transport.get('arrival_airport', 'the airport')}, "
                                     f"check in at {housing['name']} ({housing.get('area', '')})."})
         day_meals = meals_by_day.get(date, {}).get("meals", [])
-        act = activities[i] if i < len(activities) else None
+        act = activity_by_date.get(date)
         if day_meals:
             items.append({"time": "08:30", "type": "meal", "title": day_meals[0]["name"],
                           "detail": f"{day_meals[0]['cuisine']} in {day_meals[0]['area']}"})
@@ -326,13 +431,15 @@ def reconcile_and_synthesize(trip_input: dict, outputs: dict) -> dict:
             "daily_weather": outputs["planning"].get("daily_weather", []),
             "pacing_notes": outputs["planning"]["pacing_notes"],
         }
-        synth = chat_json(SYNTHESIS_PROMPT, json.dumps(payload, ensure_ascii=False), temperature=0.5)
+        synthesis_prompt = with_easy_reading(SYNTHESIS_PROMPT, easy_reading_enabled(trip_input))
+        synth = chat_json(synthesis_prompt, json.dumps(payload, ensure_ascii=False), temperature=0.5)
         if not _valid_synthesis(trip_input, synth, outputs):
             synth = None
     except Exception:
         synth = None
     if synth is None:
         synth = _fallback_schedule(trip_input, outputs)
+    _apply_weather_activity_order(synth, trip_input, outputs)
 
     return {
         "destination": trip_input["location"],
@@ -343,6 +450,10 @@ def reconcile_and_synthesize(trip_input: dict, outputs: dict) -> dict:
         "map_points": _map_points(outputs),
         "packing_list": outputs["planning"]["packing_list"],
         "weather_summary": outputs["planning"]["weather_summary"],
+        "daily_weather": outputs["planning"].get("daily_weather", []),
+        "pacing_notes": outputs["planning"]["pacing_notes"],
+        "weather_source": outputs["planning"].get("weather_source"),
+        "weather_location": outputs["planning"].get("weather_location"),
         "reasoning_log": reasoning_log,
         "agent_outputs": outputs,
         "verification_notice": (

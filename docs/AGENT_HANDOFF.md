@@ -25,11 +25,19 @@ sees all six outputs together and enforces destination isolation.
     "transportation_type": ["flight"],
     "activity_style": ["cultural", "adventure"]
   },
+  "accessibility": {
+    "easy_reading": false,
+    "preset": "standard"
+  },
   "time_constraints": "fixed dates"
 }
 ```
 
 `news`/`weather` are NOT user-entered — the Planning Agent pulls weather itself.
+`accessibility.easy_reading` is optional and defaults to `false`. `accessibility.preset` records the
+frontend preset (`standard`, `easyReading`, `senior`, or `voiceFirst`) and defaults to `standard`;
+backend planning behavior remains driven by the individual `easy_reading` value. When enabled, it adds plain-language
+formatting guidance to Planning and Orchestrator prompts without changing structured travel facts.
 
 ---
 
@@ -112,11 +120,17 @@ sees all six outputs together and enforces destination isolation.
 ```json
 {
   "packing_list": ["Warm jacket", "Compact umbrella", "…"],
-  "weather_summary": "AI seasonal estimate for Shanghai: mild spring conditions …",
+  "weather_summary": "Open-Meteo forecast for Shanghai, China: 2026-07-22 through 2026-07-26 …",
   "pacing_notes": "With 5 days, keep one flexible afternoon …",
-  "daily_weather": [ { "date", "condition", "high_c", "low_c", "rain_chance" } ]
+  "daily_weather": [ { "date", "condition", "high_c", "low_c", "rain_chance", "precipitation_mm", "snowfall_cm", "wind_speed_max_kmh", "uv_index_max", "source" } ],
+  "weather_source": "open_meteo_forecast | mixed | deepseek_seasonal_estimate",
+  "weather_location": { "name", "latitude", "longitude", "timezone", "country_code" }
 }
 ```
+
+Open-Meteo geocodes the destination and supplies up to 16 forecast days. Any requested date
+not covered by the live response is returned in the same daily shape with
+`source: "deepseek_seasonal_estimate"` and requires verification.
 
 ---
 
@@ -139,6 +153,10 @@ to synthesize the schedule. Final itinerary object:
   "map_points": [ { "label", "type", "area", "lat", "lng" } ],
   "packing_list": ["…"],
   "weather_summary": "…",
+  "daily_weather": [{…}],
+  "pacing_notes": "…",
+  "weather_source": "open_meteo_forecast",
+  "weather_location": {…},
   "reasoning_log": [ { "agent": "Housing", "note": "…" }, { "agent": "Orchestrator", "note": "…downgrade trade-off…" } ],
   "agent_outputs": { "budget": {…}, "transportation": {…}, "housing": {…}, "food": {…}, "activity": {…}, "planning": {…} }
 }

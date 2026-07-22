@@ -52,12 +52,18 @@ class Preferences(BaseModel):
     activity_style: list[str] = Field(default_factory=list)
 
 
+class AccessibilityPreferences(BaseModel):
+    easy_reading: bool = False
+    preset: str = "standard"
+
+
 class TripInput(BaseModel):
     location: str
     origin: str = "New York"
     dates: Dates
     budget: Budget
     preferences: Preferences = Field(default_factory=Preferences)
+    accessibility: AccessibilityPreferences = Field(default_factory=AccessibilityPreferences)
     time_constraints: str = ""
 
 
