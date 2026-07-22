@@ -5,3 +5,4 @@ python-dotenv>=1.0
 pydantic>=2.6
 playwright>=1.40
 playwright-stealth>=2.0
+requests>=2.31

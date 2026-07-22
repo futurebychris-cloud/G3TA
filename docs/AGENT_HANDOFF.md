@@ -187,6 +187,17 @@ to synthesize the schedule. Final itinerary object:
 
 ---
 
+## Standalone module: OpenWeather Planning Agent (not wired in)
+
+`backend/agents/planning_openweather/` is a second, independently-built implementation
+of the Planning Agent's packing-list responsibility (OpenWeather instead of Open-Meteo,
+FastAPI/Pydantic interface instead of `run(trip_input) -> dict`). It overlaps with
+`planning_agent_v2.py` and is **not** imported by `orchestrator.py`. See its own
+`README.md` for what it does differently and the known gaps (it expects
+`leftover`/`shopping_budget` from the Budget Agent and an equipment `items` list from
+the Activity Agent — neither exists in the current `budget_agent.py`/`activity_agent.py`
+output shapes documented above) before wiring it in.
+
 ## Extending toward "AI Town" (PRD §14)
 
 This is a one-shot orchestrator/worker pipeline, **not** a persistent simulation.
