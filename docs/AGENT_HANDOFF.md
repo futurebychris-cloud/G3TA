@@ -60,16 +60,37 @@ formatting guidance to Planning and Orchestrator prompts without changing struct
 
 ## 2. Transportation Agent — `transportation_agent.run(trip_input)`
 
-- **Service:** `flights_service.get_flight_options(origin, destination, dates)`
+- **Service:** `flights_service.get_flight_options(origin, destination, dates, budget=None, transport_types=None)`
 - **Output:**
 ```json
 {
-  "options": [ { "id", "carrier", "price", "duration", "departure_time", "arrival_airport", "stops" } ],
+  "options": [ { "id", "carrier", "mode", "price", "duration", "departure_time", "departure_airport", "departure_lat", "departure_lng", "arrival_airport", "arrival_lat", "arrival_lng", "stops", "destination", "verification_required" } ],
   "recommended": { "...one option..." },
   "cost": 690,
-  "reasoning": "…"
+  "reasoning": "…",
+  "route_points": [
+    { "label": "JFK", "type": "transport", "role": "departure", "lat": 40.6413, "lng": -73.7781, "coordinate_system": "GCJ-02" },
+    { "label": "PVG", "type": "transport", "role": "arrival", "lat": 31.1422, "lng": 121.8126, "coordinate_system": "GCJ-02" }
+  ],
+  "route_summary": {
+    "mode": "flight", "origin": "New York", "destination": "Shanghai",
+    "departure_airport": "JFK", "arrival_airport": "PVG",
+    "carrier": "Estimated carrier", "departure_time": "17:05", "duration": "15h", "stops": 0
+  },
+  "coverage": {
+    "requested_modes": ["flight"], "available_modes": ["flight"], "note": null
+  },
+  "destination": "Shanghai",
+  "verification_required": true
 }
 ```
+
+`route_points` and `route_summary` are additive map metadata. Existing real flight
+providers may omit airport coordinates; the agent then returns an empty
+`route_points` array while preserving the original output contract. The current
+AI-backed service can return estimated terminal coordinates, validates their ranges,
+requires exact origin/destination echoes plus an AMap-compatible coordinate-system label,
+and marks every option as requiring verification. It is not live schedule or inventory data.
 
 ## 3. Housing Agent — `housing_agent.run(trip_input)`
 
