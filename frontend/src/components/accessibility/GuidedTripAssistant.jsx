@@ -16,8 +16,8 @@ const QUESTIONS = [
   {
     id: 'location',
     label: 'Going to',
-    prompt: 'Going to. What city or country would you like to visit?',
-    hint: 'For example, Tokyo or Portugal.',
+    prompt: 'Going to. What city and country would you like to visit?',
+    hint: 'Say the city first, then the country. For example, Milan, Italy.',
     required: true,
   },
   {

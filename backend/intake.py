@@ -7,10 +7,12 @@ frontend always presents this draft for review before it can reach the planner.
 from __future__ import annotations
 
 import json
+import re
 from datetime import date
 from typing import Any
 
 from llm.deepseek_client import chat_json
+from services.weather_service import geocode_destination
 
 
 INTAKE_PROMPT = """You extract travel details for an accessible trip-planning form.
@@ -24,6 +26,8 @@ Rules:
 - Never invent a city, date, budget, currency, preference, or number of people.
 - Use null for an unknown scalar and [] for an unknown list.
 - Dates must be ISO YYYY-MM-DD. Resolve relative dates using the supplied current_date.
+- location must be a searchable place in "City, Country" order when both are known.
+  For example, "Italy and Milan" means "Milan, Italy", not "Italy and Milan".
 - currency must be a three-letter ISO-style code such as USD, EUR, GBP, JPY, or CNY.
 - transportation values must be flight, train, or car.
 - activity_styles values must be cultural, adventure, or relaxed.
@@ -102,10 +106,44 @@ def _free_text(value: Any) -> str:
     return _text(value) or ""
 
 
+def _canonicalize_spoken_location(value: Any) -> str | None:
+    """Turn a spoken country/city pair into a provider-searchable destination.
+
+    We only rewrite conjunctions after the geocoder confirms that one named
+    place belongs to the other. If lookup is unavailable, the reviewable model
+    value is preserved instead of guessing.
+    """
+    location = _text(value)
+    if not location:
+        return None
+    parts = [part.strip(" ,") for part in re.split(r"\s+(?:and|&)\s+", location, flags=re.IGNORECASE)]
+    if len(parts) != 2 or not all(parts):
+        return location
+
+    for city, country in ((parts[1], parts[0]), (parts[0], parts[1])):
+        try:
+            resolved = geocode_destination(city)
+        except Exception:
+            continue
+        resolved_name = _text(resolved.get("name")) if isinstance(resolved, dict) else None
+        if resolved_name and _contains_place_name(resolved_name, country):
+            canonical_city = resolved_name.split(",", 1)[0].strip()
+            return f"{canonical_city}, {country}"
+    return location
+
+
+def _contains_place_name(resolved_name: str, requested_name: str) -> bool:
+    return re.search(
+        rf"(?<!\w){re.escape(requested_name.strip())}(?!\w)",
+        resolved_name,
+        re.IGNORECASE,
+    ) is not None
+
+
 def normalize_intake(raw: dict[str, Any]) -> dict[str, Any]:
     """Validate model output and return the frontend's structured draft contract."""
     origin = _text(raw.get("origin"))
-    location = _text(raw.get("location"))
+    location = _canonicalize_spoken_location(raw.get("location"))
     start = _date(raw.get("start_date"))
     end = _date(raw.get("end_date"))
     if start and end and end < start:

@@ -45,6 +45,17 @@ class IntakeTests(unittest.TestCase):
         self.assertIn("budget_total", result["missing"])
         self.assertIn("currency", result["missing"])
 
+    @patch.object(intake, "geocode_destination")
+    def test_country_then_city_voice_answer_is_canonicalized(self, geocode):
+        geocode.side_effect = lambda value: {
+            "Milan": {"name": "Milan, Lombardy, Italy"},
+            "Italy": {"name": "Italy"},
+        }[value]
+
+        result = intake.normalize_intake({"location": "Italy and Milan"})
+
+        self.assertEqual(result["draft"]["location"], "Milan, Italy")
+
     @patch.object(intake, "chat_json")
     def test_parser_supplies_current_date_and_uses_low_temperature(self, chat_json):
         chat_json.return_value = {"location": "Kyoto"}

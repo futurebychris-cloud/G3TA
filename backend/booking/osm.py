@@ -16,6 +16,7 @@ HONEST LIMITATION
 from __future__ import annotations
 
 import json
+import re
 import urllib.parse
 import urllib.request
 
@@ -66,6 +67,15 @@ def _normalize_city(name: str) -> str:
         print(f"[osm] typo corrected: {name!r} → {corrected!r}")
         return corrected
     return name
+
+
+def _star_rating(value) -> float | None:
+    """Normalize common OSM star formats such as ``5`` and ``5S`` safely."""
+    match = re.match(r"^\s*(\d(?:\.\d+)?)", str(value or ""))
+    if not match:
+        return None
+    rating = float(match.group(1))
+    return rating if 0 < rating <= 5 else None
 
 
 def _geocode(name: str) -> tuple[float, float] | None:
@@ -163,7 +173,7 @@ def search_osm_hotels(
         if not name:
             continue
         stars = tags.get("stars") or tags.get("hotel_stars")
-        rating = float(stars) if (stars and str(stars).replace(".", "", 1).isdigit()) else None
+        rating = _star_rating(stars)
         if min_rating is not None and (rating or 0) < min_rating:
             continue
         # Derive a couple of light tags from OSM attributes for preference matching.
@@ -176,8 +186,8 @@ def search_osm_hotels(
             tags_list.append("breakfast")
         if tags.get("wheelchair") == "yes":
             tags_list.append("accessible")
-        if tags.get("stars"):
-            tags_list.append("premium" if float(stars) >= 4 else "midrange")
+        if rating is not None:
+            tags_list.append("premium" if rating >= 4 else "midrange")
         out.append({
             "id": f"osm_{el['id']}",
             "name": name,
