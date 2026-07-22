@@ -2,8 +2,11 @@
 
 Responsibility (PRD §7): recommend flight/train/car option(s) within budget.
 Data source: destination-aware AI transportation estimates.
-Output shape: {"options": [...], "recommended": {...}, "cost": number} (+ reasoning).
+Output shape keeps the original options/recommended/cost/reasoning contract and
+adds route metadata that the frontend can draw without geocoding airport names.
 """
+import math
+
 from services.flights_service import get_flight_options
 
 from .base import llm_reason
@@ -20,12 +23,58 @@ SYSTEM_PROMPT = (
 )
 
 
+def _route_point(option: dict, prefix: str, label: str, role: str) -> dict | None:
+    """Build one optional airport map point without making coordinates mandatory."""
+    lat = option.get(f"{prefix}_lat")
+    lng = option.get(f"{prefix}_lng")
+    if (
+        isinstance(lat, bool)
+        or isinstance(lng, bool)
+        or not isinstance(lat, (int, float))
+        or not isinstance(lng, (int, float))
+        or not math.isfinite(lat)
+        or not math.isfinite(lng)
+        or not -90 <= lat <= 90
+        or not -180 <= lng <= 180
+    ):
+        return None
+    return {
+        "label": label,
+        "type": "transport",
+        "role": role,
+        "lat": lat,
+        "lng": lng,
+        "coordinate_system": option.get("coordinate_system", "AMap-compatible"),
+    }
+
+
+def _route_metadata(origin: str, destination: str, recommended: dict) -> tuple[list[dict], dict]:
+    departure_airport = recommended.get("departure_airport") or origin
+    arrival_airport = recommended.get("arrival_airport") or destination
+    points = [
+        _route_point(recommended, "departure", departure_airport, "departure"),
+        _route_point(recommended, "arrival", arrival_airport, "arrival"),
+    ]
+    return [point for point in points if point], {
+        "mode": recommended.get("mode") or "flight",
+        "origin": origin,
+        "destination": destination,
+        "departure_airport": departure_airport,
+        "arrival_airport": arrival_airport,
+        "carrier": recommended.get("carrier"),
+        "departure_time": recommended.get("departure_time"),
+        "duration": recommended.get("duration"),
+        "stops": recommended.get("stops", 0),
+    }
+
+
 def run(trip_input: dict) -> dict:
     origin = trip_input.get("origin", "New York")
+    destination = trip_input["location"]
     transport_types = trip_input.get("preferences", {}).get("transportation_type", [])
     options = get_flight_options(
         origin,
-        trip_input["location"],
+        destination,
         trip_input["dates"],
         trip_input.get("budget", {}),
         transport_types,
@@ -33,7 +82,7 @@ def run(trip_input: dict) -> dict:
 
     payload = {
         "origin": origin,
-        "destination": trip_input["location"],
+        "destination": destination,
         "total_budget": trip_input["budget"],
         "preferences": trip_input.get("preferences", {}),
         "dates": trip_input["dates"],
@@ -54,11 +103,30 @@ def run(trip_input: dict) -> dict:
         recommended = min(pool, key=lambda o: o["price"])
         reasoning = "Cheapest suitable option selected (LLM reasoning unavailable)."
 
+    route_points, route_summary = _route_metadata(origin, destination, recommended)
+    requested_modes = transport_types or ["flight"]
+    available_modes = list(dict.fromkeys(
+        str(option.get("mode") or "flight").strip().lower()
+        for option in options
+        if str(option.get("mode") or "flight").strip()
+    ))
+    unsupported = [mode for mode in requested_modes if mode.lower() not in available_modes]
+
     return {
         "options": options,
         "recommended": recommended,
         "cost": recommended["price"],
         "reasoning": reasoning,
-        "destination": trip_input["location"],
+        "destination": destination,
         "verification_required": True,
+        "route_points": route_points,
+        "route_summary": route_summary,
+        "coverage": {
+            "requested_modes": requested_modes,
+            "available_modes": available_modes,
+            "note": (
+                f"No generated option is currently available for: {', '.join(unsupported)}. Verify with a live provider."
+                if unsupported else None
+            ),
+        },
     }

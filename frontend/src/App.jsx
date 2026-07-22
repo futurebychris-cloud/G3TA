@@ -226,7 +226,7 @@ export default function App() {
 
           <section className="result-panel">
             {tab === 'itinerary' && <ItineraryView result={result} />}
-            {tab === 'map' && <MapView points={result.map_points} />}
+            {tab === 'map' && <MapView points={result.map_points} result={result} />}
             {tab === 'budget' && <BudgetView cost={result.cost} budgetAgent={result.agent_outputs.budget} />}
             {tab === 'packing' && (
               <PackingList
