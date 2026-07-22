@@ -1,5 +1,5 @@
 import { useRef } from 'react'
-import { RotateCcw, X } from 'lucide-react'
+import { MessageCircle, RotateCcw, X } from 'lucide-react'
 import { useAccessibilitySettings } from '../../accessibility/AccessibilityContext.jsx'
 import AccessibleDialog from './AccessibleDialog.jsx'
 import AccessibilityPresetSelector from './AccessibilityPresetSelector.jsx'
@@ -14,7 +14,7 @@ const TOGGLES = [
   ['readAloud', 'Read Aloud', 'Show speech controls on important travel results.'],
 ]
 
-export default function AccessibilityPanel({ open, onClose, returnFocusRef }) {
+export default function AccessibilityPanel({ open, onClose, returnFocusRef, onOpenTripAssistant }) {
   const { settings, setSetting, resetSettings } = useAccessibilitySettings()
   const closeRef = useRef(null)
 
@@ -43,6 +43,16 @@ export default function AccessibilityPanel({ open, onClose, returnFocusRef }) {
           <span className="section-index">QUICK SETUP</span>
           <AccessibilityPresetSelector compact />
         </div>
+
+        <section className="guided-addon" aria-labelledby="guided-addon-title">
+          <span className="guided-addon-icon" aria-hidden="true"><MessageCircle size={22} /></span>
+          <div>
+            <span className="section-index">DYSLEXIA &amp; READING SUPPORT</span>
+            <h3 id="guided-addon-title">Prefer one spoken question at a time?</h3>
+            <p>A voice guide asks every trip question, listens to each answer, and completes the existing form for you to check.</p>
+          </div>
+          <button type="button" onClick={onOpenTripAssistant}>Open guided setup</button>
+        </section>
 
         <div className="accessibility-options">
           {TOGGLES.map(([key, label, description]) => (

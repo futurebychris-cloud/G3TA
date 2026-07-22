@@ -3,6 +3,27 @@
 
 const API_BASE = import.meta.env.VITE_API_BASE || ''
 
+// Build a draft from natural language. This never starts the planner; the
+// traveler reviews the populated standard form and submits it separately.
+export async function parseTripIntake(description) {
+  const resp = await fetch(`${API_BASE}/intake/parse`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ description }),
+  })
+  if (!resp.ok) {
+    let message = 'The guided assistant is unavailable. Your description is still here, and the standard form remains available.'
+    try {
+      const body = await resp.json()
+      if (typeof body.detail === 'string' && body.detail.length < 240) message = body.detail
+    } catch {
+      // Keep the safe fallback when the backend has no JSON error body.
+    }
+    throw new Error(message)
+  }
+  return resp.json()
+}
+
 // Streams the full plan. Calls onEvent(evt) for each SSE message:
 //   {type:'agent_start', agent}
 //   {type:'agent_done', agent, output?}

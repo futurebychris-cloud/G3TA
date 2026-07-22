@@ -41,7 +41,10 @@ still be changed independently after selecting a preset. Available options are:
 - Reduce Motion and a system-based reading font (`Arial, Verdana, Tahoma, sans-serif`);
 - one-line or three-line Line Focus;
 - Read Aloud controls with adjustable reading speed;
-- browser voice input beside the destination field.
+- browser voice input beside the destination field;
+- an optional **Voice-guided trip setup** inside Dyslexia & Reading Support. It speaks the
+  same trip-form questions one at a time, accepts voice or typed answers, repeats any required
+  detail it cannot confirm, and fills the existing form only after the traveler reviews a summary.
 
 ### Senior Mode
 
@@ -70,6 +73,8 @@ Voice input uses the browser Web Speech Recognition API and is mainly available 
 some Safari versions; it is generally unavailable in Firefox. Read Aloud uses the browser Speech
 Synthesis API, whose voices and pause/resume behavior vary by browser and operating system. Both
 features fail safely and keep normal typing and reading available. No paid speech service is used.
+The guided setup sends the completed text answers—not microphone audio—to the configured AI model
+to normalize dates, currency, counts, and preferences. It never starts a plan automatically.
 
 The optional reading font uses installed system fonts. OpenDyslexic is not downloaded or required.
 Easy Reading always has deterministic frontend structure as a fallback. When its optional DeepSeek

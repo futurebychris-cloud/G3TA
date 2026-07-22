@@ -32,6 +32,7 @@ import EmergencyInformation from './components/accessibility/EmergencyInformatio
 import LineFocusReader from './components/accessibility/LineFocusReader.jsx'
 import NextStepHelper from './components/accessibility/NextStepHelper.jsx'
 import ReadAloudButton from './components/accessibility/ReadAloudButton.jsx'
+import GuidedTripAssistant from './components/accessibility/GuidedTripAssistant.jsx'
 import { useAccessibilitySettings } from './accessibility/AccessibilityContext.jsx'
 import { formatAccessibleDate, formatAccessibleMoney } from './utils/accessibility.js'
 
@@ -76,7 +77,7 @@ function AppHeader({ step, onReset, onAccessibility, accessibilityButtonRef }) {
   )
 }
 
-function Landing({ onSubmit }) {
+function Landing({ onSubmit, intakeDraft, intakeNotice }) {
   return (
     <main className="landing" id="main-content" tabIndex="-1">
       <section className="hero">
@@ -109,7 +110,7 @@ function Landing({ onSubmit }) {
           </div>
           <p>Start with the essentials. Fine-tune the flavor below.</p>
         </div>
-        <InputForm onSubmit={onSubmit} />
+        <InputForm onSubmit={onSubmit} intakeDraft={intakeDraft} intakeNotice={intakeNotice} />
       </section>
 
       <section className="method-strip" aria-label="How it works">
@@ -195,6 +196,9 @@ export default function App() {
   const [tab, setTab] = useState('itinerary')
   const [tripInput, setTripInput] = useState(null)
   const [accessibilityOpen, setAccessibilityOpen] = useState(false)
+  const [guidedTripOpen, setGuidedTripOpen] = useState(false)
+  const [intakeDraft, setIntakeDraft] = useState(null)
+  const [intakeNotice, setIntakeNotice] = useState(null)
   const [resetConfirmationOpen, setResetConfirmationOpen] = useState(false)
   const [showAllTabs, setShowAllTabs] = useState(false)
   const accessibilityButtonRef = useRef(null)
@@ -205,6 +209,20 @@ export default function App() {
     : TABS
 
   const closeAccessibility = useCallback(() => setAccessibilityOpen(false), [])
+
+  function openGuidedTrip() {
+    setAccessibilityOpen(false)
+    window.setTimeout(() => setGuidedTripOpen(true), 0)
+  }
+
+  function applyIntakeDraft(draft, notice) {
+    setIntakeDraft({ ...draft, appliedAt: Date.now() })
+    setIntakeNotice(notice)
+    window.setTimeout(() => {
+      document.getElementById('plan')?.scrollIntoView?.({ behavior: settings.reducedMotion ? 'auto' : 'smooth' })
+      document.getElementById('trip-origin')?.focus()
+    }, 0)
+  }
 
   useEffect(() => {
     if (!isSenior && showAllTabs) setShowAllTabs(false)
@@ -260,6 +278,8 @@ export default function App() {
     setError(null)
     setTab('itinerary')
     setTripInput(null)
+    setIntakeDraft(null)
+    setIntakeNotice(null)
     setShowAllTabs(false)
     setResetConfirmationOpen(false)
     window.scrollTo({ top: 0, behavior: settings.reducedMotion ? 'auto' : 'smooth' })
@@ -303,6 +323,13 @@ export default function App() {
         open={accessibilityOpen}
         onClose={closeAccessibility}
         returnFocusRef={accessibilityButtonRef}
+        onOpenTripAssistant={openGuidedTrip}
+      />
+      <GuidedTripAssistant
+        open={guidedTripOpen}
+        onClose={() => setGuidedTripOpen(false)}
+        onApplyDraft={applyIntakeDraft}
+        returnFocusRef={accessibilityButtonRef}
       />
       <AccessibilityOnboarding />
       <ConfirmationDialog
@@ -313,7 +340,13 @@ export default function App() {
         onConfirm={completeReset}
       />
 
-      {step === 'input' && <Landing onSubmit={handleSubmit} />}
+      {step === 'input' && (
+        <Landing
+          onSubmit={handleSubmit}
+          intakeDraft={intakeDraft}
+          intakeNotice={intakeNotice}
+        />
+      )}
 
       {step === 'progress' && (
         <main className="progress-page" id="main-content" tabIndex="-1">
