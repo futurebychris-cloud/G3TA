@@ -28,19 +28,19 @@ export default function ProgressTracker({ agents, statuses, error, onRetry }) {
   const activeAgent = agents.find((agent) => statuses[agent] === 'running')
 
   return (
-    <section className="progress-stage">
+    <section className="progress-stage" aria-labelledby="planning-progress-heading" aria-busy={!error && percentage < 100}>
       <div className="progress-art">
         <div className="progress-orbit-wrap"><OrbitGlobe compact /></div>
         <span className="section-index">LIVE ORCHESTRATION</span>
-        <h1>Your trip is<br /><em>taking shape.</em></h1>
-        <p>
+        <h1 id="planning-progress-heading">Your trip is<br /><em>taking shape.</em></h1>
+        <p aria-live="polite" aria-atomic="true">
           {activeAgent
             ? `${META[activeAgent].label} is working now. Each specialist hands a structured recommendation to the final orchestrator.`
             : 'Connecting the team and preparing your brief.'}
         </p>
         <div className="progress-meter">
           <div className="progress-meter-label"><span>{percentage}% composed</span><span>{doneCount} of {agents.length}</span></div>
-          <div className="progress-track"><span style={{ width: `${percentage}%` }} /></div>
+          <div className="progress-track" role="progressbar" aria-label="Trip planning progress" aria-valuenow={percentage} aria-valuemin="0" aria-valuemax="100"><span style={{ width: `${percentage}%` }} /></div>
         </div>
       </div>
 
@@ -50,7 +50,7 @@ export default function ProgressTracker({ agents, statuses, error, onRetry }) {
             <span className="section-index">AGENT ROOM</span>
             <h2>Working session</h2>
           </div>
-          <span className="live-badge"><span className="live-pulse" /> Live</span>
+          <span className="live-badge"><span className="live-pulse" aria-hidden="true" /> Live status</span>
         </div>
 
         <ol className="agent-list">
@@ -60,9 +60,9 @@ export default function ProgressTracker({ agents, statuses, error, onRetry }) {
             return (
               <li key={agent} className={`agent-row ${status}`}>
                 <span className="agent-number">{String(index + 1).padStart(2, '0')}</span>
-                <span className="agent-icon"><AgentIcon size={19} strokeWidth={1.8} /></span>
+                <span className="agent-icon" aria-hidden="true"><AgentIcon size={19} strokeWidth={1.8} /></span>
                 <span className="agent-copy"><strong>{label}</strong><small>{note}</small></span>
-                <span className="agent-state">
+                <span className="agent-state" aria-live={status === 'running' ? 'polite' : undefined}>
                   {status === 'done' && <><Check size={15} /> Complete</>}
                   {status === 'running' && <><LoaderCircle className="spinner" size={15} /> Thinking</>}
                   {status === 'pending' && 'Queued'}

@@ -4,6 +4,8 @@ Responsibility (PRD §7): track running total, flag overspend, allocate per-cate
 Data source: destination-aware AI cost estimates.
 Output shape: {"daily_caps": {...}, "warnings": [...]} (+ reasoning & context fields).
 """
+import math
+
 from services.budget_service import get_cost_index
 
 from .base import llm_reason, trip_days
@@ -19,6 +21,8 @@ SYSTEM_PROMPT = (
     "Caps are per day and must be realistic for the destination and budget. If the budget is too "
     "low to cover flights plus a reasonable daily spend, say so clearly in warnings."
 )
+
+_CAP_KEYS = ("food", "activity", "housing", "local_transport")
 
 
 def _deterministic_caps(total: float, num_days: int, index: dict) -> dict:
@@ -39,6 +43,58 @@ def _deterministic_caps(total: float, num_days: int, index: dict) -> dict:
     if total <= flight_ref:
         warnings.append("Total budget barely covers (or is below) estimated flight cost.")
     return {"daily_caps": caps, "warnings": warnings}
+
+
+def _normalize_caps(
+    result: dict,
+    fallback: dict,
+    total: float,
+    num_days: int,
+    index: dict,
+) -> dict:
+    """Validate and bound model caps against the actual trip budget.
+
+    The model may choose the category mix, but it cannot allocate more per day
+    than remains after the flight estimate or turn food into a disproportionate
+    share of the ground budget.
+    """
+    raw_caps = result.get("daily_caps")
+    if not isinstance(raw_caps, dict):
+        return fallback
+
+    caps = {}
+    for key in _CAP_KEYS:
+        try:
+            value = float(raw_caps.get(key))
+        except (TypeError, ValueError):
+            return fallback
+        if not math.isfinite(value) or value < 0:
+            return fallback
+        caps[key] = round(value, 2)
+
+    flight_reference = max(float(index.get("flight_reference", 0)), 0)
+    available_per_day = max(total - flight_reference, 0) / max(num_days, 1)
+    raw_total = sum(caps.values())
+    adjusted = False
+    if raw_total > available_per_day and raw_total > 0:
+        scale = available_per_day / raw_total
+        caps = {key: round(value * scale, 2) for key, value in caps.items()}
+        adjusted = True
+
+    typical_food = max(float(index.get("daily_index", {}).get("food", 0)), 0)
+    food_ceiling = min(available_per_day * 0.35, typical_food * 1.75)
+    if caps["food"] > food_ceiling:
+        caps["food"] = round(food_ceiling, 2)
+        adjusted = True
+
+    if adjusted:
+        warnings = result.setdefault("warnings", [])
+        warnings.append(
+            "Daily caps were normalized against the post-flight budget so food and other "
+            "categories remain proportionate to the trip."
+        )
+    result["daily_caps"] = caps
+    return result
 
 
 def run(trip_input: dict, overflow: float | None = None) -> dict:
@@ -74,9 +130,13 @@ def run(trip_input: dict, overflow: float | None = None) -> dict:
         )
 
     result = llm_reason(SYSTEM_PROMPT, payload)
-    if not result or "daily_caps" not in result:
-        result = _deterministic_caps(total, num_days, index)
+    fallback = _deterministic_caps(total, num_days, index)
+    if not result:
+        result = fallback
         result["reasoning"] = "Deterministic proportional split (LLM reasoning unavailable)."
+    else:
+        result = _normalize_caps(result, fallback, total, num_days, index)
+        result.setdefault("reasoning", "Daily category limits calculated from the total trip budget.")
 
     result.setdefault("warnings", [])
     if overflow and not any("trim" in w.lower() or "over" in w.lower() for w in result["warnings"]):

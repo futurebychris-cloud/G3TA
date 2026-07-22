@@ -25,11 +25,19 @@ sees all six outputs together and enforces destination isolation.
     "transportation_type": ["flight"],
     "activity_style": ["cultural", "adventure"]
   },
+  "accessibility": {
+    "easy_reading": false,
+    "preset": "standard"
+  },
   "time_constraints": "fixed dates"
 }
 ```
 
 `news`/`weather` are NOT user-entered — the Planning Agent pulls weather itself.
+`accessibility.easy_reading` is optional and defaults to `false`. `accessibility.preset` records the
+frontend preset (`standard`, `easyReading`, `senior`, or `voiceFirst`) and defaults to `standard`;
+backend planning behavior remains driven by the individual `easy_reading` value. When enabled, it adds plain-language
+formatting guidance to Planning and Orchestrator prompts without changing structured travel facts.
 
 ---
 
@@ -52,16 +60,37 @@ sees all six outputs together and enforces destination isolation.
 
 ## 2. Transportation Agent — `transportation_agent.run(trip_input)`
 
-- **Service:** `flights_service.get_flight_options(origin, destination, dates)`
+- **Service:** `flights_service.get_flight_options(origin, destination, dates, budget=None, transport_types=None)`
 - **Output:**
 ```json
 {
-  "options": [ { "id", "carrier", "price", "duration", "departure_time", "arrival_airport", "stops" } ],
+  "options": [ { "id", "carrier", "mode", "price", "duration", "departure_time", "departure_airport", "departure_lat", "departure_lng", "arrival_airport", "arrival_lat", "arrival_lng", "stops", "destination", "verification_required" } ],
   "recommended": { "...one option..." },
   "cost": 690,
-  "reasoning": "…"
+  "reasoning": "…",
+  "route_points": [
+    { "label": "JFK", "type": "transport", "role": "departure", "lat": 40.6413, "lng": -73.7781, "coordinate_system": "GCJ-02" },
+    { "label": "PVG", "type": "transport", "role": "arrival", "lat": 31.1422, "lng": 121.8126, "coordinate_system": "GCJ-02" }
+  ],
+  "route_summary": {
+    "mode": "flight", "origin": "New York", "destination": "Shanghai",
+    "departure_airport": "JFK", "arrival_airport": "PVG",
+    "carrier": "Estimated carrier", "departure_time": "17:05", "duration": "15h", "stops": 0
+  },
+  "coverage": {
+    "requested_modes": ["flight"], "available_modes": ["flight"], "note": null
+  },
+  "destination": "Shanghai",
+  "verification_required": true
 }
 ```
+
+`route_points` and `route_summary` are additive map metadata. Existing real flight
+providers may omit airport coordinates; the agent then returns an empty
+`route_points` array while preserving the original output contract. The current
+AI-backed service can return estimated terminal coordinates, validates their ranges,
+requires exact origin/destination echoes plus an AMap-compatible coordinate-system label,
+and marks every option as requiring verification. It is not live schedule or inventory data.
 
 ## 3. Housing Agent — `housing_agent.run(trip_input)`
 
@@ -112,11 +141,17 @@ sees all six outputs together and enforces destination isolation.
 ```json
 {
   "packing_list": ["Warm jacket", "Compact umbrella", "…"],
-  "weather_summary": "AI seasonal estimate for Shanghai: mild spring conditions …",
+  "weather_summary": "Open-Meteo forecast for Shanghai, China: 2026-07-22 through 2026-07-26 …",
   "pacing_notes": "With 5 days, keep one flexible afternoon …",
-  "daily_weather": [ { "date", "condition", "high_c", "low_c", "rain_chance" } ]
+  "daily_weather": [ { "date", "condition", "high_c", "low_c", "rain_chance", "precipitation_mm", "snowfall_cm", "wind_speed_max_kmh", "uv_index_max", "source" } ],
+  "weather_source": "open_meteo_forecast | mixed | deepseek_seasonal_estimate",
+  "weather_location": { "name", "latitude", "longitude", "timezone", "country_code" }
 }
 ```
+
+Open-Meteo geocodes the destination and supplies up to 16 forecast days. Any requested date
+not covered by the live response is returned in the same daily shape with
+`source: "deepseek_seasonal_estimate"` and requires verification.
 
 ---
 
@@ -139,6 +174,10 @@ to synthesize the schedule. Final itinerary object:
   "map_points": [ { "label", "type", "area", "lat", "lng" } ],
   "packing_list": ["…"],
   "weather_summary": "…",
+  "daily_weather": [{…}],
+  "pacing_notes": "…",
+  "weather_source": "open_meteo_forecast",
+  "weather_location": {…},
   "reasoning_log": [ { "agent": "Housing", "note": "…" }, { "agent": "Orchestrator", "note": "…downgrade trade-off…" } ],
   "agent_outputs": { "budget": {…}, "transportation": {…}, "housing": {…}, "food": {…}, "activity": {…}, "planning": {…} }
 }

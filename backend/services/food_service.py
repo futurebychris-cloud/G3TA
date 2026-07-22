@@ -42,19 +42,43 @@ def matches_cuisine_preferences(option: dict, cuisine_tags: list[str] | None) ->
     return bool(haystack & expanded)
 
 
-def _fallback(destination: str, cuisine_tags: list[str], count: int) -> list[dict]:
+_SLOT_WEIGHTS = {"breakfast": 0.25, "lunch": 0.35, "dinner": 0.40}
+
+
+def _slot_budget(daily_budget: float | None, slot: str) -> float | None:
+    if daily_budget is None or daily_budget <= 0:
+        return None
+    return round(daily_budget * _SLOT_WEIGHTS[slot], 2)
+
+
+def _fallback(
+    destination: str,
+    cuisine_tags: list[str],
+    count: int,
+    daily_budget: float | None = None,
+) -> list[dict]:
     families = cuisine_tags or ["Local"]
     slots = ["breakfast", "lunch", "dinner"]
+    formats = {
+        "breakfast": "bakery or grocery breakfast",
+        "lunch": "market or counter-service lunch",
+        "dinner": "simple takeaway or self-catered dinner",
+    }
     options = []
     for index in range(count):
         family = families[index % len(families)]
         slot = slots[index % len(slots)]
+        slot_price = _slot_budget(daily_budget, slot)
         options.append(estimated_record({
             "id": f"food_{index + 1}",
-            "name": f"{destination} {family} {slot} option {index + 1} (verify)",
+            "name": f"{destination} {family} {formats[slot]} {index + 1} (verify)",
             "cuisine": family,
             "cuisine_family": family,
-            "price": {"breakfast": 15, "lunch": 24, "dinner": 40}[slot],
+            "price": slot_price if slot_price is not None else {
+                "breakfast": 15,
+                "lunch": 24,
+                "dinner": 40,
+            }[slot],
             "meal_type": slot,
             "area": f"{destination} — verify neighborhood",
             "rating": 0,
@@ -70,6 +94,7 @@ def get_food_options(
     budget: dict | None = None,
     preferences: dict | None = None,
     time_constraints: str = "",
+    daily_budget: float | None = None,
 ) -> list[dict]:
     cuisines = cuisine_tags or []
     count = max(12, min(int(num_days) * 3, 42))
@@ -79,6 +104,15 @@ def get_food_options(
         "requested_count": count,
         "num_days": num_days,
         "budget": budget or {},
+        "food_budget_per_day": daily_budget,
+        "per_meal_budget_limits": {
+            slot: _slot_budget(daily_budget, slot)
+            for slot in ("breakfast", "lunch", "dinner")
+        } if daily_budget else None,
+        "budget_rule": (
+            "Every candidate price must fit its per-meal limit. Offer realistic low-cost formats "
+            "such as bakeries, markets, counter service, groceries, or self-catering when needed."
+        ) if daily_budget else None,
         "all_preferences": preferences or {},
         "time_constraints": time_constraints,
         "truthfulness_requirement": ESTIMATE_NOTE,
@@ -107,13 +141,16 @@ def get_food_options(
         }, destination)
         if cuisines and not matches_cuisine_preferences(option, cuisines):
             continue
+        slot_limit = _slot_budget(daily_budget, slot)
+        if slot_limit is not None and option["price"] > slot_limit:
+            continue
         seen.add(name.casefold())
         options.append(option)
         if len(options) >= count:
             break
 
     required_per_slot = count // 3
-    fallback_options = _fallback(destination, cuisines, count)
+    fallback_options = _fallback(destination, cuisines, count, daily_budget)
     completed = []
     for slot in ("breakfast", "lunch", "dinner"):
         slot_options = [option for option in options if option["meal_type"] == slot]

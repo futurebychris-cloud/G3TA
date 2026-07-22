@@ -8,11 +8,12 @@ const API_BASE = import.meta.env.VITE_API_BASE || ''
 //   {type:'agent_done', agent, output?}
 //   {type:'complete', result}
 //   {type:'error', message}
-export async function streamPlan(tripInput, onEvent) {
+export async function streamPlan(tripInput, onEvent, { signal } = {}) {
   const resp = await fetch(`${API_BASE}/plan/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(tripInput),
+    signal,
   })
 
   if (!resp.ok || !resp.body) {
