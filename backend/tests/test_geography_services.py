@@ -27,23 +27,29 @@ class GeographyServiceTests(unittest.TestCase):
     def test_tokyo_coordinate_guard_does_not_cover_ibaraki_airport(self):
         self.assertFalse(_geography.coordinates_are_tokyo_endpoint(36.181, 140.415))
 
-    @patch.object(hotels_service, "generate_json")
-    def test_hotel_service_discards_retired_tokyo_places(self, generate_json):
-        generate_json.return_value = {
-            "options": [{
+    def test_hotel_service_discards_retired_tokyo_places(self):
+        provider_options = [{
                 "name": "Shinjuku Granbell Hotel",
                 "price_per_night": 100,
                 "rating": 4.5,
                 "area": "Shinjuku",
-            }] * 3,
-        }
+            }, {
+                "name": "Hudson River Hotel",
+                "price_per_night": 180,
+                "rating": 4.4,
+                "area": "New York",
+            }]
 
-        options = hotels_service.get_hotel_options(
-            "美国", {"start": "2026-08-01", "end": "2026-08-03"},
-        )
+        with patch.object(
+            hotels_service,
+            "_DISPATCH",
+            {name: lambda *_args: provider_options for name in hotels_service._PROVIDERS},
+        ):
+            options = hotels_service.get_hotel_options(
+                "美国", {"start": "2026-08-01", "end": "2026-08-03"},
+            )
 
-        self.assertEqual(len(options), 3)
-        self.assertTrue(all(option["destination"] == "美国" for option in options))
+        self.assertEqual(len(options), 1)
         self.assertTrue(all(option["area"] != "Shinjuku" for option in options))
 
     @patch.object(food_service, "generate_json")

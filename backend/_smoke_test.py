@@ -5,6 +5,13 @@ that safe fallbacks remain tied to the requested destination and never leak the
 retired Tokyo demo catalog.
 """
 import json
+import os as _os
+
+# Load .env from project root so hotel APIs etc are available
+from dotenv import load_dotenv
+_env_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", ".env")
+if _os.path.exists(_env_path):
+    load_dotenv(_env_path)
 
 import agents.base as agent_base
 import orchestrator
@@ -23,7 +30,7 @@ orchestrator.chat_json = _offline
 trip = {
     "location": "Shanghai",
     "origin": "New York",
-    "dates": {"start": "2026-04-10", "end": "2026-04-22"},
+    "dates": {"start": "2026-08-05", "end": "2026-08-17"},
     "budget": {"total": 5000, "currency": "USD"},
     "preferences": {
         "bites": ["Thai"],
@@ -44,7 +51,7 @@ print("DESTINATION:", result["destination"])
 assert result["destination"] == "Shanghai"
 assert len(result["schedule"]) == 13
 assert [day["date"] for day in result["schedule"]] == [
-    f"2026-04-{day:02d}" for day in range(10, 23)
+    f"2026-08-{day:02d}" for day in range(5, 18)
 ]
 assert "tokyo" not in serialized
 assert "asakusa" not in serialized

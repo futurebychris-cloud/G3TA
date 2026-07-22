@@ -1,7 +1,11 @@
+import importlib
 import unittest
 from unittest.mock import patch
 
-from agents import transportation_agent
+
+# Exercise the AMap-compatible v1 adapter directly. The package-level alias may
+# point at the real-data v2 scraper when that optional backend is available.
+transportation_agent = importlib.import_module("agents.transportation_agent")
 
 
 TRIP = {
@@ -26,6 +30,7 @@ OPTIONS = [
         "arrival_airport": "NRT",
         "arrival_lat": 35.772,
         "arrival_lng": 140.3929,
+        "coordinate_system": "GCJ-02",
         "stops": 0,
         "destination": "Tokyo",
         "source": "deepseek_estimate",
@@ -44,6 +49,7 @@ OPTIONS = [
         "arrival_airport": "HND",
         "arrival_lat": 35.5494,
         "arrival_lng": 139.7798,
+        "coordinate_system": "GCJ-02",
         "stops": 1,
         "destination": "Tokyo",
         "source": "deepseek_estimate",
@@ -109,6 +115,17 @@ class TransportationAgentTests(unittest.TestCase):
             **OPTIONS[0],
             "departure_lat": float("nan"),
             "arrival_lat": 140,
+        }]
+
+        result = transportation_agent.run(TRIP)
+
+        self.assertEqual(result["route_points"], [])
+
+    @patch.object(transportation_agent, "llm_reason", return_value=None)
+    def test_unlabeled_coordinate_system_never_reaches_amap(self, _reason):
+        self.get_options.return_value = [{
+            **OPTIONS[0],
+            "coordinate_system": None,
         }]
 
         result = transportation_agent.run(TRIP)
