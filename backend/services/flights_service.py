@@ -4,6 +4,11 @@ This is not live inventory. Replace this implementation with a flight/rail API
 later while preserving the returned shape.
 """
 from ._ai import ESTIMATE_NOTE, coordinates, estimated_record, generate_json, integer, number, text
+from ._geography import (
+    coordinates_are_tokyo_endpoint,
+    location_allows_tokyo_airport,
+    tokyo_endpoint_marker,
+)
 
 SYSTEM_PROMPT = (
     "You generate transportation candidates for a trip planner. Use ONLY the requested origin, "
@@ -85,6 +90,18 @@ def get_flight_options(
             or not _same_requested_location(raw.get("destination"), destination)
         ):
             continue
+        departure_airport = text(raw.get("departure_airport"), origin)
+        arrival_airport = text(raw.get("arrival_airport"), f"{destination} arrival point")
+        if (
+            tokyo_endpoint_marker(departure_airport)
+            and not location_allows_tokyo_airport(origin)
+        ) or (
+            tokyo_endpoint_marker(arrival_airport)
+            and not location_allows_tokyo_airport(destination)
+        ):
+            # A Tokyo layover may appear in reasoning, carrier, or a future
+            # segments field. It cannot replace the first/last route endpoint.
+            continue
         option = {
             "id": f"transport_{index}",
             "carrier": text(raw.get("carrier"), f"Transport option {index}"),
@@ -92,14 +109,24 @@ def get_flight_options(
             "price": round(number(raw.get("price"), 850), 2),
             "duration": text(raw.get("duration"), "Verify duration"),
             "departure_time": text(raw.get("departure_time"), "Verify"),
-            "departure_airport": text(raw.get("departure_airport"), origin),
-            "arrival_airport": text(raw.get("arrival_airport"), f"{destination} arrival point"),
+            "departure_airport": departure_airport,
+            "arrival_airport": arrival_airport,
             "stops": integer(raw.get("stops"), 0),
             "origin": origin,
         }
         if _amap_coordinate_system(raw.get("coordinate_system")):
             departure_lat, departure_lng = _route_coordinates(raw, "departure")
             arrival_lat, arrival_lng = _route_coordinates(raw, "arrival")
+            if (
+                coordinates_are_tokyo_endpoint(departure_lat, departure_lng)
+                and not location_allows_tokyo_airport(origin)
+            ):
+                departure_lat, departure_lng = None, None
+            if (
+                coordinates_are_tokyo_endpoint(arrival_lat, arrival_lng)
+                and not location_allows_tokyo_airport(destination)
+            ):
+                arrival_lat, arrival_lng = None, None
             if departure_lat is not None:
                 option.update({"departure_lat": departure_lat, "departure_lng": departure_lng})
             if arrival_lat is not None:

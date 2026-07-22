@@ -112,6 +112,73 @@ class FlightsServiceTests(unittest.TestCase):
         )
         self.assertEqual(len(malformed), 3)
 
+    @patch.object(flights_service, "generate_json")
+    def test_tokyo_endpoint_never_replaces_hangzhou(self, generate_json):
+        generate_json.return_value = {
+            "options": [
+                {
+                    "origin": "杭州",
+                    "destination": "美国",
+                    "carrier": f"Wrong route {index}",
+                    "mode": "flight",
+                    "price": 500 + index,
+                    "departure_airport": "NRT",
+                    "departure_lat": 35.772,
+                    "departure_lng": 140.3929,
+                    "arrival_airport": "JFK",
+                    "arrival_lat": 40.6413,
+                    "arrival_lng": -73.7781,
+                    "coordinate_system": "GCJ-02",
+                }
+                for index in range(3)
+            ]
+        }
+
+        options = flights_service.get_flight_options(
+            "杭州",
+            "美国",
+            {"start": "2026-08-01", "end": "2026-08-05"},
+        )
+
+        self.assertEqual(len(options), 3)
+        self.assertTrue(all(option["origin"] == "杭州" for option in options))
+        self.assertTrue(all(option["destination"] == "美国" for option in options))
+        self.assertTrue(all(option["carrier"].startswith("Flight option") for option in options))
+        self.assertTrue(all("departure_lat" not in option for option in options))
+
+    @patch.object(flights_service, "generate_json")
+    def test_tokyo_coordinates_are_removed_even_when_airport_label_says_hgh(self, generate_json):
+        generate_json.return_value = {
+            "options": [
+                {
+                    "origin": "杭州",
+                    "destination": "美国",
+                    "carrier": f"Coordinate check {index}",
+                    "mode": "flight",
+                    "price": 500 + index,
+                    "departure_airport": "HGH",
+                    "departure_lat": 35.772,
+                    "departure_lng": 140.3929,
+                    "arrival_airport": "JFK",
+                    "arrival_lat": 40.6413,
+                    "arrival_lng": -73.7781,
+                    "coordinate_system": "GCJ-02",
+                }
+                for index in range(3)
+            ]
+        }
+
+        options = flights_service.get_flight_options(
+            "杭州",
+            "美国",
+            {"start": "2026-08-01", "end": "2026-08-05"},
+        )
+
+        self.assertEqual(len(options), 3)
+        self.assertTrue(all("departure_lat" not in option for option in options))
+        self.assertTrue(all(option["arrival_airport"] == "JFK" for option in options))
+        self.assertTrue(all(option["arrival_lat"] == 40.6413 for option in options))
+
 
 if __name__ == "__main__":
     unittest.main()

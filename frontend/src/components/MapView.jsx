@@ -370,7 +370,7 @@ export default function MapView({ points = EMPTY_POINTS, result = null, agentOut
       </div>
 
       {isSenior && listEntries.length > 0 && (
-        <section className="senior-place-picks" aria-labelledby="senior-place-picks-heading">
+        <section className="senior-place-picks place-index" aria-labelledby="senior-place-picks-heading">
           <h3 id="senior-place-picks-heading">Recommended places</h3>
           <ol>
             {listEntries.map(({ point, recommendation }, index) => (
