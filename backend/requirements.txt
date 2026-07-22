@@ -3,3 +3,5 @@ uvicorn[standard]>=0.30
 openai>=1.30
 python-dotenv>=1.0
 pydantic>=2.6
+playwright>=1.40
+playwright-stealth>=2.0

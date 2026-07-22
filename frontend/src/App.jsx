@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import {
   ArrowLeft,
+  BedDouble,
   BrainCircuit,
   CalendarDays,
   Check,
@@ -22,6 +23,7 @@ import MapView from './components/MapView.jsx'
 import BudgetView from './components/BudgetView.jsx'
 import PackingList from './components/PackingList.jsx'
 import ReasoningLog from './components/ReasoningLog.jsx'
+import BookingPanel from './components/BookingPanel.jsx'
 import OrbitGlobe from './components/OrbitGlobe.jsx'
 
 const AGENTS = ['budget', 'transportation', 'housing', 'food', 'activity', 'planning', 'orchestrator']
@@ -30,6 +32,7 @@ const TABS = [
   { id: 'itinerary', label: 'Itinerary', icon: Route },
   { id: 'map', label: 'Places', icon: Map },
   { id: 'budget', label: 'Budget', icon: CircleDollarSign },
+  { id: 'stay', label: 'Book stay', icon: BedDouble },
   { id: 'packing', label: 'Packing', icon: Luggage },
   { id: 'reasoning', label: 'Agent log', icon: ListChecks },
 ]
@@ -164,16 +167,18 @@ export default function App() {
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
   const [tab, setTab] = useState('itinerary')
+  const [tripInput, setTripInput] = useState(null)
 
-  async function handleSubmit(tripInput) {
+  async function handleSubmit(input) {
     setError(null)
     setResult(null)
+    setTripInput(input)
     setStatuses(Object.fromEntries(AGENTS.map((agent) => [agent, 'pending'])))
     setStep('progress')
     window.scrollTo({ top: 0, behavior: 'smooth' })
 
     try {
-      await streamPlan(tripInput, (event) => {
+      await streamPlan(input, (event) => {
         if (event.type === 'agent_start') {
           setStatuses((current) => ({ ...current, [event.agent]: 'running' }))
         } else if (event.type === 'agent_done') {
@@ -227,12 +232,15 @@ export default function App() {
           <section className="result-panel">
             {tab === 'itinerary' && <ItineraryView result={result} />}
             {tab === 'map' && <MapView points={result.map_points} />}
+            {tab === 'stay' && tripInput && <BookingPanel trip={tripInput} />}
             {tab === 'budget' && <BudgetView cost={result.cost} budgetAgent={result.agent_outputs.budget} />}
             {tab === 'packing' && (
               <PackingList
                 items={result.packing_list}
                 weather={result.weather_summary}
                 pacing={result.agent_outputs.planning.pacing_notes}
+                dailyWeather={result.agent_outputs.planning.daily_weather}
+                healthAdvice={result.agent_outputs.planning.health_advice}
               />
             )}
             {tab === 'reasoning' && <ReasoningLog log={result.reasoning_log} />}
