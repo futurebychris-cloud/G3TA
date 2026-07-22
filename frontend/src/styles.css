@@ -436,9 +436,11 @@ button { -webkit-tap-highlight-color: transparent; }
 .choice-chip.selected { background: var(--ink); border-color: var(--ink); color: white; }
 .choice-check { width: 7px; height: 7px; border: 1px solid currentColor; border-radius: 50%; }
 .choice-chip.selected .choice-check { background: var(--lime); border-color: var(--lime); }
-.constraint-field { grid-column: 1 / -1; display: flex; align-items: center; gap: 14px; padding-top: 20px; border-top: 1px solid var(--line); }
+.constraint-row { grid-column: 1 / -1; display: grid; grid-template-columns: 1.3fr 1fr auto; gap: 24px; padding-top: 20px; border-top: 1px solid var(--line); }
+.constraint-field { display: flex; align-items: center; gap: 14px; }
 .constraint-field > span { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; font-size: 0.73rem; font-weight: 750; }
 .constraint-field input { flex: 1; min-width: 0; border: 0; border-bottom: 1px solid var(--line); padding: 7px 2px; outline: 0; background: transparent; color: var(--ink); font-size: 0.8rem; }
+.party-field input { width: 58px; flex: 0 0 58px; text-align: center; }
 .planner-action { min-height: 88px; display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 16px 20px 16px 34px; }
 .agent-avatars { display: flex; align-items: center; }
 .agent-avatars > span { width: 29px; height: 29px; display: grid; place-items: center; margin-left: -5px; border: 2px solid var(--white); border-radius: 50%; background: hsl(calc(20 + var(--i) * 42) 70% 72%); color: var(--ink); font-size: 0.61rem; font-weight: 850; }
@@ -845,8 +847,10 @@ button { -webkit-tap-highlight-color: transparent; }
   .preference-toggle .preference-summary { display: none; }
   .preference-toggle svg:last-child { margin-left: auto; }
   .preferences-panel { grid-template-columns: 1fr; gap: 24px; padding: 24px 20px; }
+  .constraint-row { grid-template-columns: 1fr; gap: 18px; }
   .constraint-field { display: block; }
   .constraint-field input { width: 100%; margin-top: 8px; }
+  .party-field input { width: 100%; text-align: left; }
   .planner-action { padding: 17px 20px; }
   .agent-avatars { display: none; }
   .plan-button { width: 100%; min-width: 0; }

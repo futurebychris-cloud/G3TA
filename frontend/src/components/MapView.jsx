@@ -3,6 +3,7 @@ import { BedDouble, Camera, MapPin, Navigation, PlaneLanding } from 'lucide-reac
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
+import { useAccessibilitySettings } from '../accessibility/AccessibilityContext.jsx'
 
 // Fix default marker icon issue with bundlers
 delete L.Icon.Default.prototype._getIconUrl
@@ -56,6 +57,38 @@ const TYPE_META = {
   transport: { color: '#80caff', label: 'Transit', icon: PlaneLanding },
 }
 
+function seniorRecommendations(points, agentOutputs) {
+  if (!points?.length) return []
+  const choices = []
+  const add = (point, recommendation) => {
+    if (point && !choices.some(({ point: current }) => current === point)) {
+      choices.push({ point, recommendation })
+    }
+  }
+  const hotelPoint = points.find(({ type }) => type === 'housing')
+  add(hotelPoint || points[0], 'Top Recommendation')
+
+  const activities = agentOutputs?.activity?.recommended || []
+  const findActivityPoint = (activity) => points.find((point) => point.label === activity?.name)
+  const byValue = [...activities].sort((a, b) => (
+    Number(a.price ?? a.ticket_price ?? Infinity) - Number(b.price ?? b.ticket_price ?? Infinity)
+  ))
+  add(findActivityPoint(byValue[0]), 'Best Value')
+
+  if (hotelPoint) {
+    const closest = points
+      .filter(({ type }) => type === 'activity')
+      .map((point) => ({ point, distance: Math.hypot(point.lat - hotelPoint.lat, point.lng - hotelPoint.lng) }))
+      .sort((a, b) => a.distance - b.distance)
+      .find(({ point }) => !choices.some(({ point: current }) => current === point))
+    add(closest?.point, 'Closest')
+  }
+  points.forEach((point) => {
+    if (choices.length < 3) add(point, 'Recommended')
+  })
+  return choices
+}
+
 function createRouteUrl(pointA, pointB) {
   const lat1 = pointA.lat, lng1 = pointA.lng
   const lat2 = pointB.lat, lng2 = pointB.lng
@@ -77,20 +110,20 @@ function FitBounds({ points }) {
   return null
 }
 
-export default function MapView({ points }) {
+export default function MapView({ points = [], agentOutputs = null, result = null }) {
+  points = points || []
+  const { settings } = useAccessibilitySettings()
   const [selectedRoute, setSelectedRoute] = useState(null)
-
-  if (!points || points.length === 0) {
-    return (
-      <div className="places-view">
-        <div className="panel-heading">
-          <div><span className="section-index">YOUR PLACES</span><h2>Real maps, real locations.<br />Not an illustration.</h2></div>
-          <p>高德地图瓦片 · 所有坐标来自 Agent 实时数据</p>
-        </div>
-        <div className="empty-state"><MapPin size={28} /><h3>No map points yet</h3><p>Locations will appear here when they are available.</p></div>
-      </div>
-    )
-  }
+  const [showAllPlaces, setShowAllPlaces] = useState(false)
+  const isSenior = settings.preset === 'senior'
+  const resolvedAgentOutputs = result?.agent_outputs || agentOutputs || {}
+  const seniorChoices = useMemo(
+    () => seniorRecommendations(points, resolvedAgentOutputs),
+    [points, resolvedAgentOutputs],
+  )
+  const placeEntries = isSenior && !showAllPlaces
+    ? seniorChoices
+    : points.map((point) => ({ point, recommendation: null }))
 
   // Build route polylines between consecutive points
   const routeSegments = useMemo(() => {
@@ -110,6 +143,18 @@ export default function MapView({ points }) {
     const lngs = points.map(p => p.lng)
     return [(Math.min(...lats) + Math.max(...lats)) / 2, (Math.min(...lngs) + Math.max(...lngs)) / 2]
   }, [points])
+
+  if (!points.length) {
+    return (
+      <div className="places-view">
+        <div className="panel-heading">
+          <div><span className="section-index">YOUR PLACES</span><h2>Real maps, real locations.<br />Not an illustration.</h2></div>
+          <p>高德地图瓦片 · 所有坐标来自 Agent 实时数据</p>
+        </div>
+        <div className="empty-state"><MapPin size={28} /><h3>No map points yet</h3><p>Locations will appear here when they are available.</p></div>
+      </div>
+    )
+  }
 
   const routeColors = ['#ff6b4a', '#4BC0C0', '#80caff', '#ccf06c', '#b9a4ff', '#ffca6b']
 
@@ -206,13 +251,14 @@ export default function MapView({ points }) {
         <aside className="place-index">
           <span className="section-index">LOCATION INDEX</span>
           <ol>
-            {points.map((point, index) => {
+            {placeEntries.map(({ point, recommendation }, index) => {
               const meta = TYPE_META[point.type] || TYPE_META.activity
-              const prev = index > 0 ? points[index - 1] : null
+              const prev = index > 0 ? placeEntries[index - 1]?.point : null
               return (
                 <li key={`${point.label}-list`}>
                   <span className="place-number">{String(index + 1).padStart(2, '0')}</span>
                   <span>
+                    {recommendation && <span className="senior-choice-label">{recommendation}</span>}
                     <strong>{point.label}</strong>
                     <small>{meta.label} · {point.area || 'Area pending'}</small>
                     {prev && (
@@ -230,6 +276,16 @@ export default function MapView({ points }) {
               )
             })}
           </ol>
+          {isSenior && points.length > 3 && (
+            <button
+              className="show-more-results"
+              type="button"
+              aria-expanded={showAllPlaces}
+              onClick={() => setShowAllPlaces((current) => !current)}
+            >
+              {showAllPlaces ? 'Show fewer places' : `Show all ${points.length} places`}
+            </button>
+          )}
           <div className="map-disclaimer">
             <p>Route lines connect stops in itinerary order. Click markers for navigation links.</p>
           </div>

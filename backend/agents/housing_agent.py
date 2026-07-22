@@ -28,10 +28,15 @@ def run(trip_input: dict) -> dict:
     nights = max(len(trip_days(trip_input)) - 1, 1)
     prefs = (trip_input.get("preferences", {}) or {})
     pref_list = prefs.get("bites", []) if isinstance(prefs, dict) else list(prefs)
+    raw_nightly_cap = trip_input.get("_budget_caps", {}).get("housing")
+    try:
+        nightly_cap = max(float(raw_nightly_cap), 0) if raw_nightly_cap is not None else None
+    except (TypeError, ValueError):
+        nightly_cap = None
     raw_options = resolve_hotels(
         trip_input["location"],
         trip_input["dates"],
-        max_price_per_night=None,
+        max_price_per_night=nightly_cap,
         min_rating=None,
         preferences=pref_list,
         budget=trip_input.get("budget", {}),

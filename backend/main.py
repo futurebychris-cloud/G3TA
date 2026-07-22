@@ -75,6 +75,9 @@ class Preferences(BaseModel):
     bites: list[str] = Field(default_factory=list)
     transportation_type: list[str] = Field(default_factory=list)
     activity_style: list[str] = Field(default_factory=list)
+    taste: list[str] = Field(default_factory=list)
+    food_budget: float = 0
+    budget_priority: dict[str, float] = Field(default_factory=dict)
 
 
 class AccessibilityPreferences(BaseModel):
@@ -90,8 +93,12 @@ class TripInput(BaseModel):
     preferences: Preferences = Field(default_factory=Preferences)
     accessibility: AccessibilityPreferences = Field(default_factory=AccessibilityPreferences)
     time_constraints: str = ""
+    must_go_sites: list[str] = Field(default_factory=list)
+    num_people: int = Field(default=1, ge=1, le=100)
+    is_group: bool = False
 
 
+@app.get("/")
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "trip-planner", "agents": AGENT_ORDER}
@@ -393,7 +400,7 @@ def book_flight_index(req: BookFlightByIndexRequest):
 @app.post("/plan/stream")
 def plan_stream(trip: TripInput):
     """Run agents one at a time and stream progress so the UI can show a live checklist."""
-    trip_input = trip.model_dump()
+    trip_input = orchestrator.prepare_trip_input(trip.model_dump())
 
     def generate():
         outputs = {}
@@ -420,6 +427,7 @@ def plan_stream(trip: TripInput):
 
             yield _sse({"type": "agent_start", "agent": "orchestrator"})
             result = orchestrator.reconcile_and_synthesize(trip_input, outputs)
+            result["trip_id"] = trip_input["trip_id"]
             yield _sse({"type": "agent_done", "agent": "orchestrator"})
             yield _sse({"type": "complete", "result": result})
         except RuntimeError as e:
@@ -428,6 +436,5 @@ def plan_stream(trip: TripInput):
             yield _sse({"type": "error", "message": f"Unexpected error: {e}"})
 
     return StreamingResponse(generate(), media_type="text/event-stream")
-
 
 

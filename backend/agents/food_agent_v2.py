@@ -40,6 +40,7 @@ TASTE_PROFILES = {
 }
 
 _SLOTS = ["breakfast", "lunch", "dinner"]
+_SLOT_WEIGHTS = {"breakfast": 0.25, "lunch": 0.35, "dinner": 0.40}
 
 # ---- Playwright browser ----
 
@@ -200,7 +201,13 @@ def run(trip_input: dict) -> dict:
     destination = trip_input["location"]
     cuisine_tags = trip_input.get("preferences", {}).get("bites", [])
     taste_prefs = trip_input.get("preferences", {}).get("taste", [])
-    food_budget = trip_input.get("preferences", {}).get("food_budget", 0)
+    raw_daily_cap = trip_input.get("_budget_caps", {}).get("food")
+    if raw_daily_cap is None:
+        raw_daily_cap = trip_input.get("preferences", {}).get("food_budget")
+    try:
+        daily_food_cap = max(float(raw_daily_cap), 0) if raw_daily_cap is not None else None
+    except (TypeError, ValueError):
+        daily_food_cap = None
     days = trip_days(trip_input)
     trip_id = trip_input.get("trip_id", hashlib.sha256(
         f"{destination}{trip_input['dates']['start']}".encode()
@@ -223,6 +230,7 @@ def run(trip_input: dict) -> dict:
         budget=trip_input.get("budget", {}),
         preferences=trip_input.get("preferences", {}),
         time_constraints=trip_input.get("time_constraints", ""),
+        daily_budget=daily_food_cap,
     )
 
     # Merge real results with LLM options
@@ -259,6 +267,16 @@ def run(trip_input: dict) -> dict:
     matched = [o for o in enriched_options if matches_cuisine_preferences(o, cuisine_tags)] if cuisine_tags else []
     eligible = matched or enriched_options
     used_preference_fallback = bool(cuisine_tags and not matched)
+    if daily_food_cap is not None:
+        affordable = [
+            option for option in eligible
+            if float(option.get("price", 0)) <= round(
+                daily_food_cap * _SLOT_WEIGHTS.get(option.get("meal_type", "dinner"), 0.40),
+                2,
+            )
+        ]
+        if affordable:
+            eligible = affordable
 
     # ---- Step 5: LLM meal planning ----
     result = llm_reason(
@@ -272,6 +290,11 @@ def run(trip_input: dict) -> dict:
             "dates": trip_input["dates"],
             "num_days": len(days),
             "total_budget": trip_input["budget"],
+            "food_budget_per_day": daily_food_cap,
+            "hard_budget_rule": (
+                "Breakfast, lunch, and dinner combined must not exceed food_budget_per_day."
+                if daily_food_cap is not None else None
+            ),
             "selected_cuisines": cuisine_tags,
             "taste_preferences": taste_prefs,
             "all_preferences": trip_input.get("preferences", {}),
@@ -286,6 +309,11 @@ def run(trip_input: dict) -> dict:
     for slot in _SLOTS:
         if not buckets[slot]:
             buckets[slot] = eligible
+        if daily_food_cap is not None:
+            slot_cap = round(daily_food_cap * _SLOT_WEIGHTS[slot], 2)
+            affordable = [o for o in buckets[slot] if float(o.get("price", 0)) <= slot_cap]
+            if affordable:
+                buckets[slot] = affordable
 
     # Build picks from LLM result
     model_picks = {}
@@ -414,5 +442,6 @@ def run(trip_input: dict) -> dict:
         "reasoning": reasoning,
         "destination": destination,
         "verification_required": True,
+        "daily_budget_cap": daily_food_cap,
         "trip_id": trip_id,
     }
