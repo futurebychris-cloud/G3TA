@@ -2,6 +2,7 @@
 
 Endpoints:
     GET  /                 health check
+    POST /intake/parse     turn guided answers into a reviewable form draft
     POST /agents/{name}    run one specialist agent (modularity / debugging)
     POST /plan             run the full orchestration, return the final itinerary
     POST /plan/stream      same, but stream per-agent progress as Server-Sent Events
@@ -46,6 +47,7 @@ from booking.auto_book import (  # noqa: E402
     search_flights, search_trains, book_flight_by_index,
 )
 from services import hotels_provider  # noqa: E402
+from intake import parse_intake  # noqa: E402
 
 db.init_db()  # create users + confirmed_routes tables on startup
 init_shared_db()  # create shared agent data tables
@@ -98,10 +100,31 @@ class TripInput(BaseModel):
     is_group: bool = False
 
 
+class IntakeRequest(BaseModel):
+    description: str = Field(min_length=10, max_length=2500)
+
+
 @app.get("/")
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "trip-planner", "agents": AGENT_ORDER}
+
+
+@app.post("/intake/parse")
+def intake_parse(request: IntakeRequest):
+    """Extract a reviewable form draft; this endpoint never starts planning."""
+    try:
+        return parse_intake(request.description)
+    except RuntimeError:
+        raise HTTPException(
+            status_code=503,
+            detail="The guided assistant is temporarily unavailable. Your description is still safe to edit, and the normal form remains available.",
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=502,
+            detail="The trip assistant could not understand that description. Your text is still available to edit.",
+        )
 
 
 @app.post("/agents/{name}")
@@ -436,5 +459,3 @@ def plan_stream(trip: TripInput):
             yield _sse({"type": "error", "message": f"Unexpected error: {e}"})
 
     return StreamingResponse(generate(), media_type="text/event-stream")
-
-

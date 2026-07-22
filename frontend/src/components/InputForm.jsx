@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   ArrowRight,
   CalendarDays,
@@ -77,7 +77,7 @@ function PreferenceGroup({ field, values, selected, onToggle }) {
   )
 }
 
-export default function InputForm({ onSubmit }) {
+export default function InputForm({ onSubmit, intakeDraft, intakeNotice }) {
   const [showPreferences, setShowPreferences] = useState(true)
   const [form, setForm] = useState(() => ({
     origin: 'New York',
@@ -92,6 +92,32 @@ export default function InputForm({ onSubmit }) {
     must_go_sites: '',
     num_people: 1,
   }))
+
+  useEffect(() => {
+    if (!intakeDraft) return
+    setForm({
+      origin: intakeDraft.origin || '',
+      location: intakeDraft.location || '',
+      start: intakeDraft.dates?.start || '',
+      end: intakeDraft.dates?.end || '',
+      total: intakeDraft.budget?.total || '',
+      currency: intakeDraft.budget?.currency || 'USD',
+      bites: intakeDraft.preferences?.bites || [],
+      transportation_type: intakeDraft.preferences?.transportation_type || [],
+      activity_style: intakeDraft.preferences?.activity_style || [],
+      time_constraints: intakeDraft.time_constraints || '',
+      must_go_sites: (intakeDraft.must_go_sites || []).join(', '),
+      num_people: intakeDraft.num_people || 1,
+    })
+    const hasPreferences = Boolean(
+      intakeDraft.preferences?.bites?.length
+      || intakeDraft.preferences?.transportation_type?.length
+      || intakeDraft.preferences?.activity_style?.length
+      || intakeDraft.time_constraints
+      || intakeDraft.must_go_sites?.length,
+    )
+    setShowPreferences(hasPreferences)
+  }, [intakeDraft])
 
   function toggle(field, value) {
     setForm((current) => {
@@ -129,6 +155,16 @@ export default function InputForm({ onSubmit }) {
 
   return (
     <form className="planner-card" onSubmit={submit}>
+      {intakeDraft && (
+        <div className="intake-draft-banner" role="status">
+          <Sparkles size={20} aria-hidden="true" />
+          <div>
+            <strong>Your guided draft is in the normal form</strong>
+            <p>{intakeNotice?.summary || 'Review every detail below, complete anything missing, then choose Design my journey.'}</p>
+            {intakeNotice?.missing?.length > 0 && <small>Some details still need your input. Empty required fields are shown below.</small>}
+          </div>
+        </div>
+      )}
       <div className="core-fields">
         <label className="field route-field">
           <span className="field-label"><PlaneTakeoff size={15} /> Flying from</span>
