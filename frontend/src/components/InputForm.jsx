@@ -10,7 +10,9 @@ import {
   Sparkles,
   UtensilsCrossed,
   Waves,
+  Check,
 } from 'lucide-react'
+import VoiceInputButton from './accessibility/VoiceInputButton.jsx'
 
 const CUISINES = [
   'Japanese',
@@ -48,8 +50,11 @@ function PreferenceGroup({ field, values, selected, onToggle }) {
             onClick={() => onToggle(field, value)}
             aria-pressed={selected.includes(value)}
           >
-            <span className="choice-check" />
+            <span className="choice-check" aria-hidden="true">
+              {selected.includes(value) && <Check size={11} />}
+            </span>
             {value}
+            <span className="sr-only">{selected.includes(value) ? ' selected' : ' not selected'}</span>
           </button>
         ))}
       </div>
@@ -105,7 +110,7 @@ export default function InputForm({ onSubmit }) {
       <div className="core-fields">
         <label className="field route-field">
           <span className="field-label"><PlaneTakeoff size={15} /> Flying from</span>
-          <input value={form.origin} onChange={set('origin')} placeholder="Your city" required />
+          <input id="trip-origin" name="origin" autoComplete="address-level2" value={form.origin} onChange={set('origin')} placeholder="Your city" required />
           <small>Departure city</small>
         </label>
 
@@ -113,16 +118,29 @@ export default function InputForm({ onSubmit }) {
 
         <label className="field route-field destination-field">
           <span className="field-label"><MapPin size={15} /> Going to</span>
-          <input value={form.location} onChange={set('location')} placeholder="City or country" required />
+          <span className="destination-input-row">
+            <input
+              id="trip-destination"
+              name="destination"
+              autoComplete="off"
+              value={form.location}
+              onChange={set('location')}
+              placeholder="City or country"
+              required
+            />
+            <VoiceInputButton
+              onTranscript={(transcript) => setForm((current) => ({ ...current, location: transcript }))}
+            />
+          </span>
           <small>City or region</small>
         </label>
 
         <label className="field dates-field">
           <span className="field-label"><CalendarDays size={15} /> Dates</span>
           <span className="date-pair">
-            <input aria-label="Start date" type="date" value={form.start} onChange={set('start')} required />
+            <input name="start-date" aria-label="Start date" type="date" value={form.start} onChange={set('start')} required />
             <span>→</span>
-            <input aria-label="End date" type="date" value={form.end} onChange={set('end')} required />
+            <input name="end-date" aria-label="End date" type="date" value={form.end} onChange={set('end')} required />
           </span>
           <small>Arrival and departure</small>
         </label>
@@ -130,8 +148,8 @@ export default function InputForm({ onSubmit }) {
         <label className="field budget-field">
           <span className="field-label"><CircleDollarSign size={15} /> Total budget</span>
           <span className="money-input">
-            <input className="currency-input" aria-label="Currency" value={form.currency} onChange={set('currency')} maxLength={3} />
-            <input aria-label="Budget amount" type="number" min="1" value={form.total} onChange={set('total')} required />
+            <input name="currency" className="currency-input" aria-label="Currency" value={form.currency} onChange={set('currency')} maxLength={3} />
+            <input name="budget" aria-label="Budget amount" type="number" min="1" value={form.total} onChange={set('total')} required />
           </span>
           <small>For the entire trip</small>
         </label>
@@ -142,6 +160,7 @@ export default function InputForm({ onSubmit }) {
         className={showPreferences ? 'preference-toggle open' : 'preference-toggle'}
         onClick={() => setShowPreferences((open) => !open)}
         aria-expanded={showPreferences}
+        aria-controls="trip-preferences"
       >
         <span><Sparkles size={16} /> Personalize this journey</span>
         <span className="preference-summary">{form.bites.length + form.activity_style.length + form.transportation_type.length} preferences</span>
@@ -149,14 +168,14 @@ export default function InputForm({ onSubmit }) {
       </button>
 
       {showPreferences && (
-        <div className="preferences-panel">
+        <div className="preferences-panel" id="trip-preferences">
           <PreferenceGroup field="bites" values={CUISINES} selected={form.bites} onToggle={toggle} />
           <PreferenceGroup field="activity_style" values={STYLES} selected={form.activity_style} onToggle={toggle} />
           <PreferenceGroup field="transportation_type" values={TRANSPORT} selected={form.transportation_type} onToggle={toggle} />
 
           <label className="constraint-field">
             <span><Clock3 size={16} /> Anything we should work around?</span>
-            <input value={form.time_constraints} onChange={set('time_constraints')} placeholder="Flexible dates, late arrival, accessibility needs…" />
+            <input name="time-constraints" value={form.time_constraints} onChange={set('time_constraints')} placeholder="Flexible dates, late arrival, accessibility needs…" />
           </label>
         </div>
       )}

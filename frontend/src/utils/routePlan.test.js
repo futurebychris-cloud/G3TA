@@ -1,5 +1,4 @@
-import assert from 'node:assert/strict'
-import test from 'node:test'
+import { describe, expect, it } from 'vitest'
 
 import {
   buildRouteModel,
@@ -29,44 +28,48 @@ const result = {
   },
 }
 
-test('buildRouteModel maps known schedule activities and never invents unmatched stops', () => {
-  const model = buildRouteModel(result)
+describe('route planning helpers', () => {
+  it('maps known schedule activities and never invents unmatched stops', () => {
+    const model = buildRouteModel(result)
 
-  assert.deepEqual(model.days[0].stops.map((stop) => stop.label), [
-    'Demo Hotel', 'Meiji Shrine', 'Demo Hotel',
-  ])
-  assert.deepEqual(model.days[1].stops.map((stop) => stop.label), ['Demo Hotel'])
-  assert.equal(model.transportationRoute.stops.length, 2)
-  assert.equal(model.transportationRoute.title, 'Transportation overview')
-})
-
-test('routeSegments creates each consecutive leg', () => {
-  const model = buildRouteModel(result)
-  assert.equal(routeSegments(model.days[0].stops).length, 2)
-})
-
-test('uniqueMarkerStops keeps the outbound and return stop numbers visible', () => {
-  const model = buildRouteModel(result)
-  const markers = uniqueMarkerStops(model.days[0].stops)
-
-  assert.deepEqual(markers.map((marker) => marker.markerLabel), ['1/3', '2'])
-})
-
-test('projectPoints keeps all fallback markers inside the canvas', () => {
-  const points = projectPoints(result.map_points, 800, 420, 56)
-  points.forEach((point) => {
-    assert.ok(point.x >= 56 && point.x <= 744)
-    assert.ok(point.y >= 56 && point.y <= 364)
+    expect(model.days[0].stops.map((stop) => stop.label)).toEqual([
+      'Demo Hotel', 'Meiji Shrine', 'Demo Hotel',
+    ])
+    expect(model.days[1].stops.map((stop) => stop.label)).toEqual(['Demo Hotel'])
+    expect(model.transportationRoute.stops).toHaveLength(2)
+    expect(model.transportationRoute.title).toBe('Transportation overview')
   })
-})
 
-test('projectPoints centers a route that only has one known stop', () => {
-  const [point] = projectPoints([{ label: 'Hotel', lat: 35.7, lng: 139.7 }], 800, 420, 56)
-  assert.equal(point.x, 400)
-  assert.equal(point.y, 210)
-})
+  it('creates each consecutive route leg', () => {
+    const model = buildRouteModel(result)
+    expect(routeSegments(model.days[0].stops)).toHaveLength(2)
+  })
 
-test('formatDistance uses readable units', () => {
-  assert.equal(formatDistance(850), '850 m')
-  assert.equal(formatDistance(1250), '1.3 km')
+  it('keeps the outbound and return stop numbers visible', () => {
+    const model = buildRouteModel(result)
+    const markers = uniqueMarkerStops(model.days[0].stops)
+
+    expect(markers.map((marker) => marker.markerLabel)).toEqual(['1/3', '2'])
+  })
+
+  it('keeps all fallback markers inside the canvas', () => {
+    const points = projectPoints(result.map_points, 800, 420, 56)
+    points.forEach((point) => {
+      expect(point.x).toBeGreaterThanOrEqual(56)
+      expect(point.x).toBeLessThanOrEqual(744)
+      expect(point.y).toBeGreaterThanOrEqual(56)
+      expect(point.y).toBeLessThanOrEqual(364)
+    })
+  })
+
+  it('centers a route that only has one known stop', () => {
+    const [point] = projectPoints([{ label: 'Hotel', lat: 35.7, lng: 139.7 }], 800, 420, 56)
+    expect(point.x).toBe(400)
+    expect(point.y).toBe(210)
+  })
+
+  it('formats distance with readable units', () => {
+    expect(formatDistance(850)).toBe('850 m')
+    expect(formatDistance(1250)).toBe('1.3 km')
+  })
 })

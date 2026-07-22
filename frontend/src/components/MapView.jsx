@@ -1,4 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { MapPin } from 'lucide-react'
+import { useAccessibilitySettings } from '../accessibility/AccessibilityContext.jsx'
+import ReadAloudButton from './accessibility/ReadAloudButton.jsx'
 
 import { hasAmapCredentials, loadAmap, searchAmapSegment } from '../lib/amap.js'
 import {
@@ -33,6 +36,40 @@ const ROLE_LABEL = {
   return: 'Return to hotel',
 }
 
+const TYPE_LABEL = {
+  housing: 'Stay',
+  activity: 'Experience',
+  transport: 'Transit',
+}
+
+function seniorRecommendations(points, agentOutputs) {
+  if (!points?.length) return []
+  const choices = []
+  const add = (point, recommendation) => {
+    if (point && !choices.some(({ point: current }) => current === point)) choices.push({ point, recommendation })
+  }
+  const hotelPoint = points.find(({ type }) => type === 'housing')
+  add(hotelPoint || points[0], 'Top Recommendation')
+
+  const activities = agentOutputs?.activity?.recommended || []
+  const findActivityPoint = (activity) => points.find((point) => point.label === activity?.name)
+  const byValue = [...activities].sort((a, b) => Number(a.price ?? Infinity) - Number(b.price ?? Infinity))
+  add(findActivityPoint(byValue[0]), 'Best Value')
+
+  if (hotelPoint) {
+    const closest = points
+      .filter(({ type }) => type === 'activity')
+      .map((point) => ({ point, distance: Math.hypot(point.lat - hotelPoint.lat, point.lng - hotelPoint.lng) }))
+      .sort((a, b) => a.distance - b.distance)
+      .find(({ point }) => !choices.some(({ point: current }) => current === point))
+    add(closest?.point, 'Closest')
+  }
+  points.forEach((point) => {
+    if (choices.length < 3) add(point, 'Recommended')
+  })
+  return choices
+}
+
 function StaticRoutePreview({ route }) {
   const width = 800
   const height = 580
@@ -41,7 +78,13 @@ function StaticRoutePreview({ route }) {
   const path = projectedPath.map((point) => `${point.x},${point.y}`).join(' ')
 
   if (!projectedPath.length) {
-    return <div className="route-empty">No coordinates are available for this route yet.</div>
+    return (
+      <div className="empty-state route-empty">
+        <MapPin size={28} />
+        <h3>No map points yet</h3>
+        <p>Locations will appear here when they are available.</p>
+      </div>
+    )
   }
 
   return (
@@ -107,12 +150,24 @@ function TransportationSummary({ result, transportation }) {
   )
 }
 
-export default function MapView({ points = EMPTY_POINTS, result = null }) {
+export default function MapView({ points = EMPTY_POINTS, result = null, agentOutputs = null }) {
+  const { settings } = useAccessibilitySettings()
+  const [showAll, setShowAll] = useState(false)
+  const isSenior = settings.preset === 'senior'
   const routeInput = useMemo(
     () => ({ ...(result || {}), map_points: points?.length ? points : (result?.map_points || []) }),
     [points, result],
   )
   const model = useMemo(() => buildRouteModel(routeInput), [routeInput])
+  const localPoints = routeInput.map_points || EMPTY_POINTS
+  const effectiveAgentOutputs = agentOutputs || routeInput.agent_outputs || {}
+  const seniorChoices = useMemo(
+    () => seniorRecommendations(localPoints, effectiveAgentOutputs),
+    [effectiveAgentOutputs, localPoints],
+  )
+  const listEntries = isSenior && !showAll
+    ? seniorChoices
+    : localPoints.map((point) => ({ point, recommendation: null }))
   const transportMode = model.transportationRoute.mode
   const scopes = useMemo(() => [
     ...(model.transportationRoute.stops.length >= 2
@@ -301,6 +356,46 @@ export default function MapView({ points = EMPTY_POINTS, result = null }) {
         </div>
         <p>Switch between the transportation overview and each day. AMap powers live routing when the key has the required regional permissions.</p>
       </div>
+      <div className="result-heading-actions">
+        <ReadAloudButton
+          id="places-summary"
+          label="recommended places"
+          text={listEntries.flatMap(({ point, recommendation }, index) => [
+            recommendation || `Place ${index + 1}`,
+            point.label,
+            TYPE_LABEL[point.type] || point.type,
+            point.area,
+          ])}
+        />
+      </div>
+
+      {isSenior && listEntries.length > 0 && (
+        <section className="senior-place-picks" aria-labelledby="senior-place-picks-heading">
+          <h3 id="senior-place-picks-heading">Recommended places</h3>
+          <ol>
+            {listEntries.map(({ point, recommendation }, index) => (
+              <li key={`${point.label}-senior-${index}`}>
+                <span className="place-number">{String(index + 1).padStart(2, '0')}</span>
+                <span>
+                  {recommendation && <small className="senior-choice-label">{recommendation}</small>}
+                  <strong>{point.label}</strong>
+                  <small>{TYPE_LABEL[point.type] || point.type}. {point.area || 'Area pending'}</small>
+                </span>
+              </li>
+            ))}
+          </ol>
+          {localPoints.length > seniorChoices.length && (
+            <button
+              className="show-more-results"
+              type="button"
+              aria-expanded={showAll}
+              onClick={() => setShowAll((current) => !current)}
+            >
+              {showAll ? 'Show fewer places' : `Show all ${localPoints.length} places`}
+            </button>
+          )}
+        </section>
+      )}
 
       <TransportationSummary result={routeInput} transportation={model.transportation} />
 
