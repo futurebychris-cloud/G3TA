@@ -187,6 +187,8 @@ export default function App() {
   const { settings } = useAccessibilitySettings()
   const [step, setStep] = useState('input')
   const [statuses, setStatuses] = useState({})
+  const [agentEvents, setAgentEvents] = useState([])
+  const [activeTrip, setActiveTrip] = useState(null)
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
   const [tab, setTab] = useState('itinerary')
@@ -195,6 +197,8 @@ export default function App() {
   const [showAllTabs, setShowAllTabs] = useState(false)
   const accessibilityButtonRef = useRef(null)
   const requestControllerRef = useRef(null)
+  const resultTransitionTimer = useRef(null)
+  const requestVersion = useRef(0)
   const isSenior = settings.preset === 'senior'
   const visibleTabs = isSenior && !showAllTabs
     ? TABS.filter(({ id }) => ['itinerary', 'map', 'packing'].includes(id))
@@ -210,8 +214,15 @@ export default function App() {
   }, [isSenior, showAllTabs, tab])
 
   async function handleSubmit(tripInput) {
+    const requestId = ++requestVersion.current
+    if (resultTransitionTimer.current) {
+      window.clearTimeout(resultTransitionTimer.current)
+      resultTransitionTimer.current = null
+    }
     setError(null)
     setResult(null)
+    setAgentEvents([])
+    setActiveTrip(tripInput)
     setStatuses(Object.fromEntries(AGENTS.map((agent) => [agent, 'pending'])))
     setStep('progress')
     setShowAllTabs(false)
@@ -228,29 +239,54 @@ export default function App() {
           preset: settings.preset,
         },
       }, (event) => {
+        if (requestId !== requestVersion.current || controller.signal.aborted) return
         if (event.type === 'agent_start') {
           setStatuses((current) => ({ ...current, [event.agent]: 'running' }))
+          setAgentEvents((current) => [...current, { agent: event.agent, type: 'start' }])
         } else if (event.type === 'agent_done') {
           setStatuses((current) => ({ ...current, [event.agent]: 'done' }))
+          setAgentEvents((current) => [
+            ...current,
+            { agent: event.agent, type: 'done', output: event.output || null },
+          ])
         } else if (event.type === 'complete') {
           setResult(event.result)
-          setTab('itinerary')
-          setStep('result')
+          if (resultTransitionTimer.current) {
+            window.clearTimeout(resultTransitionTimer.current)
+          }
+          resultTransitionTimer.current = window.setTimeout(() => {
+            if (requestId !== requestVersion.current) {
+              resultTransitionTimer.current = null
+              return
+            }
+            setTab('itinerary')
+            setStep('result')
+            resultTransitionTimer.current = null
+          }, 800)
         } else if (event.type === 'error') {
           setError(event.message)
         }
       }, { signal: controller.signal })
     } catch (requestError) {
-      if (requestError.name !== 'AbortError') setError(requestError.message)
+      if (requestId !== requestVersion.current || requestError.name === 'AbortError') return
+      setError(requestError.message)
     } finally {
       if (requestControllerRef.current === controller) requestControllerRef.current = null
     }
   }
 
   function completeReset() {
+    requestVersion.current += 1
     requestControllerRef.current?.abort()
     requestControllerRef.current = null
+    if (resultTransitionTimer.current) {
+      window.clearTimeout(resultTransitionTimer.current)
+      resultTransitionTimer.current = null
+    }
     setStep('input')
+    setStatuses({})
+    setAgentEvents([])
+    setActiveTrip(null)
     setResult(null)
     setError(null)
     setTab('itinerary')
@@ -311,7 +347,14 @@ export default function App() {
 
       {step === 'progress' && (
         <main className="progress-page" id="main-content" tabIndex="-1">
-          <ProgressTracker agents={AGENTS} statuses={statuses} error={error} onRetry={requestReset} />
+          <ProgressTracker
+            agents={AGENTS}
+            statuses={statuses}
+            events={agentEvents}
+            trip={activeTrip}
+            error={error}
+            onRetry={requestReset}
+          />
         </main>
       )}
 
