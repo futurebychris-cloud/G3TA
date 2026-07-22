@@ -58,6 +58,36 @@ def run_single_agent(name: str, trip_input: dict) -> dict:
     return _AGENTS[name](trip_input)
 
 
+def with_budget_guidance(trip_input: dict, budget_output: dict) -> dict:
+    """Attach the budget agent's category caps without changing the API schema."""
+    return {
+        **trip_input,
+        "_budget_caps": dict(budget_output.get("daily_caps", {})),
+    }
+
+
+def prepare_trip_input(trip_input: dict) -> dict:
+    """Create the stable trip id used by every agent and persist trip metadata."""
+    import hashlib
+
+    prepared = {**trip_input}
+    trip_id = prepared.get("trip_id") or hashlib.sha256(
+        f"{prepared['location']}{prepared['dates']['start']}{prepared.get('origin', '')}".encode()
+    ).hexdigest()[:12]
+    prepared["trip_id"] = trip_id
+    init_shared_db()
+    save_trip(
+        trip_id=trip_id,
+        location=prepared["location"],
+        origin=prepared.get("origin", ""),
+        start_date=prepared["dates"]["start"],
+        end_date=prepared["dates"]["end"],
+        total_budget=float(prepared["budget"]["total"]),
+        currency=prepared["budget"].get("currency", "CNY"),
+    )
+    return prepared
+
+
 LEGACY_TOKYO_MARKERS = {
     "tokyo", "asakusa", "shibuya", "ginza", "shinjuku", "akihabara",
     "senso-ji", "nrt", "haneda", "mt. fuji", "hakone", "teamlab planets",
@@ -469,6 +499,115 @@ def _meal_detail(meal: dict) -> str:
     return f"{cuisine} {dish} in {area}".strip()
 
 
+OUTDOOR_ACTIVITY_MARKERS = {
+    "adventure", "bike", "cycling", "garden", "hike", "hiking", "nature", "outdoor",
+    "park", "trail", "walking", "waterfront",
+}
+
+
+def _activity_is_outdoor(activity: dict) -> bool:
+    values = [activity.get("name", ""), activity.get("style", activity.get("type", "")),
+              *(activity.get("tags") or [])]
+    content = " ".join(str(value) for value in values).casefold()
+    return any(marker in content for marker in OUTDOOR_ACTIVITY_MARKERS)
+
+
+def _weather_score(day: dict) -> tuple:
+    """Lower values indicate a safer day for an outdoor activity."""
+    condition = str(day.get("condition", "")).casefold()
+    severity = 1 if any(
+        marker in condition for marker in ("thunder", "hail", "heavy", "freezing")
+    ) else 0
+    return (
+        severity,
+        float(day.get("rain_chance") or 0),
+        float(day.get("precipitation_mm") or 0),
+        float(day.get("snowfall_cm") or 0),
+        float(day.get("wind_speed_max_kmh") or 0),
+        day.get("date", ""),
+    )
+
+
+def _weather_activity_assignment(days: list[str], activities: list[dict], weather: list[dict]) -> dict:
+    """Place outdoor activities on the clearest available dates."""
+    activities = activities[:len(days)]
+    weather_by_date = {day.get("date"): day for day in weather}
+    ranked_days = sorted(
+        days,
+        key=lambda value: _weather_score(weather_by_date.get(value, {"date": value})),
+    )
+    outdoor = [activity for activity in activities if _activity_is_outdoor(activity)]
+    indoor = [activity for activity in activities if not _activity_is_outdoor(activity)]
+
+    assignment = {}
+    for activity, activity_date in zip(outdoor, ranked_days):
+        assignment[activity_date] = activity
+    remaining_days = [value for value in days if value not in assignment]
+    for activity, activity_date in zip(indoor, remaining_days):
+        assignment[activity_date] = activity
+    return assignment
+
+
+def _weather_detail(day: dict | None) -> str:
+    if not day:
+        return ""
+    try:
+        rain = f"{round(float(day.get('rain_chance', 0)) * 100):.0f}% rain"
+        temperatures = f"{float(day['low_c']):.0f}–{float(day['high_c']):.0f}°C"
+    except (KeyError, TypeError, ValueError):
+        return ""
+    label = "seasonal estimate" if day.get("source") == "deepseek_seasonal_estimate" else "forecast"
+    return f"Weather ({label}): {day.get('condition', 'conditions vary')}, {temperatures}, {rain}."
+
+
+def _apply_weather_activity_order(synth: dict, trip_input: dict, outputs: dict) -> None:
+    """Enforce weather-aware activity placement for LLM and fallback schedules."""
+    days = trip_days(trip_input)
+    activities = outputs.get("activity", {}).get("recommended", [])
+    weather = outputs.get("planning", {}).get("daily_weather", [])
+    assignment = _weather_activity_assignment(days, activities, weather)
+    activity_records = {
+        activity["name"].strip().casefold(): activity
+        for activity in activities
+        if activity.get("name")
+    }
+    weather_by_date = {day.get("date"): day for day in weather}
+
+    existing_items = {}
+    slots = {}
+    for day in synth.get("schedule", []):
+        retained = []
+        for item in day.get("items", []):
+            if item.get("type") == "activity":
+                existing_items[str(item.get("title", "")).strip().casefold()] = item
+                slots.setdefault(day.get("date"), len(retained))
+            else:
+                retained.append(item)
+        day["items"] = retained
+
+    for day in synth.get("schedule", []):
+        activity = assignment.get(day.get("date"))
+        if not activity:
+            continue
+        key = activity["name"].strip().casefold()
+        item = dict(existing_items.get(key) or {
+            "time": activity.get("start_time", "10:30"),
+            "type": "activity",
+            "title": activity["name"],
+            "detail": (
+                f"{activity.get('style', activity.get('type', 'activity'))} · "
+                f"{activity.get('duration', '')} · "
+                f"{activity.get('area', activity.get('location', ''))}"
+            ).strip(" ·"),
+        })
+        item["title"] = activity_records[key]["name"]
+        weather_note = _weather_detail(weather_by_date.get(day.get("date")))
+        if weather_note and "Weather (" not in str(item.get("detail", "")):
+            item["detail"] = f"{str(item.get('detail', '')).strip()} {weather_note}".strip()
+        slot = min(slots.get(day.get("date"), len(day["items"])), len(day["items"]))
+        day["items"].insert(slot, item)
+
+
 def _fallback_schedule(trip_input: dict, outputs: dict) -> dict:
     days = trip_days(trip_input)
     activities = outputs["activity"]["recommended"]
@@ -602,6 +741,8 @@ def reconcile_and_synthesize(trip_input: dict, outputs: dict) -> dict:
     if synth is None:
         synth = _fallback_schedule(trip_input, outputs)
 
+    _apply_weather_activity_order(synth, trip_input, outputs)
+
     return {
         "destination": trip_input["location"],
         "dates": trip_input["dates"],
@@ -611,45 +752,34 @@ def reconcile_and_synthesize(trip_input: dict, outputs: dict) -> dict:
         "map_points": _map_points(outputs, trip_input["location"]),
         "packing_list": outputs["planning"]["packing_list"],
         "weather_summary": outputs["planning"]["weather_summary"],
+        "weather_source": outputs["planning"].get("weather_source", "unknown"),
+        "weather_location": outputs["planning"].get("weather_location"),
         "reasoning_log": reasoning_log,
         "agent_outputs": outputs,
         "transport_scrape_status": outputs.get("transportation", {}).get("scrape_status", "ok"),
         "transport_errors": outputs.get("transportation", {}).get("errors", []),
         "verification_notice": (
-            "All prices are sourced from real-time Playwright scraping of "
-            "Ctrip (携程) and other booking platforms. Verify before booking."
+            "Live provider data is used when available. Clearly labeled estimates and "
+            "fallbacks may be included when a provider is unavailable; verify every price, "
+            "schedule, availability, and reservation before purchase."
         ),
     }
 
 
 def plan(trip_input: dict) -> dict:
-    """Run independent specialist agents concurrently, then synthesize."""
-    # Initialize shared database and save trip metadata
-    init_shared_db()
-    import hashlib
-    trip_id = hashlib.sha256(
-        f"{trip_input['location']}{trip_input['dates']['start']}{trip_input.get('origin','')}".encode()
-    ).hexdigest()[:12]
-    save_trip(
-        trip_id=trip_id,
-        location=trip_input["location"],
-        origin=trip_input.get("origin", ""),
-        start_date=trip_input["dates"]["start"],
-        end_date=trip_input["dates"]["end"],
-        total_budget=float(trip_input["budget"]["total"]),
-        currency=trip_input["budget"].get("currency", "CNY"),
-    )
-    # Inject trip_id into the input so all agents can use it
-    trip_input["trip_id"] = trip_id
-
-    outputs = {}
-    with ThreadPoolExecutor(max_workers=len(_AGENTS)) as executor:
+    """Run budget first, then guide the five recommendation agents concurrently."""
+    prepared_input = prepare_trip_input(trip_input)
+    trip_id = prepared_input["trip_id"]
+    outputs = {"budget": run_single_agent("budget", prepared_input)}
+    guided_input = with_budget_guidance(prepared_input, outputs["budget"])
+    remaining_agents = [name for name in _AGENTS if name != "budget"]
+    with ThreadPoolExecutor(max_workers=len(remaining_agents)) as executor:
         futures = {
-            executor.submit(run_single_agent, name, trip_input): name
-            for name in _AGENTS
+            executor.submit(run_single_agent, name, guided_input): name
+            for name in remaining_agents
         }
         for future in as_completed(futures):
             outputs[futures[future]] = future.result()
-    result = reconcile_and_synthesize(trip_input, outputs)
+    result = reconcile_and_synthesize(prepared_input, outputs)
     result["trip_id"] = trip_id
     return result

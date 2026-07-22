@@ -401,7 +401,7 @@ export default function BookingPanel({ trip }) {
               {confirmResult.status === 'pending_payment' && (
                 <>
                   <p className="ok">{confirmResult.message}</p>
-                  <p>Order no: <strong>{confirmResult.order_no}</strong></p>
+                  {confirmResult.order_no && <p>Order no: <strong>{confirmResult.order_no}</strong></p>}
                   <p className="muted">Pay in your own {payment === 'wechat' ? 'WeChat' : 'Alipay'} app, then:</p>
                   <button className="paid-btn" onClick={handleMarkPaid}>标记已支付 (Mark as paid)</button>
                 </>

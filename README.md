@@ -2,8 +2,8 @@
 
 > NYU Shanghai AI Pre-College final project — a **base plate** for the team build.
 > Six specialist AI agents + an orchestrator turn a single trip request into a
-> complete, auditable itinerary. Open-Meteo supplies live weather forecasts; DeepSeek
-> generates the remaining destination-specific planning estimates, explicitly marked for verification.
+> complete, auditable itinerary. The v2 pipeline prefers live provider data and browser
+> research, then uses clearly labeled estimates when a source is unavailable.
 
 **LLM:** DeepSeek (`deepseek-chat`, OpenAI-compatible endpoint).
 
@@ -18,11 +18,11 @@ outputs into one day-by-day itinerary:
 
 | Agent | Owns | Current data source |
 |---|---|---|
-| Budget | per-category daily caps, overspend warnings | DeepSeek destination estimate |
-| Transportation | route recommendation within budget | DeepSeek route estimate |
-| Housing | lodging recommendation | DeepSeek destination estimate |
-| Food | day-by-day meals matching cuisine prefs | DeepSeek destination estimate |
-| Activity | distinct activities matching style prefs | DeepSeek destination estimate |
+| Budget | per-category caps and overspend warnings | Cost index + browser research + DeepSeek reasoning |
+| Transportation | intercity route and local mobility | Ctrip, 12306, Gaode/OSRM; labeled estimate fallback |
+| Housing | real-priced lodging recommendation | Hotel APIs, Ctrip, then OpenStreetMap discovery |
+| Food | day-by-day meals matching cuisine and caps | Google Maps research + normalized destination options |
+| Activity | distinct activities and must-see choices | Ctrip/web research + verified-name attraction catalog |
 | Planning | packing list, daily weather, pacing | Open-Meteo forecast + labeled seasonal fallback |
 
 The demo-able insight (PRD §13): when the combined plan **breaks the budget**, the
@@ -80,10 +80,10 @@ This feature set improves accessibility but is not a claim of complete WCAG conf
 screen-reader, browser zoom, voice permission, and operating-system voice behavior should still be
 reviewed manually in supported browsers.
 
-> **Accuracy note:** Open-Meteo forecasts are live model data, but DeepSeek does not provide live inventory. Prices, schedules,
-> availability, opening hours, coordinates, and named venues must be verified before
-> booking. Each generated record and final itinerary carries this warning. Connect real
-> provider APIs under `backend/services/` when keys become available.
+> **Accuracy note:** Live sources can fail, change, or block automated access. DeepSeek
+> does not provide live inventory. Verify every price, schedule, availability claim,
+> opening hour, coordinate, and reservation with the provider before purchase. Flight,
+> train, and restaurant selections are never labeled confirmed without provider proof.
 
 > **Scope note:** This is a one-shot orchestrator/worker pipeline, **not** an
 > AI-Town-style persistent simulation. See PRD §14 for the gap analysis and the
@@ -101,7 +101,8 @@ reviewed manually in supported browsers.
 ├── backend/
 │   ├── main.py               FastAPI app: /plan, /plan/stream, /agents/{name}
 │   ├── orchestrator.py       runs 6 agents, reconciles budget, synthesizes itinerary
-│   ├── agents/               the six specialist agents (each: input → service → DeepSeek → output)
+│   ├── agents/               six v2 specialists with the stable v1 safety contracts
+│   ├── booking/              hotel search, provider automation, and SQLite audit stores
 │   ├── services/             ← THE SWAP POINT for real APIs (see below)
 │   └── llm/deepseek_client.py single DeepSeek entry point
 └── docs/AGENT_HANDOFF.md     exact input/output contract for every agent
@@ -124,6 +125,7 @@ cp .env.example .env
 cd backend
 python3 -m venv .venv && source .venv/bin/activate    # optional but recommended
 pip install -r requirements.txt
+python -m playwright install chromium                 # browser automation
 uvicorn main:app --reload                              # http://localhost:8000
 ```
 
@@ -137,7 +139,8 @@ npm install
 npm run dev                                            # http://localhost:5173
 ```
 
-Open http://localhost:5173, enter any destination, and watch the six agents run.
+Open http://localhost:5173, enter any destination, and watch the Budget Agent establish
+caps before the other five specialists run concurrently.
 
 ### Offline sanity check (no key needed)
 
@@ -171,8 +174,7 @@ PYTHONPATH=backend backend/.venv/bin/python -m unittest discover -s backend/test
 
 ## Adding Real APIs
 
-Every external data source is wrapped under `backend/services/`. Most services use
-destination-specific DeepSeek estimates. Weather is the first live integration: it geocodes
+External sources are normalized behind stable service and agent contracts. Weather geocodes
 arbitrary destinations and requests up to 16 forecast days from Open-Meteo without an API key.
 Dates outside that window, or requests made while Open-Meteo is unavailable, retain a clearly
 labeled seasonal estimate. Replacing another service means editing that service while keeping
@@ -217,6 +219,12 @@ claiming one.
 | POST | `/agents/{name}` | run one agent (`budget`, `transportation`, `housing`, `food`, `activity`, `planning`) — handy for debugging |
 | POST | `/plan` | run the full orchestration, return the final itinerary |
 | POST | `/plan/stream` | same, streamed as Server-Sent Events so the UI shows live progress |
+| POST | `/booking/search` | stream hotel discovery and filtering results |
+| POST | `/booking/confirm` | attempt to reach Ctrip's verified payment checkpoint |
+| POST | `/booking/mark_paid` | record the user's explicit payment confirmation |
+| GET | `/booking/routes` | list the stored hotel-booking audit trail |
+| POST | `/booking/search/flights` | show flight choices before any booking action |
+| POST | `/booking/search/trains` | show train choices before any booking action |
 
 Request body for all of them is the trip input — see `docs/AGENT_HANDOFF.md`.
 
