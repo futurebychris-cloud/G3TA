@@ -21,6 +21,7 @@ SYSTEM_PROMPT = (
 )
 
 _SLOTS = ["breakfast", "lunch", "dinner"]
+_SLOT_WEIGHTS = {"breakfast": 0.25, "lunch": 0.35, "dinner": 0.40}
 
 
 def _by_slot(options: list[dict]) -> dict:
@@ -69,6 +70,11 @@ def _target_cuisine(cuisine_tags: list[str], meal_index: int) -> str | None:
 def run(trip_input: dict) -> dict:
     cuisine_tags = trip_input.get("preferences", {}).get("bites", [])
     days = trip_days(trip_input)
+    raw_daily_cap = trip_input.get("_budget_caps", {}).get("food")
+    try:
+        daily_food_cap = max(float(raw_daily_cap), 0) if raw_daily_cap is not None else None
+    except (TypeError, ValueError):
+        daily_food_cap = None
     all_options = get_food_options(
         trip_input["location"],
         cuisine_tags,
@@ -76,6 +82,7 @@ def run(trip_input: dict) -> dict:
         budget=trip_input.get("budget", {}),
         preferences=trip_input.get("preferences", {}),
         time_constraints=trip_input.get("time_constraints", ""),
+        daily_budget=daily_food_cap,
     )
 
     matched = [
@@ -94,6 +101,11 @@ def run(trip_input: dict) -> dict:
         "dates": trip_input["dates"],
         "num_days": len(days),
         "total_budget": trip_input["budget"],
+        "food_budget_per_day": daily_food_cap,
+        "hard_budget_rule": (
+            "The combined breakfast, lunch, and dinner price for each day must not exceed "
+            "food_budget_per_day."
+        ) if daily_food_cap is not None else None,
         "selected_cuisines": cuisine_tags,
         "cuisine_priority_rule": (
             "Treat the first selected cuisine as primary (roughly two thirds of meals); "
@@ -121,10 +133,21 @@ def run(trip_input: dict) -> dict:
             ] if target_cuisine and matched else []
             allowed_pool = target_pool or pool
 
+            slot_cap = (
+                round(daily_food_cap * _SLOT_WEIGHTS[slot], 2)
+                if daily_food_cap is not None else None
+            )
+            if slot_cap is not None:
+                affordable = [option for option in allowed_pool if option["price"] <= slot_cap]
+                if affordable:
+                    allowed_pool = affordable
+
             model_pick = model_picks.get((day, slot))
             if model_pick and target_pool and model_pick not in target_pool:
                 model_pick = None
             if model_pick and model_pick["id"] in used_option_ids:
+                model_pick = None
+            if model_pick and slot_cap is not None and model_pick["price"] > slot_cap:
                 model_pick = None
             unused_pool = [option for option in allowed_pool if option["id"] not in used_option_ids]
             selection_pool = unused_pool or allowed_pool
@@ -158,7 +181,8 @@ def run(trip_input: dict) -> dict:
                 f"DeepSeek planned meals within the selected cuisine preferences "
                 f"({', '.join(chosen_cuisines)}). The validated meal estimate is "
                 f"{total:.0f} {trip_input['budget'].get('currency', 'USD')} across {len(days)} day(s), "
-                f"with {len(used_option_ids)} distinct dining choices."
+                f"with {len(used_option_ids)} distinct dining choices"
+                f"{' and the daily food cap enforced' if daily_food_cap is not None else ''}."
             )
         else:
             reasoning = (
@@ -173,4 +197,5 @@ def run(trip_input: dict) -> dict:
         "reasoning": reasoning,
         "destination": trip_input["location"],
         "verification_required": True,
+        "daily_budget_cap": daily_food_cap,
     }

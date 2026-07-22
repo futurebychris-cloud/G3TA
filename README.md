@@ -12,7 +12,8 @@
 ## What it does
 
 You enter a destination, dates, budget, and preferences. Six agents each own one
-domain and run concurrently, then an **Orchestrator** merges their
+domain. The Budget Agent runs first so its category caps guide the other five
+agents, which then run concurrently; an **Orchestrator** merges their
 outputs into one day-by-day itinerary:
 
 | Agent | Owns | Current data source |
