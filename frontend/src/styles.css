@@ -24,7 +24,7 @@
 
 * { box-sizing: border-box; }
 
-html { scroll-behavior: smooth; }
+html { min-width: 320px; scroll-behavior: smooth; }
 
 body {
   margin: 0;
@@ -35,7 +35,10 @@ body {
     var(--paper);
   color: var(--ink);
   -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
 }
+
+#root { width: 100%; min-width: 0; }
 
 button, input { font: inherit; }
 button { color: inherit; }
@@ -614,6 +617,72 @@ button { -webkit-tap-highlight-color: transparent; }
 .place-index small { color: var(--muted); font-size: .62rem; }
 .map-disclaimer { margin: 22px 0 0; color: var(--muted); font-size: .64rem; line-height: 1.55; }
 
+/* AMap route explorer */
+.route-explorer { min-width: 0; display: flex; flex-direction: column; gap: 18px; }
+.transport-card {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(280px, 1.3fr);
+  gap: 1rem 1.4rem;
+  align-items: center;
+  padding: 22px 24px;
+  background: linear-gradient(135deg, rgba(128,202,255,.2), rgba(206,242,111,.14));
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.transport-eyebrow { color: var(--coral-deep); font-size: 0.62rem; font-weight: 850; letter-spacing: 0.1em; text-transform: uppercase; }
+.transport-card h3 { margin: 0.25rem 0; font-size: 1.15rem; }
+.transport-card p { margin: 0; color: var(--muted); }
+.transport-card > *, .route-toolbar > *, .route-layout > * { min-width: 0; }
+.transport-facts { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 0.45rem; }
+.transport-facts span { background: rgba(255,254,250,.82); border: 1px solid var(--line); border-radius: 999px; padding: 0.4rem 0.7rem; font-size: 0.72rem; }
+.transport-note { grid-column: 1 / -1; padding-top: 0.65rem; border-top: 1px solid var(--line); font-size: 0.72rem; }
+
+.route-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 0.8rem; flex-wrap: wrap; }
+.route-scope-tabs, .route-mode-tabs { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+.route-control { background: var(--paper); border: 1px solid var(--line); color: var(--muted); padding: 0.48rem 0.78rem; border-radius: 999px; cursor: pointer; font-size: 0.7rem; font-weight: 750; }
+.route-control:hover:not(:disabled) { border-color: var(--coral); color: var(--ink); }
+.route-control.active { background: var(--ink); color: white; border-color: var(--ink); }
+.route-control:disabled { cursor: not-allowed; opacity: 0.45; }
+
+.route-layout { align-items: stretch; }
+.map-canvas.route-stage { position: relative; min-height: 580px; background: #0d2942; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.amap-canvas, .route-preview-svg { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
+.amap-canvas.hidden { visibility: hidden; }
+.route-preview-bg { fill: #0d2942; }
+.route-grid-line { stroke: rgba(255,255,255,.18); stroke-width: 1; opacity: 0.55; }
+.route-preview-line { fill: none; stroke: var(--violet); stroke-width: 6; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 14 10; }
+.route-preview-marker { stroke: var(--white); stroke-width: 3; fill: var(--muted); }
+.route-preview-marker--housing { fill: var(--coral); }
+.route-preview-marker--activity { fill: var(--lime); }
+.route-preview-marker--transport { fill: var(--sky); }
+.route-preview-number { fill: white; font-size: 14px; font-weight: 700; }
+.route-empty { position: absolute; inset: 0; display: grid; place-items: center; color: rgba(255,255,255,.65); padding: 2rem; text-align: center; }
+.route-loading { position: absolute; inset: 0; z-index: 3; display: grid; place-items: center; background: rgba(13,41,66,.78); color: white; }
+.route-map-state { position: absolute; left: 0.8rem; top: 0.8rem; z-index: 4; padding: 0.35rem 0.68rem; border-radius: 999px; background: rgba(10,32,52,.9); border: 1px solid rgba(255,255,255,.22); font-size: 0.65rem; font-weight: 750; }
+.route-map-state--ready { color: var(--lime); }
+.route-map-state--preview { color: var(--sand); }
+
+.amap-route-marker { display: grid; place-items: center; width: 30px; height: 30px; border: 3px solid white; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); background: #64748b; color: white; font-size: 12px; font-weight: 700; box-shadow: 0 4px 12px rgba(0,0,0,0.35); }
+.amap-route-marker > span { transform: rotate(45deg); }
+.amap-route-marker--housing { background: var(--coral); }
+.amap-route-marker--activity { background: #78a925; }
+.amap-route-marker--transport { background: #328cc1; }
+
+.route-sidebar { min-width: 0; }
+.route-sidebar-head h3 { margin: 0.25rem 0; font-size: 1.05rem; }
+.route-sidebar-head p { margin: 0; color: var(--muted); font-size: 0.82rem; }
+.route-metrics { display: flex; gap: 0.45rem; margin: 0.8rem 0; }
+.route-metrics span { padding: 0.32rem 0.58rem; border-radius: 999px; background: rgba(128,202,255,.2); color: var(--ink); font-size: 0.68rem; }
+.route-stops { list-style: none; padding: 0; margin: 1rem 0; display: flex; flex-direction: column; }
+.route-stops li { display: grid; grid-template-columns: 32px 1fr; gap: 9px; min-height: 54px; }
+.route-stops strong, .route-stops small { display: block; }
+.route-stops strong { font-size: 0.86rem; line-height: 1.25; }
+.route-stops small { color: var(--muted); font-size: 0.72rem; margin-top: 0.15rem; }
+.route-data-note { margin: 0.8rem 0 0; padding-top: 0.8rem; border-top: 1px solid var(--line); color: var(--muted); font-size: 0.68rem; line-height: 1.5; }
+.route-status { padding: 0.8rem 0.95rem; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); }
+.route-status p { margin: 0; color: var(--muted); font-size: 0.76rem; line-height: 1.45; }
+.route-status p + p { margin-top: 0.2rem; color: var(--ink); }
+
 /* Budget */
 .budget-overview { display: grid; grid-template-columns: .8fr 1.2fr; gap: 28px; }
 .budget-ring-card, .budget-breakdown, .daily-caps-card, .budget-note-card { border: 1px solid var(--line); border-radius: var(--radius); }
@@ -822,6 +891,13 @@ button { -webkit-tap-highlight-color: transparent; }
   .map-canvas { min-height: 470px; }
   .map-point-label { display: none; }
   .place-index { margin-top: 18px; }
+  .transport-card { grid-template-columns: 1fr; }
+  .transport-facts { justify-content: flex-start; }
+  .transport-note { grid-column: auto; }
+  .route-toolbar { align-items: flex-start; }
+  .route-scope-tabs, .route-mode-tabs { width: 100%; }
+  .route-control { flex: 1 1 auto; }
+  .map-canvas.route-stage { min-height: 470px; }
   .budget-overview, .budget-detail-grid, .travel-advisories { grid-template-columns: 1fr; }
   .budget-ring-card { min-height: 350px; }
   .budget-ring { width: 220px; height: 220px; }

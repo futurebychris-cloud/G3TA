@@ -363,7 +363,7 @@ export default function App() {
             tabIndex="0"
           >
             {tab === 'itinerary' && <ItineraryView result={result} />}
-            {tab === 'map' && <MapView points={result.map_points} agentOutputs={result.agent_outputs} />}
+            {tab === 'map' && <MapView points={result.map_points} result={result} />}
             {tab === 'budget' && <BudgetView cost={result.cost} budgetAgent={result.agent_outputs.budget} />}
             {tab === 'packing' && (
               <PackingList

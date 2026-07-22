@@ -3,16 +3,37 @@
 This is not live inventory. Replace this implementation with a flight/rail API
 later while preserving the returned shape.
 """
-from ._ai import ESTIMATE_NOTE, estimated_record, generate_json, integer, number, text
+from ._ai import ESTIMATE_NOTE, coordinates, estimated_record, generate_json, integer, number, text
 
 SYSTEM_PROMPT = (
     "You generate transportation candidates for a trip planner. Use ONLY the requested origin, "
     "destination, dates, currency, and transport preferences. Never substitute another city or "
     "country. Produce plausible route estimates, not claims of live schedules or availability. "
-    "Return ONLY JSON: {options: [{carrier, mode, price, duration, departure_time, "
-    "arrival_airport, stops}], reasoning}. Return 3 varied options. Prices are round-trip estimates "
-    "in the requested currency. If rail/car is geographically unrealistic, omit it."
+    "Return ONLY JSON: {options: [{origin, destination, carrier, mode, price, duration, departure_time, "
+    "departure_airport, departure_lat, departure_lng, arrival_airport, arrival_lat, arrival_lng, "
+    "coordinate_system, stops}], reasoning}. The origin and destination strings in every option must "
+    "exactly repeat the requested values. Return 3 varied options. Coordinates should identify the "
+    "actual station, airport, or terminal used by that option and must use the GCJ-02 / AMap coordinate "
+    "system so they can be passed directly to AMap JS API. They remain estimates requiring verification. "
+    "Prices are round-trip estimates in the requested currency. If rail/car is geographically "
+    "unrealistic, omit it."
 )
+
+
+def _route_coordinates(raw: dict, prefix: str) -> tuple[float | None, float | None]:
+    """Validate an optional origin/destination coordinate pair from the AI response."""
+    if isinstance(raw.get(f"{prefix}_lat"), bool) or isinstance(raw.get(f"{prefix}_lng"), bool):
+        return None, None
+    return coordinates({"lat": raw.get(f"{prefix}_lat"), "lng": raw.get(f"{prefix}_lng")})
+
+
+def _same_requested_location(value, expected: str) -> bool:
+    return text(value).casefold() == text(expected).casefold()
+
+
+def _amap_coordinate_system(value) -> bool:
+    normalized = text(value).casefold().replace("_", "-").replace(" ", "")
+    return normalized in {"gcj-02", "gcj02", "amap", "amap-compatible"}
 
 
 def _fallback(origin: str, destination: str, transport_types: list[str]) -> list[dict]:
@@ -52,20 +73,38 @@ def get_flight_options(
         "truthfulness_requirement": ESTIMATE_NOTE,
     }, temperature=0.35)
 
-    raw_options = (result or {}).get("options", [])
+    raw_options = result.get("options", []) if isinstance(result, dict) else []
+    if not isinstance(raw_options, list):
+        raw_options = []
     options = []
     for index, raw in enumerate(raw_options[:5], start=1):
         if not isinstance(raw, dict):
             continue
-        options.append(estimated_record({
+        if (
+            not _same_requested_location(raw.get("origin"), origin)
+            or not _same_requested_location(raw.get("destination"), destination)
+        ):
+            continue
+        option = {
             "id": f"transport_{index}",
             "carrier": text(raw.get("carrier"), f"Transport option {index}"),
             "mode": text(raw.get("mode"), transport_types[0]).lower(),
             "price": round(number(raw.get("price"), 850), 2),
             "duration": text(raw.get("duration"), "Verify duration"),
             "departure_time": text(raw.get("departure_time"), "Verify"),
+            "departure_airport": text(raw.get("departure_airport"), origin),
             "arrival_airport": text(raw.get("arrival_airport"), f"{destination} arrival point"),
             "stops": integer(raw.get("stops"), 0),
             "origin": origin,
-        }, destination))
+        }
+        if _amap_coordinate_system(raw.get("coordinate_system")):
+            departure_lat, departure_lng = _route_coordinates(raw, "departure")
+            arrival_lat, arrival_lng = _route_coordinates(raw, "arrival")
+            if departure_lat is not None:
+                option.update({"departure_lat": departure_lat, "departure_lng": departure_lng})
+            if arrival_lat is not None:
+                option.update({"arrival_lat": arrival_lat, "arrival_lng": arrival_lng})
+            if departure_lat is not None or arrival_lat is not None:
+                option["coordinate_system"] = "GCJ-02"
+        options.append(estimated_record(option, destination))
     return options if len(options) >= 2 else _fallback(origin, destination, transport_types)
