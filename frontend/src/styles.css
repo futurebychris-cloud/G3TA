@@ -546,6 +546,15 @@ button { -webkit-tap-highlight-color: transparent; }
   font-weight: 720;
   letter-spacing: -0.02em;
 }
+/* Flying from / Going to: same bordered text-field style as the constraint row. */
+.route-field > input {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px 12px;
+  background: var(--white);
+  font-size: 0.95rem;
+}
+.route-field > input:focus-visible { border-color: var(--brand-blue); }
 .field input::placeholder { color: #a1a8ab; }
 .field small { color: #9aa2a7; font-size: 0.8rem; }
 .route-arrow { width: 34px; height: 34px; display: grid; place-items: center; align-self: center; justify-self: center; color: var(--coral); background: rgba(255, 104, 71, 0.1); border-radius: 50%; }
