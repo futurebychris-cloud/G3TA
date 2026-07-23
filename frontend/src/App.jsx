@@ -75,7 +75,7 @@ function tripInputFromGuidedDraft(draft) {
 function Brand() {
   return (
     <div className="brand" aria-label="vibego home">
-      <span className="brand-mark"><Compass size={19} strokeWidth={2.2} /></span>
+      <span className="brand-mark"><Compass size={24} strokeWidth={2.2} /></span>
       <span className="brand-word">vibego</span>
       <span className="brand-divider" />
       <span className="brand-sub">Journey intelligence</span>

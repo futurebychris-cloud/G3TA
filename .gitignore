@@ -29,6 +29,9 @@ frontend/.vite/
 # not git (126MB, and the whole point is avoiding a network transfer).
 piper/voicemodelssource/
 
+# Reference-only external project (voice-input UX prototype), not part of G3TA.
+travelvoice-setup-v2/
+
 # Editor / OS
 .DS_Store
 .idea/

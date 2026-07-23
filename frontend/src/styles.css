@@ -53,7 +53,7 @@ button { -webkit-tap-highlight-color: transparent; }
 
 .site-header {
   width: min(1440px, calc(100% - 56px));
-  height: 84px;
+  height: 92px;
   margin: 0 auto;
   display: flex;
   align-items: center;
@@ -70,10 +70,10 @@ button { -webkit-tap-highlight-color: transparent; }
   cursor: pointer;
 }
 
-.brand { display: flex; align-items: center; gap: 10px; }
+.brand { display: flex; align-items: center; gap: 12px; }
 .brand-mark {
-  width: 35px;
-  height: 35px;
+  width: 44px;
+  height: 44px;
   display: grid;
   place-items: center;
   color: var(--paper);
@@ -83,10 +83,11 @@ button { -webkit-tap-highlight-color: transparent; }
 .brand-word {
   display: inline-block;
   color: #4f46e5;
-  font-size: 1.18rem;
+  font-size: 1.6rem;
   font-weight: 900;
-  line-height: 1;
-  letter-spacing: 0.055em;
+  line-height: 1.25;
+  padding-bottom: 0.05em;
+  letter-spacing: 0.045em;
   background: linear-gradient(
     115deg,
     #0284c7 0%,
@@ -111,8 +112,8 @@ button { -webkit-tap-highlight-color: transparent; }
   filter: drop-shadow(0 3px 10px rgba(126, 34, 206, 0.26));
   transform: translateY(-1px);
 }
-.brand-divider { height: 20px; width: 1px; background: var(--line); margin-left: 3px; }
-.brand-sub { color: var(--muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.11em; }
+.brand-divider { height: 26px; width: 1px; background: var(--line); margin-left: 4px; }
+.brand-sub { color: var(--muted); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.1em; }
 
 @media (forced-colors: active) {
   .brand-word {
