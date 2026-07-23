@@ -1,10 +1,34 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { vi } from 'vitest'
+import { beforeEach, vi } from 'vitest'
+import { synthesizeSpeech } from '../../api.js'
 import { ACCESSIBILITY_STORAGE_KEY, AccessibilityProvider } from '../../accessibility/AccessibilityContext.jsx'
 import { TextToSpeechProvider } from '../../hooks/useTextToSpeech.js'
 import ReadAloudButton from './ReadAloudButton.jsx'
 import VoiceInputButton from './VoiceInputButton.jsx'
+
+vi.mock('../../api.js', () => ({ synthesizeSpeech: vi.fn() }))
+
+let latestAudio
+
+function installPiperAudio() {
+  URL.createObjectURL = vi.fn(() => 'blob:piper-audio')
+  URL.revokeObjectURL = vi.fn()
+  window.Audio = class Audio {
+    constructor(src) {
+      this.src = src
+      latestAudio = this
+    }
+
+    play = vi.fn(async () => {
+      this.onplay?.()
+    })
+
+    pause = vi.fn()
+    removeAttribute = vi.fn()
+    load = vi.fn()
+  }
+}
 
 function renderSpeechButton() {
   localStorage.setItem(ACCESSIBILITY_STORAGE_KEY, JSON.stringify({ readAloud: true }))
@@ -50,33 +74,30 @@ describe('voice input', () => {
 })
 
 describe('read aloud', () => {
-  it('shows a useful message when speech synthesis is unsupported', () => {
-    delete window.speechSynthesis
-    delete window.SpeechSynthesisUtterance
+  beforeEach(() => {
+    installPiperAudio()
+    synthesizeSpeech.mockResolvedValue(new Blob([new Uint8Array(64)], { type: 'audio/wav' }))
+  })
+
+  it('shows a useful message when audio playback is unsupported', () => {
+    delete window.Audio
     renderSpeechButton()
     expect(screen.getByRole('status')).toHaveTextContent('Read aloud is unavailable')
   })
 
-  it('supports play, pause, resume, and stop through the shared controller', async () => {
+  it('uses Piper and supports play, pause, resume, and stop', async () => {
     const user = userEvent.setup()
-    const cancel = vi.fn()
-    const speak = vi.fn((utterance) => utterance.onstart?.())
-    const pause = vi.fn()
-    const resume = vi.fn()
-    window.speechSynthesis = { cancel, speak, pause, resume }
-    window.SpeechSynthesisUtterance = class SpeechSynthesisUtterance {
-      constructor(text) { this.text = text }
-    }
     renderSpeechButton()
 
     await user.click(screen.getByRole('button', { name: 'Read flight result aloud' }))
-    expect(speak).toHaveBeenCalledOnce()
-    expect(speak.mock.calls[0][0].text).toContain('John F. Kennedy International Airport (JFK)')
+    await waitFor(() => expect(synthesizeSpeech).toHaveBeenCalledOnce())
+    expect(synthesizeSpeech.mock.calls[0][0]).toContain('John F. Kennedy International Airport (JFK)')
+    expect(latestAudio.play).toHaveBeenCalledOnce()
     await user.click(screen.getByRole('button', { name: 'Pause reading flight result' }))
-    expect(pause).toHaveBeenCalledOnce()
+    expect(latestAudio.pause).toHaveBeenCalledOnce()
     await user.click(screen.getByRole('button', { name: 'Resume reading flight result' }))
-    expect(resume).toHaveBeenCalledOnce()
+    expect(latestAudio.play).toHaveBeenCalledTimes(2)
     await user.click(screen.getByRole('button', { name: 'Stop reading flight result' }))
-    expect(cancel).toHaveBeenCalled()
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:piper-audio')
   })
 })

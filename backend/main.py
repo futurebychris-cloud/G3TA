@@ -3,6 +3,7 @@
 Endpoints:
     GET  /                 health check
     POST /intake/parse     turn guided answers into a reviewable form draft
+    POST /speech/synthesize render accessible speech with local Piper
     POST /agents/{name}    run one specialist agent (modularity / debugging)
     POST /plan             run the full orchestration, return the final itinerary
     POST /plan/stream      same, but stream per-agent progress as Server-Sent Events
@@ -16,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import find_dotenv, load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 # Load .env from project root or backend dir.
@@ -47,6 +48,7 @@ from booking.auto_book import (  # noqa: E402
     search_flights, search_trains, book_flight_by_index,
 )
 from services import hotels_provider  # noqa: E402
+from services import piper_service  # noqa: E402
 from intake import parse_intake  # noqa: E402
 
 db.init_db()  # create users + confirmed_routes tables on startup
@@ -104,6 +106,12 @@ class IntakeRequest(BaseModel):
     description: str = Field(min_length=10, max_length=2500)
 
 
+class SpeechRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=12_000)
+    language: str = Field(default="en", max_length=16)
+    speed: float = Field(default=1.0, ge=0.6, le=1.5)
+
+
 @app.get("/")
 @app.get("/health")
 def health():
@@ -125,6 +133,25 @@ def intake_parse(request: IntakeRequest):
             status_code=502,
             detail="The trip assistant could not understand that description. Your text is still available to edit.",
         )
+
+
+@app.post("/speech/synthesize")
+def speech_synthesize(request: SpeechRequest):
+    """Render text with Piper; never fall back to an operating-system voice."""
+    language = "zh" if request.language.casefold().startswith("zh") else "en"
+    try:
+        audio = piper_service.synthesize_speech(
+            text=request.text,
+            language=language,
+            speed=request.speed,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return Response(
+        content=audio,
+        media_type="audio/wav",
+        headers={"Cache-Control": "private, max-age=86400"},
+    )
 
 
 @app.post("/agents/{name}")

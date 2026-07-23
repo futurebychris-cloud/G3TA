@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowLeft, ArrowRight, Check, RotateCcw, ShieldCheck, Volume2, X } from 'lucide-react'
 import { parseTripIntake } from '../../api.js'
-import { useAccessibilitySettings } from '../../accessibility/AccessibilityContext.jsx'
+import useTextToSpeech from '../../hooks/useTextToSpeech.js'
 import AccessibleDialog from './AccessibleDialog.jsx'
 import VoiceInputButton from './VoiceInputButton.jsx'
 
@@ -150,7 +150,6 @@ function answersForAssistant(answers) {
 }
 
 export default function GuidedTripAssistant({ open, onClose, onApplyDraft, returnFocusRef }) {
-  const { settings } = useAccessibilitySettings()
   const closeRef = useRef(null)
   const answerRef = useRef(null)
   const [step, setStep] = useState(0)
@@ -161,16 +160,11 @@ export default function GuidedTripAssistant({ open, onClose, onApplyDraft, retur
   const [repairMessage, setRepairMessage] = useState('')
   const [repairQuestionIds, setRepairQuestionIds] = useState([])
   const question = QUESTIONS[step]
+  const guidedSpeech = useTextToSpeech('guided-trip-assistant', '')
 
   const speakQuestion = useCallback((prefix = '') => {
-    if (typeof window === 'undefined'
-      || !('speechSynthesis' in window)
-      || typeof window.SpeechSynthesisUtterance !== 'function') return
-    window.speechSynthesis.cancel()
-    const utterance = new window.SpeechSynthesisUtterance(`${prefix}${question.prompt}`)
-    utterance.rate = settings.readingSpeed
-    window.speechSynthesis.speak(utterance)
-  }, [question.prompt, settings.readingSpeed])
+    guidedSpeech.playText(`${prefix}${question.prompt}`, { force: true })
+  }, [guidedSpeech.playText, question.prompt])
 
   useEffect(() => {
     if (!open || result || status === 'loading') return undefined
@@ -178,7 +172,9 @@ export default function GuidedTripAssistant({ open, onClose, onApplyDraft, retur
     return () => window.clearTimeout(timer)
   }, [open, repairMessage, result, speakQuestion, status, step])
 
-  useEffect(() => () => window.speechSynthesis?.cancel(), [])
+  useEffect(() => {
+    if (!open) guidedSpeech.stop()
+  }, [guidedSpeech.stop, open])
 
   function move(direction) {
     const answer = answers[question.id]?.trim() || ''
@@ -213,7 +209,7 @@ export default function GuidedTripAssistant({ open, onClose, onApplyDraft, retur
     }
     setStatus('loading')
     setError('')
-    window.speechSynthesis?.cancel()
+    guidedSpeech.stop()
     try {
       const parsed = await parseTripIntake(answersForAssistant(answers))
       if (parsed.missing.length > 0) {
@@ -231,12 +227,11 @@ export default function GuidedTripAssistant({ open, onClose, onApplyDraft, retur
       setResult(parsed)
       setRepairQuestionIds([])
       setStatus('review')
-      if (speechSupported) {
-        const reviewSpeech = new window.SpeechSynthesisUtterance(
+      if (guidedSpeech.supported) {
+        guidedSpeech.playText(
           `Your trip details are ready to review. ${parsed.summary}`,
+          { force: true },
         )
-        reviewSpeech.rate = settings.readingSpeed
-        window.speechSynthesis.speak(reviewSpeech)
       }
     } catch (requestError) {
       setError(`${requestError.message} Your answers have not been lost. Choose review again to retry.`)
@@ -274,9 +269,7 @@ export default function GuidedTripAssistant({ open, onClose, onApplyDraft, retur
   }
 
   const currentAnswer = answers[question.id] || ''
-  const speechSupported = typeof window !== 'undefined'
-    && 'speechSynthesis' in window
-    && typeof window.SpeechSynthesisUtterance === 'function'
+  const speechSupported = guidedSpeech.supported
   const repairIndex = repairQuestionIds.indexOf(question.id)
   const canGoBack = repairQuestionIds.length > 0 ? repairIndex > 0 : step > 0
   const isLastQuestion = repairQuestionIds.length > 0
@@ -319,9 +312,24 @@ export default function GuidedTripAssistant({ open, onClose, onApplyDraft, retur
               <h3 id="guided-question-label">{question.prompt}</h3>
               <p>{question.hint}</p>
               {speechSupported && (
-                <button className="replay-question" type="button" onClick={() => speakQuestion()}>
-                  <Volume2 size={17} aria-hidden="true" /> Replay question
-                </button>
+                <>
+                  <button
+                    className="replay-question"
+                    type="button"
+                    onClick={() => speakQuestion()}
+                    disabled={guidedSpeech.state === 'loading'}
+                  >
+                    <Volume2 size={17} aria-hidden="true" />
+                    {guidedSpeech.state === 'loading' ? 'Preparing voice…' : 'Replay question'}
+                  </button>
+                  <span className="sr-only" role="status" aria-live="polite">
+                    {guidedSpeech.state === 'loading'
+                      ? 'Preparing the Piper voice'
+                      : guidedSpeech.state === 'speaking'
+                        ? 'Piper is reading the question'
+                        : guidedSpeech.error}
+                  </span>
+                </>
               )}
             </section>
 
