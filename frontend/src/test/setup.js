@@ -1,32 +1,6 @@
 import '@testing-library/jest-dom/vitest'
 import { cleanup } from '@testing-library/react'
-import { afterEach, vi } from 'vitest'
-
-Object.defineProperty(window, 'scrollTo', {
-  configurable: true,
-  value: vi.fn(),
-})
-Object.defineProperty(window.HTMLMediaElement.prototype, 'play', {
-  configurable: true,
-  value: vi.fn(function play() {
-    this.onplay?.()
-    return Promise.resolve()
-  }),
-})
-Object.defineProperty(window.HTMLMediaElement.prototype, 'pause', {
-  configurable: true,
-  value: vi.fn(),
-})
-Object.defineProperty(window.HTMLMediaElement.prototype, 'load', {
-  configurable: true,
-  value: vi.fn(),
-})
-if (typeof URL.createObjectURL !== 'function') {
-  URL.createObjectURL = vi.fn(() => 'blob:test-piper-audio')
-}
-if (typeof URL.revokeObjectURL !== 'function') {
-  URL.revokeObjectURL = vi.fn()
-}
+import { afterEach } from 'vitest'
 
 const storedValues = new Map()
 const localStorageMock = {

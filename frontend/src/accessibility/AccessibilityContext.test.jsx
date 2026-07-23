@@ -19,7 +19,6 @@ function SettingsHarness() {
       <button type="button" onClick={() => setSetting('largerText', !settings.largerText)}>Toggle bigger text</button>
       <button type="button" onClick={() => setSetting('highContrast', true)}>Enable contrast</button>
       <button type="button" onClick={resetSettings}>Reset settings</button>
-      <button type="button" onClick={() => applyPreset('easyReading')}>Use Easy Reading</button>
       <button type="button" onClick={() => applyPreset('senior')}>Use Senior Mode</button>
     </div>
   )
@@ -88,26 +87,6 @@ describe('accessibility settings', () => {
     current = JSON.parse(screen.getByTestId('settings').textContent)
     expect(current.preset).toBe('senior')
     expect(current.largerText).toBe(false)
-  })
-
-  it('makes Easy Reading a clearly larger, simple-font reading preset', async () => {
-    const user = userEvent.setup()
-    render(<AccessibilityProvider><SettingsHarness /></AccessibilityProvider>)
-    await user.click(screen.getByRole('button', { name: 'Use Easy Reading' }))
-
-    expect(JSON.parse(screen.getByTestId('settings').textContent)).toMatchObject({
-      preset: 'easyReading',
-      easyReading: true,
-      largerText: true,
-      reducedMotion: true,
-      dyslexiaFont: true,
-      lineFocus: 'one',
-      readAloud: true,
-      readingSpeed: 0.95,
-    })
-    expect(document.documentElement).toHaveAttribute('data-accessibility-preset', 'easyReading')
-    expect(document.documentElement).toHaveAttribute('data-larger-text', 'true')
-    expect(document.documentElement).toHaveAttribute('data-dyslexia-font', 'true')
   })
 })
 
