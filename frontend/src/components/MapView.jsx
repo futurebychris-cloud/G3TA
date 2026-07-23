@@ -1,358 +1,645 @@
-import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
-import { BedDouble, Camera, MapPin, Navigation, PlaneLanding, UtensilsCrossed } from 'lucide-react'
-import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet'
-import L from 'leaflet'
-import 'leaflet/dist/leaflet.css'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { MapPin, Navigation, RotateCcw } from 'lucide-react'
+import { animate } from 'motion'
+import { useAccessibilitySettings } from '../accessibility/AccessibilityContext.jsx'
+import ReadAloudButton from './accessibility/ReadAloudButton.jsx'
 
-// Fix default marker icon issue with bundlers
-delete L.Icon.Default.prototype._getIconUrl
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png',
-  iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png',
-  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
-})
+import { hasAmapCredentials, loadAmap, searchAmapSegment } from '../lib/amap.js'
+import {
+  buildRouteModel,
+  formatDistance,
+  formatDuration,
+  revealRoutePaths,
+  routeSegments,
+  uniqueMarkerStops,
+} from '../utils/routePlan.js'
 
-// ---- Gaode (高德) tile URLs ----
-const GAODE_TILES = {
-  standard: {
-    url: 'https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
-    attribution: '&copy; <a href="https://www.amap.com/">高德地图</a>',
-    subdomains: ['1', '2', '3', '4'],
-    label: '高德标准',
-  },
-  satellite: {
-    url: 'https://webst0{s}.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}',
-    attribution: '&copy; <a href="https://www.amap.com/">高德地图</a>',
-    subdomains: ['1', '2', '3', '4'],
-    label: '高德卫星',
-  },
-  osm: {
-    url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-    label: 'OpenStreetMap',
-  },
+const AMAP_KEY = import.meta.env.VITE_AMAP_KEY || ''
+const AMAP_SECURITY_CODE = import.meta.env.VITE_AMAP_SECURITY_CODE || ''
+const AMAP_CONFIGURED = hasAmapCredentials(AMAP_KEY, AMAP_SECURITY_CODE)
+const EMPTY_POINTS = []
+
+const LOCAL_ROUTE_MODES = [
+  { id: 'walking', label: 'Walking' },
+  { id: 'driving', label: 'Driving' },
+]
+const TRANSPORT_ROUTE_MODES = [
+  { id: 'amap', label: 'AMap overview' },
+]
+
+const ROLE_LABEL = {
+  departure: 'Departure point',
+  arrival: 'Arrival point',
+  transfer: 'Transfer point',
+  start: 'Start from hotel',
+  visit: 'Activity stop',
+  return: 'Return to hotel',
 }
 
-// Custom colored markers per type
-function createIcon(color, iconType) {
-  const svg = iconType === 'housing'
-    ? `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>`
-    : iconType === 'transport'
-      ? `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M22 17.5H2M22 17.5L19 9H5L2 17.5M22 17.5a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0zM7 17.5a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0z"/></svg>`
-      : iconType === 'restaurant'
-        ? `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8h1a4 4 0 0 1 0 8h-1"></path><path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"></path><line x1="6" y1="1" x2="6" y2="4"></line><line x1="10" y1="1" x2="10" y2="4"></line><line x1="14" y1="1" x2="14" y2="4"></line></svg>`
-      : `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>`
-
-  return L.divIcon({
-    className: 'custom-map-marker',
-    html: `<div style="background:${color};width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 12px rgba(0,0,0,.3);border:2px solid white;">${svg}</div>`,
-    iconSize: [36, 36],
-    iconAnchor: [18, 18],
-    popupAnchor: [0, -20],
-  })
+const TYPE_LABEL = {
+  housing: 'Stay',
+  activity: 'Experience',
+  transport: 'Transit',
+  restaurant: 'Dining',
 }
 
-const TYPE_META = {
-  housing: { color: '#ff6b4a', label: 'Stay', icon: BedDouble },
-  activity: { color: '#4BC0C0', label: 'Experience', icon: Camera },
-  transport: { color: '#80caff', label: 'Transit', icon: PlaneLanding },
-  restaurant: { color: '#f5a623', label: 'Dining', icon: UtensilsCrossed },
-}
-
-function createRouteUrl(pointA, pointB) {
-  const lat1 = pointA.lat, lng1 = pointA.lng
-  const lat2 = pointB.lat, lng2 = pointB.lng
-  return `https://www.google.com/maps/dir/${lat1},${lng1}/${lat2},${lng2}`
-}
-
-// Auto-fit map bounds to show all points
-function FitBounds({ points }) {
-  const map = useMap()
-  useEffect(() => {
-    if (points.length === 0) return
-    if (points.length === 1) {
-      map.setView([points[0].lat, points[0].lng], 14)
-      return
-    }
-    const bounds = L.latLngBounds(points.map(p => [p.lat, p.lng]))
-    map.fitBounds(bounds, { padding: [50, 50], maxZoom: 15 })
-  }, [map, points])
-  return null
-}
-
-export default function MapView({ points }) {
-  const [selectedRoute, setSelectedRoute] = useState(null)
-  const [realRoutes, setRealRoutes] = useState({})  // { "0-1": [[lat,lng],...] }
-  const [routeLoading, setRouteLoading] = useState(false)
-
-  // Fetch real route path from Gaode API for a segment
-  const fetchRoute = useCallback(async (fromIdx, toIdx) => {
-    const key = `${fromIdx}-${toIdx}`
-    if (realRoutes[key]) return  // already fetched
-
-    const from = points[fromIdx]
-    const to = points[toIdx]
-    if (!from || !to) return
-
-    setRouteLoading(true)
-    try {
-      const apiBase = import.meta.env.VITE_API_BASE || 'http://localhost:8000'
-      const res = await fetch(`${apiBase}/route/path?` + new URLSearchParams({
-        origin_lat: from.lat,
-        origin_lng: from.lng,
-        dest_lat: to.lat,
-        dest_lng: to.lng,
-        mode: 'driving',
-      }))
-      if (res.ok) {
-        const data = await res.json()
-        if (data.path && data.path.length > 0) {
-          setRealRoutes(prev => ({ ...prev, [key]: data.path }))
-        }
-      }
-    } catch (e) {
-      console.warn('[MapView] route fetch failed:', e)
-    } finally {
-      setRouteLoading(false)
-    }
-  }, [points, realRoutes])
-
-  // Pre-fetch routes between consecutive points
-  useEffect(() => {
-    if (!points || points.length < 2) return
-    // Fetch routes for nearby points (within same city)
-    for (let i = 0; i < points.length - 1; i++) {
-      const a = points[i]
-      const b = points[i + 1]
-      // Only fetch if points have the same area (same city routing)
-      if (a.area && b.area && a.area === b.area) {
-        fetchRoute(i, i + 1)
-      }
-    }
-  }, [points, fetchRoute])
-
-  if (!points || points.length === 0) {
-    return (
-      <div className="places-view">
-        <div className="panel-heading">
-          <div><span className="section-index">YOUR PLACES</span><h2>Real maps, real locations.<br />Not an illustration.</h2></div>
-          <p>高德地图瓦片 · 所有坐标来自 Agent 实时数据</p>
-        </div>
-        <div className="empty-state"><MapPin size={28} /><h3>No map points yet</h3><p>Locations will appear here when they are available.</p></div>
-      </div>
-    )
+function seniorRecommendations(points, agentOutputs) {
+  if (!points?.length) return []
+  const choices = []
+  const add = (point, recommendation) => {
+    if (point && !choices.some(({ point: current }) => current === point)) choices.push({ point, recommendation })
   }
+  const hotelPoint = points.find(({ type }) => type === 'housing')
+  add(hotelPoint || points[0], 'Top Recommendation')
 
-  // Build route segments — use real Gaode paths when available, else straight lines
-  const routeSegments = useMemo(() => {
-    const segments = []
-    for (let i = 0; i < points.length - 1; i++) {
-      const key = `${i}-${i + 1}`
-      const realPath = realRoutes[key]
-      if (realPath && realPath.length >= 2) {
-        // Use real road path from Gaode
-        segments.push({
-          positions: realPath,
-          from: points[i],
-          to: points[i + 1],
-          isReal: true,
-        })
-      } else {
-        // Fallback: straight line
-        segments.push({
-          positions: [[points[i].lat, points[i].lng], [points[i + 1].lat, points[i + 1].lng]],
-          from: points[i],
-          to: points[i + 1],
-          isReal: false,
-        })
-      }
-    }
-    return segments
-  }, [points, realRoutes])
+  const activities = agentOutputs?.activity?.recommended || []
+  const findActivityPoint = (activity) => points.find((point) => point.label === activity?.name)
+  const byValue = [...activities].sort((a, b) => Number(a.price ?? Infinity) - Number(b.price ?? Infinity))
+  add(findActivityPoint(byValue[0]), 'Best Value')
 
-  const center = useMemo(() => {
-    const lats = points.map(p => p.lat)
-    const lngs = points.map(p => p.lng)
-    return [(Math.min(...lats) + Math.max(...lats)) / 2, (Math.min(...lngs) + Math.max(...lngs)) / 2]
-  }, [points])
+  if (hotelPoint) {
+    const closest = points
+      .filter(({ type }) => type === 'activity')
+      .map((point) => ({ point, distance: Math.hypot(point.lat - hotelPoint.lat, point.lng - hotelPoint.lng) }))
+      .sort((a, b) => a.distance - b.distance)
+      .find(({ point }) => !choices.some(({ point: current }) => current === point))
+    add(closest?.point, 'Closest')
+  }
+  points.forEach((point) => {
+    if (choices.length < 3) add(point, 'Recommended')
+  })
+  return choices
+}
 
-  const routeColors = ['#ff6b4a', '#4BC0C0', '#80caff', '#f5a623', '#ccf06c', '#b9a4ff', '#ffca6b']
-
-  // Count point types for legend
-  const typeCounts = useMemo(() => {
-    const counts = {}
-    points.forEach(p => { counts[p.type] = (counts[p.type] || 0) + 1 })
-    return counts
-  }, [points])
+function TransportationSummary({ result, transportation }) {
+  const recommended = transportation.recommended || {}
+  const summary = transportation.route_summary || {
+    origin: recommended.from || result.agent_outputs?.transportation?.route_summary?.origin || 'Origin',
+    destination: recommended.to || result.destination,
+    departure_airport: recommended.departure_airport,
+    arrival_airport: recommended.arrival_airport,
+    carrier: recommended.carrier,
+    departure_time: recommended.departure_time,
+    duration: recommended.duration,
+    stops: recommended.stops,
+  }
+  const currency = result.cost?.currency || 'USD'
 
   return (
-      <div className="places-view">
-        <div className="panel-heading">
-          <div>
-            <span className="section-index">YOUR PLACES</span>
-            <h2>Everything worth finding,<br />on a real map.</h2>
-          </div>
-          <p>
-            高德地图底图 · 所有坐标来自专业 Agent 实时数据
-            {Object.keys(realRoutes).length > 0 && ` · ${Object.keys(realRoutes).length} 条真实路线`}
-          </p>
+    <section className="transport-card" aria-label="Transportation Agent recommendation">
+      <div>
+        <span className="transport-eyebrow">Transportation Agent</span>
+        <h3>{summary.origin} → {summary.destination}</h3>
+        <p>
+          {summary.departure_airport || 'Origin airport'} → {summary.arrival_airport || 'Arrival airport'}
+        </p>
+      </div>
+      <div className="transport-facts">
+        <span><strong>{summary.carrier || 'Carrier'}</strong></span>
+        <span>{summary.duration || 'Duration pending'}</span>
+        <span>{summary.stops === 0 ? 'Non-stop' : `${summary.stops ?? '—'} stop(s)`}</span>
+        <span>{summary.departure_time || 'Time pending'}</span>
+        <span><strong>{currency} {recommended.price?.toLocaleString?.() ?? transportation.cost ?? '—'}</strong></span>
+      </div>
+      {transportation.coverage?.note && <p className="transport-note">{transportation.coverage.note}</p>}
+    </section>
+  )
+}
+
+function amapPlaceUrl(point) {
+  return `https://uri.amap.com/marker?position=${point.lng},${point.lat}&name=${encodeURIComponent(point.label)}&src=G3TA&callnative=0`
+}
+
+function amapRouteUrl(from, to, routeMode) {
+  const mode = routeMode === 'walking' ? 'walk' : 'car'
+  return `https://uri.amap.com/navigation?from=${from.lng},${from.lat},${encodeURIComponent(from.label)}&to=${to.lng},${to.lat},${encodeURIComponent(to.label)}&mode=${mode}&policy=1&src=G3TA&callnative=0`
+}
+
+function routeModeForScope(scope) {
+  return scope === 'transportation' ? 'amap' : 'walking'
+}
+
+function useSystemReducedMotion() {
+  const [reducedMotion, setReducedMotion] = useState(() => (
+    window.matchMedia?.('(prefers-reduced-motion: reduce)').matches || false
+  ))
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia?.('(prefers-reduced-motion: reduce)')
+    if (!mediaQuery) return undefined
+    const updatePreference = (event) => setReducedMotion(event.matches)
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', updatePreference)
+    } else {
+      mediaQuery.addListener?.(updatePreference)
+    }
+    return () => {
+      if (typeof mediaQuery.removeEventListener === 'function') {
+        mediaQuery.removeEventListener('change', updatePreference)
+      } else {
+        mediaQuery.removeListener?.(updatePreference)
+      }
+    }
+  }, [])
+
+  return reducedMotion
+}
+
+export default function MapView({ points = EMPTY_POINTS, result = null, agentOutputs = null }) {
+  const { settings } = useAccessibilitySettings()
+  const systemReducedMotion = useSystemReducedMotion()
+  const shouldReduceMotion = settings.reducedMotion || systemReducedMotion
+  const [showAll, setShowAll] = useState(false)
+  const isSenior = settings.preset === 'senior'
+  const routeInput = useMemo(
+    () => ({ ...(result || {}), map_points: points?.length ? points : (result?.map_points || []) }),
+    [points, result],
+  )
+  const model = useMemo(() => buildRouteModel(routeInput), [routeInput])
+  const localPoints = routeInput.map_points || EMPTY_POINTS
+  const effectiveAgentOutputs = agentOutputs || routeInput.agent_outputs || {}
+  const seniorChoices = useMemo(
+    () => seniorRecommendations(localPoints, effectiveAgentOutputs),
+    [effectiveAgentOutputs, localPoints],
+  )
+  const listEntries = isSenior && !showAll
+    ? seniorChoices
+    : localPoints.map((point) => ({ point, recommendation: null }))
+  const transportMode = model.transportationRoute.mode
+  const scopes = useMemo(() => [
+    ...(model.fullTripRoute.stops.length >= 2
+      ? [{ id: 'full-trip', label: 'Full trip' }]
+      : []),
+    ...(model.transportationRoute.stops.length >= 2
+      ? [{ id: 'transportation', label: transportMode.charAt(0).toUpperCase() + transportMode.slice(1) }]
+      : []),
+    ...model.days.map((day) => ({ id: day.id, label: `Day ${day.day}` })),
+  ], [model, transportMode])
+  const defaultScope = (model.fullTripRoute.stops.length >= 2 ? 'full-trip' : null)
+    || model.days.find((day) => day.stops.length >= 2)?.id
+    || (model.transportationRoute.stops.length >= 2 ? 'transportation' : null)
+    || model.days.find((day) => day.stops.length)?.id
+    || scopes[0]?.id
+    || 'transportation'
+  const initialCenter = useMemo(() => {
+    const firstStop = model.fullTripRoute.stops[0]
+      || model.days.flatMap((day) => day.stops)[0]
+      || model.transportationRoute.stops[0]
+    return firstStop ? [firstStop.lng, firstStop.lat] : [116.3974, 39.9093]
+  }, [model])
+  const [scope, setScope] = useState(defaultScope)
+  const [routeMode, setRouteMode] = useState(() => routeModeForScope(defaultScope))
+  const [mapState, setMapState] = useState(AMAP_CONFIGURED ? 'loading' : 'error')
+  const [mapMessage, setMapMessage] = useState('')
+  const [routeMessage, setRouteMessage] = useState('')
+  const [routeMetrics, setRouteMetrics] = useState(null)
+  const [routeAnimationProgress, setRouteAnimationProgress] = useState(null)
+  const containerRef = useRef(null)
+  const mapRef = useRef(null)
+  const amapRef = useRef(null)
+  const renderTokenRef = useRef(0)
+  const routeAnimationRef = useRef(null)
+  const routePlaybackRef = useRef(null)
+
+  useEffect(() => {
+    if (!scopes.some((item) => item.id === scope)) {
+      setScope(defaultScope)
+      setRouteMode(routeModeForScope(defaultScope))
+    }
+  }, [defaultScope, scope, scopes])
+
+  const activeRoute = scope === 'transportation'
+    ? model.transportationRoute
+    : scope === 'full-trip'
+      ? model.fullTripRoute
+      : model.days.find((day) => day.id === scope)
+        || (model.fullTripRoute.stops.length ? model.fullTripRoute : null)
+        || model.days[0]
+        || model.transportationRoute
+  const isTransportation = activeRoute.id === 'transportation'
+  const isFullTrip = activeRoute.id === 'full-trip'
+  const routeModes = isTransportation ? TRANSPORT_ROUTE_MODES : LOCAL_ROUTE_MODES
+
+  useEffect(() => {
+    const validModes = isTransportation ? ['amap'] : ['walking', 'driving']
+    if (!validModes.includes(routeMode)) setRouteMode(isTransportation ? 'amap' : 'walking')
+  }, [isTransportation, routeMode])
+
+  useEffect(() => {
+    let cancelled = false
+    if (!AMAP_CONFIGURED) {
+      setMapState('error')
+      setMapMessage('AMap credentials are not configured. Add the Web JS key and security code to the ignored root .env.local file, then restart the frontend.')
+      return undefined
+    }
+
+    setMapState('loading')
+    setMapMessage('Loading AMap JS API 2.0…')
+    loadAmap(AMAP_KEY, AMAP_SECURITY_CODE)
+      .then((AMap) => {
+        if (cancelled || !containerRef.current) return
+        amapRef.current = AMap
+        const map = new AMap.Map(containerRef.current, {
+          viewMode: '2D',
+          zoom: 12,
+          center: initialCenter,
+          showOversea: true,
+        })
+        map.addControl(new AMap.Scale())
+        map.addControl(new AMap.ToolBar({ position: 'RB' }))
+        mapRef.current = map
+        setMapState('ready')
+        setMapMessage(`AMap is ready for ${routeInput.destination || 'this destination'}. Overseas tiles and routes still require the matching AMap permissions.`)
+      })
+      .catch((error) => {
+        if (cancelled) return
+        setMapState('error')
+        setMapMessage(`AMap could not load (${error.message}).`)
+      })
+
+    return () => {
+      cancelled = true
+      renderTokenRef.current += 1
+      routeAnimationRef.current?.stop()
+      routeAnimationRef.current = null
+      routePlaybackRef.current = null
+      mapRef.current?.destroy()
+      mapRef.current = null
+      amapRef.current = null
+    }
+  }, [initialCenter, routeInput.destination])
+
+  useEffect(() => {
+    const AMap = amapRef.current
+    const map = mapRef.current
+    if (mapState !== 'ready' || !AMap || !map) return undefined
+
+    const token = renderTokenRef.current + 1
+    renderTokenRef.current = token
+    let cancelled = false
+    routeAnimationRef.current?.stop()
+    routeAnimationRef.current = null
+    routePlaybackRef.current = null
+    setRouteAnimationProgress(null)
+    setRouteMetrics(null)
+    setRouteMessage(isTransportation
+      ? `${transportMode} endpoints are shown as an AMap overview, not turn-by-turn navigation.`
+      : `Requesting the AMap ${routeMode} route…`)
+
+    async function drawRoute() {
+      map.clearMap()
+      const markerStops = uniqueMarkerStops(activeRoute.stops)
+      const markers = markerStops.map((stop, index) => {
+        const safeType = ['housing', 'activity', 'transport', 'restaurant'].includes(stop.type) ? stop.type : 'default'
+        return new AMap.Marker({
+          position: [stop.lng, stop.lat],
+          offset: new AMap.Pixel(-15, -30),
+          title: stop.label,
+          content: `<span class="amap-route-marker amap-route-marker--${safeType}"><span>${stop.markerLabel || index + 1}</span></span>`,
+        })
+      })
+      map.add(markers)
+
+      const segments = routeSegments(activeRoute.stops)
+      const planned = await Promise.all(segments.map(async ({ from, to }) => {
+        if (isTransportation) {
+          return { path: [[from.lng, from.lat], [to.lng, to.lat]], distance: 0, duration: 0, failed: false }
+        }
+        try {
+          return { ...await searchAmapSegment(AMap, routeMode, from, to), failed: false }
+        } catch (error) {
+          return {
+            path: [],
+            distance: 0,
+            duration: 0,
+            failed: true,
+            error: error.message,
+          }
+        }
+      }))
+      if (cancelled || renderTokenRef.current !== token) return
+
+      const drawableSegments = planned.filter((segment) => segment.path.length >= 2)
+      const drawablePaths = drawableSegments.map((segment) => segment.path)
+      const polylines = drawableSegments.map((segment) => new AMap.Polyline({
+          path: segment.path,
+          strokeColor: isTransportation ? '#80caff' : routeMode === 'driving' ? '#ff6847' : '#b9a4ff',
+          strokeWeight: isTransportation ? 4 : 6,
+          strokeOpacity: 0.9,
+          strokeStyle: 'solid',
+          showDir: !isTransportation && shouldReduceMotion,
+          lineJoin: 'round',
+        }))
+      map.add(polylines)
+      if (markers.length || polylines.length) {
+        map.setFitView([...markers, ...polylines], false, [64, 48, 64, 48], 17)
+      }
+
+      if (!isTransportation && drawablePaths.length) {
+        const traveler = shouldReduceMotion
+          ? null
+          : new AMap.Marker({
+            position: drawablePaths[0][0],
+            offset: new AMap.Pixel(-10, -10),
+            zIndex: 300,
+            title: `Route progress from ${activeRoute.stops[0]?.label || 'start'} to ${activeRoute.stops.at(-1)?.label || 'destination'}`,
+            content: `<span class="amap-route-traveler amap-route-traveler--${routeMode}" aria-hidden="true"></span>`,
+          })
+        if (traveler) map.add(traveler)
+
+        const playRouteAnimation = () => {
+          if (cancelled || renderTokenRef.current !== token || mapRef.current !== map) return
+          routeAnimationRef.current?.stop()
+          let lastRenderedPercent = -1
+          let lastAnnouncedPercent = -5
+          polylines.forEach((polyline) => polyline.setOptions?.({ showDir: false }))
+
+          const showRouteProgress = (progress) => {
+            if (cancelled || renderTokenRef.current !== token || mapRef.current !== map) return
+            const percent = Math.round(progress * 100)
+            if (percent === lastRenderedPercent) return
+            lastRenderedPercent = percent
+            const visiblePaths = revealRoutePaths(drawablePaths, progress)
+            visiblePaths.forEach((path, index) => {
+              if (!path.length) {
+                polylines[index].hide?.()
+                return
+              }
+              polylines[index].show?.()
+              polylines[index].setPath(path.length === 1 ? [path[0], path[0]] : path)
+            })
+            const visibleHead = [...visiblePaths]
+              .reverse()
+              .find((path) => path.length)
+              ?.at(-1)
+            if (traveler && visibleHead) traveler.setPosition(visibleHead)
+            if (percent >= lastAnnouncedPercent + 5 || percent === 100) {
+              lastAnnouncedPercent = percent
+              setRouteAnimationProgress(percent)
+            }
+          }
+
+          showRouteProgress(0)
+          const animationDuration = Math.min(12, 6 + drawablePaths.length * 0.75)
+          routeAnimationRef.current = animate(0, 1, {
+            duration: animationDuration,
+            ease: 'easeInOut',
+            onUpdate: showRouteProgress,
+            onComplete: () => {
+              if (cancelled || renderTokenRef.current !== token) return
+              showRouteProgress(1)
+              polylines.forEach((polyline) => polyline.setOptions?.({ showDir: true }))
+              routeAnimationRef.current = null
+            },
+          })
+        }
+
+        if (shouldReduceMotion) {
+          polylines.forEach((polyline, index) => {
+            polyline.show?.()
+            polyline.setPath(drawablePaths[index])
+          })
+          setRouteAnimationProgress(100)
+        } else {
+          routePlaybackRef.current = { token, play: playRouteAnimation }
+          playRouteAnimation()
+        }
+      }
+
+      const failedCount = planned.filter((segment) => segment.failed).length
+      const distance = planned.reduce((sum, segment) => sum + segment.distance, 0)
+      const duration = planned.reduce((sum, segment) => sum + segment.duration, 0)
+      setRouteMetrics({ distance, duration, failedCount, segments: planned.length })
+      if (isTransportation) {
+        setRouteMessage('Transportation overview drawn with AMap Marker and Polyline overlays.')
+      } else if (!planned.length) {
+        setRouteMessage('This selection has only one mappable stop, so there is no route segment to calculate.')
+      } else if (failedCount) {
+        setRouteMessage(`${planned.length - failedCount} route segment(s) loaded; ${failedCount} AMap ${routeMode} segment(s) are unavailable.`)
+      } else {
+        setRouteMessage(`Live AMap ${routeMode} route loaded successfully.`)
+      }
+    }
+
+    drawRoute().catch((error) => {
+      if (cancelled || renderTokenRef.current !== token) return
+      setRouteMetrics(null)
+      setMapMessage(`AMap loaded, but this route could not be drawn (${error.message}).`)
+      setRouteMessage('Choose another route or routing mode to retry.')
+    })
+    return () => {
+      cancelled = true
+      routeAnimationRef.current?.stop()
+      routeAnimationRef.current = null
+      routePlaybackRef.current = null
+    }
+  }, [
+    activeRoute,
+    isTransportation,
+    mapState,
+    routeMode,
+    shouldReduceMotion,
+    transportMode,
+  ])
+
+  const formattedDistance = formatDistance(routeMetrics?.distance)
+  const formattedDuration = formatDuration(routeMetrics?.duration)
+  const mapStateLabel = mapState === 'ready'
+    ? 'AMap live'
+    : mapState === 'loading'
+      ? 'Loading AMap…'
+      : 'AMap unavailable'
+  const routeAnimationLabel = routeAnimationProgress >= 100
+    ? 'Route traced'
+    : `Tracing route · ${routeAnimationProgress ?? 0}%`
+
+  return (
+    <div className="places-view route-explorer">
+      <div className="panel-heading">
+        <div>
+          <span className="section-index">LIVE ROUTE</span>
+          <h2>Your journey,<br />one route at a time.</h2>
         </div>
+        <p>Start with the full trip route, then switch to transportation or a single day. Walking and Driving use separate live AMap route plans.</p>
+      </div>
+      <div className="result-heading-actions">
+        <ReadAloudButton
+          id="places-summary"
+          label="recommended places"
+          text={listEntries.flatMap(({ point, recommendation }, index) => [
+            recommendation || `Place ${index + 1}`,
+            point.label,
+            TYPE_LABEL[point.type] || point.type,
+            point.area,
+          ])}
+        />
+      </div>
 
-      <div className="places-layout">
-        <div className="leaflet-map-container" style={{ minHeight: 580, borderRadius: 'var(--radius)', overflow: 'hidden' }}>
-          <MapContainer
-            center={center}
-            zoom={13}
-            style={{ height: 580, width: '100%' }}
-            scrollWheelZoom={true}
-            attributionControl={true}
-          >
-            <TileLayer
-              attribution={GAODE_TILES.standard.attribution}
-              url={GAODE_TILES.standard.url}
-              subdomains={GAODE_TILES.standard.subdomains}
-            />
-
-            <FitBounds points={points} />
-
-            {/* Route polylines — real road paths (solid) or straight lines (dashed) */}
-            {routeSegments.map((seg, idx) => (
-              <Polyline
-                key={`route-${idx}`}
-                positions={seg.positions}
-                pathOptions={{
-                  color: routeColors[idx % routeColors.length],
-                  weight: seg.isReal ? 4 : 3,
-                  opacity: seg.isReal ? 0.85 : 0.7,
-                  dashArray: seg.isReal ? undefined : '8 4',
-                }}
-              />
-            ))}
-
-            {/* Markers */}
-            {points.map((point, index) => {
-              const meta = TYPE_META[point.type] || TYPE_META.activity
-              const icon = createIcon(meta.color, point.type)
-              return (
-                <Marker
-                  key={`${point.label}-${index}`}
-                  position={[point.lat, point.lng]}
-                  icon={icon}
-                >
-                  <Popup>
-                    <div style={{ minWidth: 180 }}>
-                      <strong>{point.label}</strong>
-                      <br />
-                      <small style={{ color: '#666' }}>
-                        {meta.label} · {point.area || 'View on map'}
-                      </small>
-                      {point.star_rating != null && point.type === 'housing' && (
-                        <><br /><small style={{ color: '#e6a817' }}>★ {point.star_rating} stars</small></>
-                      )}
-                      {point.rating != null && point.type === 'restaurant' && (
-                        <><br /><small style={{ color: '#e6a817' }}>★ {point.rating} rating</small></>
-                      )}
-                      {point.ticket_price != null && point.type === 'activity' && (
-                        <><br /><small style={{ color: '#2c7a3d' }}>¥{point.ticket_price} ticket</small></>
-                      )}
-                      {point.price != null && point.type === 'restaurant' && (
-                        <><br /><small style={{ color: '#2c7a3d' }}>¥{point.price} avg</small></>
-                      )}
-                      {point.cuisine && (
-                        <><br /><small style={{ color: '#f5a623' }}>{point.cuisine}</small></>
-                      )}
-                      {point.dish && (
-                        <><br /><small style={{ color: '#888' }}>{point.dish}</small></>
-                      )}
-                      <br />
-                      <a
-                        href={`https://www.google.com/maps?q=${point.lat},${point.lng}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{ fontSize: '0.75rem', color: '#4285F4' }}
-                      >
-                        Google Maps ↗
-                      </a>
-                      {' · '}
-                      <a
-                        href={`https://uri.amap.com/marker?position=${point.lng},${point.lat}&name=${encodeURIComponent(point.label)}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{ fontSize: '0.75rem', color: '#4285F4' }}
-                      >
-                        高德地图 ↗
-                      </a>
-                    </div>
-                  </Popup>
-                </Marker>
-              )
-            })}
-          </MapContainer>
-        </div>
-
-        <aside className="place-index">
-          <span className="section-index">LOCATION INDEX</span>
-
-          {/* Legend */}
-          <div style={{ marginBottom: 12, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-            {Object.entries(TYPE_META).map(([type, meta]) => {
-              if (!typeCounts[type]) return null
-              const Icon = meta.icon
-              return (
-                <span key={type} style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 4,
-                  fontSize: '0.7rem', color: '#555', background: '#f5f5f5',
-                  padding: '2px 8px', borderRadius: 12,
-                }}>
-                  <Icon size={12} color={meta.color} />
-                  {meta.label} ({typeCounts[type]})
-                </span>
-              )
-            })}
-          </div>
-
+      {isSenior && listEntries.length > 0 && (
+        <section className="senior-place-picks place-index" aria-labelledby="senior-place-picks-heading">
+          <h3 id="senior-place-picks-heading">Recommended places</h3>
           <ol>
-            {points.map((point, index) => {
-              const meta = TYPE_META[point.type] || TYPE_META.activity
-              const prev = index > 0 ? points[index - 1] : null
-              const routeKey = prev ? `${index - 1}-${index}` : null
-              const hasRealRoute = routeKey && realRoutes[routeKey]
-              return (
-                <li key={`${point.label}-list`}>
-                  <span className="place-number">{String(index + 1).padStart(2, '0')}</span>
-                  <span>
-                    <strong>{point.label}</strong>
-                    <small>
-                      {meta.label}
-                      {point.type === 'restaurant' && point.cuisine && ` · ${point.cuisine}`}
-                      {point.type === 'restaurant' && point.price && ` · ¥${point.price}`}
-                      {' · '}{point.area || 'Area pending'}
-                      {hasRealRoute && ' 🛣'}
-                    </small>
-                    {prev && (
-                      <button
-                        className="route-hint-btn"
-                        onClick={() => setSelectedRoute(selectedRoute === index ? null : index)}
-                        title={hasRealRoute ? 'Gaode real road route' : 'Straight-line estimate'}
-                      >
-                        <Navigation size={11} />
-                        {selectedRoute === index ? 'Hide route' : `From ${prev.label}`}
-                        {hasRealRoute && <span style={{ fontSize: '0.6rem', opacity: 0.7 }}> (real)</span>}
-                      </button>
-                    )}
-                  </span>
-                </li>
-              )
-            })}
+            {listEntries.map(({ point, recommendation }, index) => (
+              <li key={`${point.label}-senior-${index}`}>
+                <span className="place-number">{String(index + 1).padStart(2, '0')}</span>
+                <span>
+                  {recommendation && <small className="senior-choice-label">{recommendation}</small>}
+                  <strong>{point.label}</strong>
+                  <small>{TYPE_LABEL[point.type] || point.type}. {point.area || 'Area pending'}</small>
+                  {point.cuisine && <small>{point.cuisine}</small>}
+                  {point.rating != null && <small>★ {point.rating} rating</small>}
+                  {point.price != null && <small>¥{point.price} avg</small>}
+                  {point.dish && <small>{point.dish}</small>}
+                </span>
+              </li>
+            ))}
           </ol>
-          <div className="map-disclaimer">
-            <p>
-              {Object.keys(realRoutes).length > 0
-                ? `Solid lines = real Gaode driving routes. Dashed lines = straight-line estimates. Click markers for navigation.`
-                : `Route lines connect stops in itinerary order. Click markers for navigation links.`}
-            </p>
+          {localPoints.length > seniorChoices.length && (
+            <button
+              className="show-more-results"
+              type="button"
+              aria-expanded={showAll}
+              onClick={() => setShowAll((current) => !current)}
+            >
+              {showAll ? 'Show fewer places' : `Show all ${localPoints.length} places`}
+            </button>
+          )}
+        </section>
+      )}
+
+      <TransportationSummary result={routeInput} transportation={model.transportation} />
+
+      <div className="route-toolbar">
+        <div className="route-scope-tabs" aria-label="Choose route scope">
+          {scopes.map((item) => (
+            <button
+              type="button"
+              key={item.id}
+              className={scope === item.id ? 'route-control active' : 'route-control'}
+              aria-pressed={scope === item.id}
+              onClick={() => {
+                setScope(item.id)
+                setRouteMode(routeModeForScope(item.id))
+              }}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+        <div className="route-mode-tabs" aria-label={isTransportation ? 'Choose transportation map mode' : 'Choose local route mode'}>
+          {routeModes.map((mode) => (
+            <button
+              type="button"
+              key={mode.id}
+              className={routeMode === mode.id ? 'route-control active' : 'route-control'}
+              aria-pressed={routeMode === mode.id}
+              disabled={mapState !== 'ready'}
+              onClick={() => setRouteMode(mode.id)}
+            >
+              {mode.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="places-layout route-layout">
+        <div className="map-canvas route-stage">
+          <div
+            ref={containerRef}
+            className={mapState === 'ready' ? 'amap-canvas' : 'amap-canvas hidden'}
+            role="region"
+            aria-label="AMap route map"
+          />
+          {mapState === 'loading' && <div className="route-loading">Loading AMap…</div>}
+          {mapState === 'error' && (
+            <div className="route-unavailable">
+              <MapPin size={28} />
+              <h3>AMap unavailable</h3>
+              <p>{mapMessage || 'The live route map could not be loaded.'}</p>
+            </div>
+          )}
+          <span className={`route-map-state route-map-state--${mapState}`}>
+            {mapStateLabel}
+          </span>
+          {!isTransportation && routeAnimationProgress != null && (
+            <div className="route-animation-control">
+              <span aria-live="polite">
+                <span className={routeAnimationProgress < 100 ? 'route-animation-dot active' : 'route-animation-dot'} />
+                {routeAnimationLabel}
+              </span>
+              {!shouldReduceMotion && (
+                <button
+                  type="button"
+                  aria-label="Replay route animation"
+                  onClick={() => routePlaybackRef.current?.play()}
+                >
+                  <RotateCcw size={13} />
+                  Replay
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+
+        <aside className="place-index route-sidebar" aria-label="Selected route details">
+          <div className="route-sidebar-head">
+            <span className="section-index">
+              {isTransportation ? `${transportMode} route` : isFullTrip ? 'Full journey' : `Day ${activeRoute.day}`}
+            </span>
+            <h3>{activeRoute.title}</h3>
+            {activeRoute.date && <p>{activeRoute.date}</p>}
           </div>
+          {(formattedDistance || formattedDuration) && (
+            <div className="route-metrics">
+              {formattedDistance && <span>{formattedDistance}</span>}
+              {formattedDuration && <span>{formattedDuration}</span>}
+            </div>
+          )}
+          <ol className="route-stops">
+            {activeRoute.stops.map((stop, index) => (
+              <li key={`${stop.role}-${stop.label}-${index}`}>
+                <span className="place-number">{String(index + 1).padStart(2, '0')}</span>
+                <span>
+                  <strong>{stop.label}</strong>
+                  <small>
+                    {stop.type === 'restaurant'
+                      ? TYPE_LABEL.restaurant
+                      : ROLE_LABEL[stop.role] || TYPE_LABEL[stop.type] || stop.area || stop.type}
+                    {stop.area && ` · ${stop.area}`}
+                  </small>
+                  {stop.star_rating != null && <small>★ {stop.star_rating} stars</small>}
+                  {stop.ticket_price != null && <small>¥{stop.ticket_price} ticket</small>}
+                  {stop.cuisine && <small>{stop.cuisine}</small>}
+                  {stop.rating != null && <small>★ {stop.rating} rating</small>}
+                  {stop.price != null && <small>¥{stop.price} avg</small>}
+                  {stop.dish && <small>{stop.dish}</small>}
+                  <a
+                    className="route-hint-btn"
+                    href={index > 0
+                      ? amapRouteUrl(activeRoute.stops[index - 1], stop, routeMode)
+                      : amapPlaceUrl(stop)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <Navigation size={11} />
+                    {index > 0 ? `Route from ${activeRoute.stops[index - 1].label}` : 'Open in AMap'}
+                  </a>
+                </span>
+              </li>
+            ))}
+          </ol>
+          {!activeRoute.stops.length && <p className="muted">No mappable stops are available.</p>}
+          {!isTransportation && (
+            <p className="route-data-note">
+              Only itinerary records with valid coordinates are mapped. AI-generated locations and routes require verification.
+            </p>
+          )}
         </aside>
+      </div>
+
+      <div className="route-status" aria-live="polite">
+        <p>{mapMessage}</p>
+        {routeMessage && <p>{routeMessage}</p>}
       </div>
     </div>
   )

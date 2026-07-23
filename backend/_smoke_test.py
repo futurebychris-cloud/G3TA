@@ -7,6 +7,10 @@ retired Tokyo demo catalog.
 import json
 import os as _os
 
+# The production default remains strict. This explicitly enables deterministic
+# mock hotel cards only inside this offline regression process.
+_os.environ.setdefault("ALLOW_MOCK_RESULTS", "1")
+
 # Load .env from project root so hotel APIs etc are available
 from dotenv import load_dotenv
 _env_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", ".env")
@@ -16,7 +20,14 @@ if _os.path.exists(_env_path):
 import agents.base as agent_base
 import orchestrator
 import services._ai as service_ai
-from agents import food_agent
+from agents import (
+    activity_agent,
+    budget_agent,
+    food_agent,
+    housing_agent,
+    transportation_agent,
+)
+from services import gaode_service
 
 
 def _offline(*args, **kwargs):
@@ -26,6 +37,45 @@ def _offline(*args, **kwargs):
 agent_base.chat_json = _offline
 service_ai.chat_json = _offline
 orchestrator.chat_json = _offline
+
+# Keep this regression genuinely offline even when Playwright and browser binaries
+# are installed. These replacements preserve real-shaped normalized records while
+# preventing network/browser access.
+budget_agent._playwright_web_search_costs = lambda _destination: {}
+transportation_agent._scrape_ctrip_flights = lambda *_args: ([], "offline smoke test")
+food_agent._search_google_maps_restaurants = lambda *_args: []
+food_agent._scrape_restaurant_menu = lambda *_args: []
+activity_agent._search_ctrip_attractions = lambda *_args: []
+activity_agent._search_web_attractions = lambda *_args: []
+housing_agent.resolve_hotels = lambda location, *_args, **_kwargs: [
+    {
+        "id": "offline_hotel_1",
+        "name": f"{location} Offline Test Hotel",
+        "price_per_night": 120.0,
+        "rating": 4.5,
+        "area": location,
+        "lat": 31.2304,
+        "lng": 121.4737,
+        "source": "offline_test_fixture",
+    },
+    {
+        "id": "offline_hotel_2",
+        "name": f"{location} Budget Test Hotel",
+        "price_per_night": 90.0,
+        "rating": 4.1,
+        "area": location,
+        "lat": 31.2204,
+        "lng": 121.4637,
+        "source": "offline_test_fixture",
+    },
+]
+gaode_service.geocode_city = lambda city: (31.2304, 121.4737) if city == "Shanghai" else None
+gaode_service.get_local_transport = lambda *_args, **_kwargs: {
+    "modes": [{"mode": "metro", "cost_per_day": 12, "currency": "CNY", "notes": "offline fixture"}],
+    "total_cost_cny": 156,
+    "city_tier": "offline",
+    "has_real_routing": False,
+}
 
 trip = {
     "location": "Shanghai",

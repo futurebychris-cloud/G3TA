@@ -20,7 +20,18 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
-from ._ai import estimated_record, number, text, string_list
+from ._ai import (
+    ESTIMATE_NOTE,
+    estimated_record,
+    generate_json,
+    number,
+    string_list,
+    text,
+)
+from ._geography import (
+    destination_allows_retired_tokyo_places,
+    retired_tokyo_record_field,
+)
 
 CUISINE_ALIASES = {
     "japanese": {"japanese", "sushi", "ramen", "izakaya", "tempura", "japanese curry"},
@@ -56,6 +67,16 @@ _DEFAULT_MEAL_PRICES = {
 }
 
 _SLOT_WEIGHTS = {"breakfast": 0.25, "lunch": 0.35, "dinner": 0.40}
+
+SYSTEM_PROMPT = (
+    "Generate dining candidates located in the exact requested destination. Never return a venue "
+    "from another city or country. Honor ONLY the selected cuisine families when they are supplied. "
+    "Return ONLY JSON: {options: [{name, cuisine, cuisine_family, price, meal_type, area, rating, "
+    "tags}], reasoning}. meal_type is breakfast, lunch, or dinner. Return requested_count varied "
+    "options with enough choices in every meal slot and avoid duplicate names. Prices are estimates "
+    "in the requested currency. If unsure a named venue exists, use a descriptive dining experience "
+    "ending in '(verify)' instead of inventing a confident factual claim."
+)
 
 
 def _slot_budget(daily_budget: float | None, slot: str) -> float | None:
@@ -230,9 +251,8 @@ def get_food_options(
     """Get real restaurant options for a destination.
 
     PRIMARY: Amap POI search (real restaurants with names, ratings, locations)
+    SECONDARY: Destination-aware DeepSeek estimates for missing meal slots
     FALLBACK: Descriptive options with Numbeo prices + '(verify)' suffix
-
-    No DeepSeek LLM used — all data comes from real APIs or market databases.
     """
     cuisines = cuisine_tags or []
     count = max(12, min(int(num_days) * 3, 42))
@@ -251,7 +271,11 @@ def get_food_options(
             name = rr.get("name", "")
             if not name or name.casefold() in seen:
                 continue
-            seen.add(name.casefold())
+            if (
+                not destination_allows_retired_tokyo_places(destination)
+                and retired_tokyo_record_field(rr, include_name=False)
+            ):
+                continue
 
             # Assign meal slots in rotation
             slot_idx = len(options) % 3
@@ -273,35 +297,102 @@ def get_food_options(
                 "tags": [cuisine],
                 "source": "amap_poi",
             }, destination)
+            option["source"] = "amap_poi"
+            seen.add(name.casefold())
             options.append(option)
             if len(options) >= count:
                 break
         if len(options) >= count:
             break
 
-    # Fill remaining slots with fallback options using Numbeo prices
+    # Fill missing choices with destination-aware estimates. This is deliberately
+    # field-aware: a local restaurant brand may contain "Tokyo", while a Tokyo
+    # area is invalid for a different requested destination.
     if len(options) < count:
-        needed = count - len(options)
-        fallback = _generate_fallback_options(
-            destination, cuisines, needed, daily_budget
-        )
-        for fb in fallback:
-            fb_name = fb.get("name", "").casefold()
-            if fb_name not in seen:
-                seen.add(fb_name)
-                options.append(fb)
+        result = generate_json(SYSTEM_PROMPT, {
+            "destination": destination,
+            "selected_cuisines_in_priority_order": cuisines,
+            "requested_count": count,
+            "num_days": num_days,
+            "budget": budget or {},
+            "food_budget_per_day": daily_budget,
+            "per_meal_budget_limits": {
+                slot: _slot_budget(daily_budget, slot)
+                for slot in ("breakfast", "lunch", "dinner")
+            } if daily_budget else None,
+            "all_preferences": preferences or {},
+            "time_constraints": time_constraints,
+            "truthfulness_requirement": ESTIMATE_NOTE,
+        }, temperature=0.6)
+        raw_options = result.get("options", []) if isinstance(result, dict) else []
+        if not isinstance(raw_options, list):
+            raw_options = []
+        for raw in raw_options:
+            if not isinstance(raw, dict):
+                continue
+            if (
+                not destination_allows_retired_tokyo_places(destination)
+                and retired_tokyo_record_field(raw, include_name=False)
+            ):
+                continue
+            name = text(raw.get("name"))
+            slot = text(raw.get("meal_type")).lower()
+            if (
+                not name
+                or name.casefold() in seen
+                or slot not in {"breakfast", "lunch", "dinner"}
+            ):
+                continue
+            family = text(
+                raw.get("cuisine_family"),
+                text(
+                    raw.get("cuisine"),
+                    cuisines[0] if cuisines else "Local",
+                ),
+            )
+            option = estimated_record({
+                "id": f"food_{len(options) + 1}",
+                "name": name,
+                "cuisine": text(raw.get("cuisine"), family),
+                "cuisine_family": family,
+                "price": round(number(raw.get("price"), 25), 2),
+                "meal_type": slot,
+                "area": text(raw.get("area"), destination),
+                "rating": min(number(raw.get("rating"), 0), 5.0),
+                "tags": string_list(
+                    raw.get("tags"),
+                    [family.lower(), "verify"],
+                ),
+            }, destination)
+            if cuisines and not matches_cuisine_preferences(option, cuisines):
+                continue
+            slot_limit = _slot_budget(daily_budget, slot)
+            if slot_limit is not None and option["price"] > slot_limit:
+                continue
+            seen.add(name.casefold())
+            options.append(option)
+            if len(options) >= count:
+                break
 
-    # Ensure balanced meal slots
+    # Ensure balanced meal slots with safe destination-labelled fallbacks.
     required_per_slot = count // 3
+    fallback_options = _generate_fallback_options(
+        destination,
+        cuisines,
+        count,
+        daily_budget,
+    )
     completed = []
     for slot in ("breakfast", "lunch", "dinner"):
         slot_options = [o for o in options if o.get("meal_type") == slot]
-        # Fill missing slots from other options
-        if len(slot_options) < required_per_slot:
-            other_opts = [o for o in options if o.get("meal_type") != slot]
-            for o in other_opts[:required_per_slot - len(slot_options)]:
-                o["meal_type"] = slot
-                slot_options.append(o)
+        slot_names = {option["name"].casefold() for option in slot_options}
+        slot_options.extend(
+            item for item in fallback_options
+            if (
+                item["meal_type"] == slot
+                and item["name"].casefold() not in slot_names
+            )
+        )
         completed.extend(slot_options[:required_per_slot])
 
     # Renumber IDs

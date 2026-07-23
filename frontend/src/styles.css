@@ -870,27 +870,42 @@ button { -webkit-tap-highlight-color: transparent; }
 
 .route-layout { align-items: stretch; }
 .map-canvas.route-stage { position: relative; min-height: 580px; background: #0d2942; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
-.amap-canvas, .route-preview-svg { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
+.amap-canvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
 .amap-canvas.hidden { visibility: hidden; }
-.route-preview-bg { fill: #0d2942; }
-.route-grid-line { stroke: rgba(255,255,255,.18); stroke-width: 1; opacity: 0.55; }
-.route-preview-line { fill: none; stroke: var(--violet); stroke-width: 6; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 14 10; }
-.route-preview-marker { stroke: var(--white); stroke-width: 3; fill: var(--muted); }
-.route-preview-marker--housing { fill: var(--coral); }
-.route-preview-marker--activity { fill: var(--lime); }
-.route-preview-marker--transport { fill: var(--sky); }
-.route-preview-number { fill: white; font-size: 14px; font-weight: 700; }
-.route-empty { position: absolute; inset: 0; display: grid; place-items: center; color: rgba(255,255,255,.65); padding: 2rem; text-align: center; }
 .route-loading { position: absolute; inset: 0; z-index: 3; display: grid; place-items: center; background: rgba(13,41,66,.78); color: white; }
+.route-unavailable { position: absolute; inset: 0; z-index: 3; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.45rem; padding: 2rem; color: rgba(255,255,255,.78); text-align: center; }
+.route-unavailable h3, .route-unavailable p { margin: 0; }
+.route-unavailable p { max-width: 34rem; color: rgba(255,255,255,.62); font-size: 0.76rem; line-height: 1.5; }
 .route-map-state { position: absolute; left: 0.8rem; top: 0.8rem; z-index: 4; padding: 0.35rem 0.68rem; border-radius: 999px; background: rgba(10,32,52,.9); border: 1px solid rgba(255,255,255,.22); font-size: 0.65rem; font-weight: 750; }
 .route-map-state--ready { color: var(--lime); }
-.route-map-state--preview { color: var(--sand); }
+.route-map-state--loading { color: var(--sand); }
+.route-map-state--error { color: var(--coral); }
+.route-animation-control { position: absolute; right: 0.8rem; top: 0.8rem; z-index: 4; display: flex; align-items: center; gap: 0.5rem; padding: 0.28rem 0.35rem 0.28rem 0.58rem; border: 1px solid rgba(255,255,255,.22); border-radius: 999px; background: rgba(10,32,52,.9); color: white; box-shadow: 0 5px 16px rgba(10,32,52,.2); }
+.route-animation-control > span { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.64rem; font-weight: 750; }
+.route-animation-control button { display: inline-flex; align-items: center; gap: 0.28rem; min-height: 27px; padding: 0.25rem 0.5rem; border: 0; border-radius: 999px; background: rgba(255,255,255,.16); color: white; cursor: pointer; font: inherit; font-size: 0.62rem; font-weight: 750; }
+.route-animation-control button:hover { background: rgba(255,255,255,.25); }
+.route-animation-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--lime); }
+.route-animation-dot.active { animation: route-animation-pulse 1s ease-in-out infinite; }
 
 .amap-route-marker { display: grid; place-items: center; width: 30px; height: 30px; border: 3px solid white; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); background: #64748b; color: white; font-size: 12px; font-weight: 700; box-shadow: 0 4px 12px rgba(0,0,0,0.35); }
 .amap-route-marker > span { transform: rotate(45deg); }
 .amap-route-marker--housing { background: var(--coral); }
 .amap-route-marker--activity { background: #78a925; }
 .amap-route-marker--transport { background: #328cc1; }
+.amap-route-marker--restaurant { background: #d98b12; }
+.amap-route-traveler { display: block; width: 20px; height: 20px; border: 5px solid white; border-radius: 50%; background: var(--violet); box-shadow: 0 0 0 5px rgba(185,164,255,.28), 0 4px 13px rgba(10,32,52,.36); }
+.amap-route-traveler--driving { background: var(--coral); box-shadow: 0 0 0 5px rgba(255,104,71,.25), 0 4px 13px rgba(10,32,52,.36); }
+
+@keyframes route-animation-pulse {
+  0%, 100% { opacity: 0.55; transform: scale(0.8); }
+  50% { opacity: 1; transform: scale(1.2); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .route-animation-dot.active { animation: none; }
+}
+
+html[data-reduced-motion="true"] .route-animation-dot.active { animation: none; }
 
 .route-sidebar { min-width: 0; }
 .route-sidebar-head h3 { margin: 0.25rem 0; font-size: 1.05rem; }
