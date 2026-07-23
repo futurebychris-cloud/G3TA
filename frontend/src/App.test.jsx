@@ -48,7 +48,8 @@ describe('app accessibility entry point', () => {
     await user.click(trigger)
     expect(screen.getByRole('dialog', { name: 'Accessibility options' })).toBeVisible()
     expect(screen.getByRole('checkbox', { name: /Bigger Text/ })).toBeEnabled()
-    expect(screen.getByRole('radio', { name: 'Senior Mode' })).toBeEnabled()
+    // Senior Mode is the hidden default now — the quick preset picker is gone.
+    expect(screen.queryByRole('radio', { name: 'Senior Mode' })).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Open guided setup' }))
     expect(await screen.findByRole('dialog', { name: 'Voice-guided Travel Assistant' })).toBeVisible()
     expect(screen.getByRole('heading', { name: /^1\. Where will you be traveling from/ })).toBeVisible()

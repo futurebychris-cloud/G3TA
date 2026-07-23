@@ -4,6 +4,11 @@ import { useAccessibilitySettings } from '../../accessibility/AccessibilityConte
 import AccessibleDialog from './AccessibleDialog.jsx'
 import AccessibilityPresetSelector from './AccessibilityPresetSelector.jsx'
 
+// Hidden, not deleted: Senior Mode is now the sitewide default, so the quick
+// preset picker, intro line, and reset button stay in the code but out of the
+// dialog. Flip to true to bring them back.
+const SHOW_PRESET_CONTROLS = false
+
 const TOGGLES = [
   ['easyReading', 'Easy Reading', 'Shorter lines, plain presentation, and important details first.'],
   ['largerText', 'Bigger Text', 'Increase important text while keeping the layout responsive.'],
@@ -25,24 +30,28 @@ export default function AccessibilityPanel({ open, onClose, returnFocusRef, onOp
       returnFocusRef={returnFocusRef}
       initialFocusRef={closeRef}
       labelledBy="accessibility-title"
-      describedBy="accessibility-description"
+      describedBy={SHOW_PRESET_CONTROLS ? 'accessibility-description' : undefined}
       className="accessibility-panel"
     >
         <header className="accessibility-panel-head">
           <div>
             <span className="section-index">MAKE IT YOURS</span>
             <h2 id="accessibility-title">Accessibility options</h2>
-            <p id="accessibility-description">Choose only the reading and interaction tools that help you.</p>
+            {SHOW_PRESET_CONTROLS && (
+              <p id="accessibility-description">Choose only the reading and interaction tools that help you.</p>
+            )}
           </div>
           <button ref={closeRef} className="dialog-close" type="button" onClick={onClose} aria-label="Close accessibility options">
             <X size={20} aria-hidden="true" />
           </button>
         </header>
 
-        <div className="accessibility-presets-block">
-          <span className="section-index">QUICK SETUP</span>
-          <AccessibilityPresetSelector compact />
-        </div>
+        {SHOW_PRESET_CONTROLS && (
+          <div className="accessibility-presets-block">
+            <span className="section-index">QUICK SETUP</span>
+            <AccessibilityPresetSelector compact />
+          </div>
+        )}
 
         <section className="guided-addon" aria-labelledby="guided-addon-title">
           <span className="guided-addon-icon" aria-hidden="true"><MessageCircle size={22} /></span>
@@ -110,9 +119,11 @@ export default function AccessibilityPanel({ open, onClose, returnFocusRef, onOp
         </div>
 
         <footer className="accessibility-panel-actions">
-          <button className="reset-accessibility" type="button" onClick={resetSettings}>
-            <RotateCcw size={16} aria-hidden="true" /> Reset to defaults
-          </button>
+          {SHOW_PRESET_CONTROLS && (
+            <button className="reset-accessibility" type="button" onClick={resetSettings}>
+              <RotateCcw size={16} aria-hidden="true" /> Reset to defaults
+            </button>
+          )}
           <button className="done-accessibility" type="button" onClick={onClose}>Done</button>
         </footer>
     </AccessibleDialog>

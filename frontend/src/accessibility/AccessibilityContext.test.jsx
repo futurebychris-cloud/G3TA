@@ -40,28 +40,31 @@ describe('accessibility settings', () => {
     const user = userEvent.setup()
     render(<AccessibilityProvider><SettingsHarness /></AccessibilityProvider>)
 
-    await user.click(screen.getByRole('button', { name: 'Toggle bigger text' }))
-    expect(document.documentElement).toHaveAttribute('data-larger-text', 'true')
-    expect(JSON.parse(localStorage.getItem(ACCESSIBILITY_STORAGE_KEY)).largerText).toBe(true)
-
+    // Senior Mode ships on by default, so the first toggle turns bigger text OFF.
     await user.click(screen.getByRole('button', { name: 'Toggle bigger text' }))
     expect(document.documentElement).toHaveAttribute('data-larger-text', 'false')
+    expect(JSON.parse(localStorage.getItem(ACCESSIBILITY_STORAGE_KEY)).largerText).toBe(false)
 
-    await user.click(screen.getByRole('button', { name: 'Enable contrast' }))
+    await user.click(screen.getByRole('button', { name: 'Toggle bigger text' }))
+    expect(document.documentElement).toHaveAttribute('data-larger-text', 'true')
+
+    await user.click(screen.getByRole('button', { name: 'Use Easy Reading' }))
     await user.click(screen.getByRole('button', { name: 'Reset settings' }))
     await waitFor(() => expect(JSON.parse(screen.getByTestId('settings').textContent)).toEqual(DEFAULT_ACCESSIBILITY_SETTINGS))
-    expect(document.documentElement).toHaveAttribute('data-high-contrast', 'false')
+    // Reset lands back on the Senior Mode defaults, contrast included.
+    expect(document.documentElement).toHaveAttribute('data-high-contrast', 'true')
   })
 
   it('loads valid saved settings and rejects invalid saved values', () => {
-    localStorage.setItem(ACCESSIBILITY_STORAGE_KEY, JSON.stringify({ largerText: true, lineFocus: 'invalid', readingSpeed: 99 }))
+    localStorage.setItem(ACCESSIBILITY_STORAGE_KEY, JSON.stringify({ largerText: false, lineFocus: 'invalid', readingSpeed: 99 }))
     render(<AccessibilityProvider><SettingsHarness /></AccessibilityProvider>)
     const loaded = JSON.parse(screen.getByTestId('settings').textContent)
-    expect(loaded.largerText).toBe(true)
-    expect(loaded.lineFocus).toBe('off')
+    expect(loaded.largerText).toBe(false)
+    // Invalid values fall back to the Senior Mode defaults.
+    expect(loaded.lineFocus).toBe('three')
     expect(loaded.readingSpeed).toBe(1.5)
     expect(normalizeAccessibilitySettings('invalid')).toEqual(DEFAULT_ACCESSIBILITY_SETTINGS)
-    expect(normalizeAccessibilitySettings({ readingSpeed: null }).readingSpeed).toBe(1)
+    expect(normalizeAccessibilitySettings({ readingSpeed: null }).readingSpeed).toBe(0.9)
   })
 
   it('applies Senior Mode as a preset and still allows individual overrides', async () => {
@@ -112,20 +115,18 @@ describe('accessibility settings', () => {
 })
 
 describe('accessibility onboarding', () => {
-  it('offers Senior Mode on first run and saves completion', async () => {
-    const user = userEvent.setup()
+  it('keeps the welcome chooser hidden and starts everyone in Senior Mode', () => {
     render(
       <AccessibilityProvider>
         <AccessibilityOnboarding />
         <SettingsHarness />
       </AccessibilityProvider>,
     )
-    expect(screen.getByRole('dialog', { name: 'How should your trip planner feel?' })).toBeVisible()
-    await user.click(screen.getByRole('radio', { name: /Senior Mode/ }))
-    expect(document.documentElement).toHaveAttribute('data-accessibility-preset', 'senior')
-    await user.click(screen.getByRole('button', { name: /Continue/ }))
+    // The first-visit preset chooser is hidden (not deleted): Senior Mode is
+    // simply the default, no dialog required.
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-    expect(JSON.parse(localStorage.getItem(ACCESSIBILITY_STORAGE_KEY)).onboardingComplete).toBe(true)
+    expect(document.documentElement).toHaveAttribute('data-accessibility-preset', 'senior')
+    expect(JSON.parse(screen.getByTestId('settings').textContent).preset).toBe('senior')
   })
 })
 
@@ -145,16 +146,20 @@ describe('accessibility panel', () => {
     expect(trigger).toHaveFocus()
   })
 
-  it('supports independent toggles and reset in the dialog', async () => {
+  it('supports independent toggles and hides the preset and reset controls', async () => {
     const user = userEvent.setup()
     render(<PanelHarness />)
     await user.click(screen.getByRole('button', { name: 'Accessibility options' }))
     const easyReading = screen.getByRole('checkbox', { name: /Easy Reading/ })
     const contrast = screen.getByRole('checkbox', { name: /High Contrast/ })
-    await user.click(easyReading)
+    // Senior Mode defaults: both start checked, and each toggles independently.
     expect(easyReading).toBeChecked()
-    expect(contrast).not.toBeChecked()
-    await user.click(screen.getByRole('button', { name: 'Reset to defaults' }))
+    expect(contrast).toBeChecked()
+    await user.click(easyReading)
     expect(easyReading).not.toBeChecked()
+    expect(contrast).toBeChecked()
+    // Quick-setup presets and the reset button are hidden, not deleted.
+    expect(screen.queryByRole('radio', { name: /Senior Mode/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Reset to defaults' })).not.toBeInTheDocument()
   })
 })

@@ -4,9 +4,16 @@ import { useAccessibilitySettings } from '../../accessibility/AccessibilityConte
 import AccessibleDialog from './AccessibleDialog.jsx'
 import AccessibilityPresetSelector from './AccessibilityPresetSelector.jsx'
 
+// Hidden, not deleted: Senior Mode is applied sitewide by default now, so the
+// first-visit preset chooser stays in the code but never opens. Flip to true
+// to bring the welcome dialog back.
+const SHOW_ONBOARDING = false
+
 export default function AccessibilityOnboarding() {
   const { settings, applyPreset, completeOnboarding } = useAccessibilitySettings()
   const continueRef = useRef(null)
+
+  if (!SHOW_ONBOARDING) return null
 
   function useStandard() {
     applyPreset('standard')

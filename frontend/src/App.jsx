@@ -91,7 +91,7 @@ function AppHeader({ step, onReset, onAccessibility, accessibilityButtonRef }) {
         <Brand />
       </button>
       <div className="header-actions">
-        <span className="system-status"><span className="status-light" /> Planning workspace ready</span>
+        <span className="system-status"><span className="status-light" /> Ready</span>
         {step !== 'input' && (
           <button className="text-button" onClick={onReset}>
             <ArrowLeft size={16} /> New journey
@@ -108,7 +108,7 @@ function Landing({ onSubmit, intakeDraft, intakeNotice, onOpenTaskBot }) {
     <main className="landing" id="main-content" tabIndex="-1">
       <section className="hero">
         <div className="hero-copy">
-          <div className="eyebrow"><Sparkles size={15} /> Multi-agent AI trip design</div>
+          <div className="eyebrow"><Sparkles size={15} /> Multi-agent AI trip planning</div>
           <h1>
             You find the vibe.
             <span>The Agents plan<br /><span className="slogan-indent">the journey.</span></span>

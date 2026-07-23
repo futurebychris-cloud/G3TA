@@ -1,8 +1,12 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 
-export const ACCESSIBILITY_STORAGE_KEY = 'g3ta-accessibility-settings-v1'
+// v2: Senior Mode became the out-of-the-box default, so stored v1 settings
+// (which captured the old standard defaults) are intentionally left behind.
+export const ACCESSIBILITY_STORAGE_KEY = 'g3ta-accessibility-settings-v2'
 
-export const DEFAULT_ACCESSIBILITY_SETTINGS = Object.freeze({
+// The all-off starting point presets are layered onto. Not the default:
+// vibego now starts everyone in Senior Mode.
+export const BASELINE_ACCESSIBILITY_SETTINGS = Object.freeze({
   preset: 'standard',
   onboardingComplete: false,
   easyReading: false,
@@ -14,6 +18,20 @@ export const DEFAULT_ACCESSIBILITY_SETTINGS = Object.freeze({
   lineFocus: 'off',
   readAloud: false,
   readingSpeed: 1,
+})
+
+export const DEFAULT_ACCESSIBILITY_SETTINGS = Object.freeze({
+  ...BASELINE_ACCESSIBILITY_SETTINGS,
+  preset: 'senior',
+  easyReading: true,
+  largerText: true,
+  extraTextSpacing: true,
+  highContrast: true,
+  reducedMotion: true,
+  dyslexiaFont: true,
+  lineFocus: 'three',
+  readAloud: true,
+  readingSpeed: 0.9,
 })
 
 export const ACCESSIBILITY_PRESETS = Object.freeze({
@@ -121,7 +139,7 @@ export function AccessibilityProvider({ children }) {
   const applyPreset = useCallback((preset) => {
     if (!PRESET_VALUES.has(preset)) return
     setSettings((current) => ({
-      ...DEFAULT_ACCESSIBILITY_SETTINGS,
+      ...BASELINE_ACCESSIBILITY_SETTINGS,
       ...ACCESSIBILITY_PRESETS[preset],
       preset,
       onboardingComplete: current.onboardingComplete,
