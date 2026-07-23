@@ -202,6 +202,13 @@ export default function InputForm({ onSubmit, intakeDraft, intakeNotice }) {
 
   const setValue = (key) => (value) => setForm((current) => ({ ...current, [key]: value }))
 
+  // Whisper punctuates transcripts ("London.") — strip trailing punctuation for
+  // short name-like fields where it doesn't belong.
+  const setSpokenName = (key) => (value) => setForm((current) => ({
+    ...current,
+    [key]: String(value || '').trim().replace(/[.。,，!！?？]+$/u, ''),
+  }))
+
   function fillDatesByVoice(transcript) {
     const range = parseSpokenDateRange(transcript)
     if (range) setForm((current) => ({ ...current, start: range.start, end: range.end }))
@@ -266,7 +273,7 @@ export default function InputForm({ onSubmit, intakeDraft, intakeNotice }) {
             <FieldVoiceControls
               label="Flying from"
               readText="Flying from. Say your departure city."
-              onText={setValue('origin')}
+              onText={setSpokenName('origin')}
             />
           </span>
           <input id="trip-origin" name="origin" autoComplete="address-level2" value={form.origin} onChange={set('origin')} placeholder="Your city" required />
@@ -281,7 +288,7 @@ export default function InputForm({ onSubmit, intakeDraft, intakeNotice }) {
             <FieldVoiceControls
               label="Going to"
               readText="Going to. Say the city or country you want to visit."
-              onText={setValue('location')}
+              onText={setSpokenName('location')}
             />
           </span>
           <input
@@ -372,7 +379,7 @@ export default function InputForm({ onSubmit, intakeDraft, intakeNotice }) {
                   label="Must-see places"
                   readText="Must-see places. Name one or more places you don't want to miss."
                   listenSeconds={5}
-                  onText={setValue('must_go_sites')}
+                  onText={setSpokenName('must_go_sites')}
                 />
               </span>
               <input id="must-go-sites" name="must-go-sites" value={form.must_go_sites} onChange={set('must_go_sites')} placeholder="The Bund, Yu Garden…" />

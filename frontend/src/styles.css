@@ -242,6 +242,22 @@ button { -webkit-tap-highlight-color: transparent; }
 .hero-proof strong { font-size: 1.3rem; letter-spacing: -0.04em; }
 .hero-proof span { color: var(--muted); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; }
 .hero-visual { min-width: 0; display: grid; place-items: center; position: relative; z-index: 1; }
+/* Decorative rushing-agents strip — three AI agents sprinting with suitcases,
+   below the globe. Gentle bob animation, off under reduced motion. */
+.agents-rush {
+  position: absolute;
+  right: 6px;
+  bottom: -48px;
+  width: min(400px, 72%);
+  pointer-events: none;
+}
+.agents-rush svg { width: 100%; height: auto; display: block; }
+.rush-agent { animation: rush-bob 1s ease-in-out infinite; }
+.rush-agent-2 { animation-delay: .18s; }
+.rush-agent-3 { animation-delay: .36s; }
+@keyframes rush-bob { 50% { transform: translateY(-4px); } }
+[data-reduced-motion="true"] .rush-agent { animation: none; }
+
 /* Decorative "task-bot at work" card — fills the space beside the slogan and
    shows the taskbot story at a glance. Purely presentational (aria-hidden). */
 .hero-taskcard {

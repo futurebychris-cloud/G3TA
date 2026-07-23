@@ -26,6 +26,7 @@ import PackingList from './components/PackingList.jsx'
 import ReasoningLog from './components/ReasoningLog.jsx'
 import BookingPanel from './components/BookingPanel.jsx'
 import OrbitGlobe from './components/OrbitGlobe.jsx'
+import AgentsRush from './components/AgentsRush.jsx'
 import AccessibilityButton from './components/accessibility/AccessibilityButton.jsx'
 import AccessibilityPanel from './components/accessibility/AccessibilityPanel.jsx'
 import AccessibilityOnboarding from './components/accessibility/AccessibilityOnboarding.jsx'
@@ -126,6 +127,7 @@ function Landing({ onSubmit, intakeDraft, intakeNotice, onOpenTaskBot }) {
         </div>
         <div className="hero-visual">
           <OrbitGlobe />
+          <AgentsRush />
           <div className="hero-taskcard" aria-hidden="true">
             <div className="hero-taskcard-head"><Sparkles size={14} /> Task-bot at work</div>
             <ul>
