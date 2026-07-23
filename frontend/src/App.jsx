@@ -112,7 +112,7 @@ function Landing({ onSubmit, intakeDraft, intakeNotice, onOpenTaskBot }) {
           <div className="eyebrow"><Sparkles size={15} /> Multi-agent AI trip design</div>
           <h1>
             You find the vibe.
-            <span>AI task-bot will plan the journey.</span>
+            <span>AI Agents will plan the journey.</span>
           </h1>
           <p className="hero-lede">
             VibeGo doesn't answer one question — it completes an entire travel-planning
