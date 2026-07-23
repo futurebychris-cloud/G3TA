@@ -416,6 +416,7 @@ def run(trip_input: dict) -> dict:
                 "activity_styles": activity_styles,
                 "num_days": target,
                 "total_budget": trip_input.get("budget", {}),
+                "daily_activity_budget": trip_input.get("_budget_caps", {}).get("activity"),
                 "all_preferences": preferences,
                 "options": scraped,
             })

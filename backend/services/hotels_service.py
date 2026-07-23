@@ -210,9 +210,9 @@ def _geocode_hotelbeds(city: str) -> tuple[float, float]:
         if data.get("results"):
             r = data["results"][0]
             return r["latitude"], r["longitude"]
-    except Exception:
-        pass
-    return 31.23, 121.47  # Default: Shanghai
+    except Exception as exc:
+        raise RuntimeError(f"Could not geocode Hotelbeds destination '{city}'.") from exc
+    raise RuntimeError(f"Could not geocode Hotelbeds destination '{city}'.")
 
 
 def _hotelbeds(destination, dates, max_price_per_night):

@@ -2,9 +2,9 @@ import { useAccessibilitySettings } from '../../accessibility/AccessibilityConte
 
 export const PRESET_OPTIONS = [
   { id: 'standard', label: 'Standard', description: 'Keep the original G3TA experience.' },
-  { id: 'easyReading', label: 'Easy Reading', description: 'Use plain presentation and one-line focus.' },
-  { id: 'senior', label: 'Senior Mode', description: 'Larger, calmer, clearer, and more forgiving.' },
-  { id: 'voiceFirst', label: 'Voice First', description: 'Put browser read-aloud tools within easy reach.' },
+  { id: 'easyReading', label: 'Easy Reading', description: 'Simple sans-serif type, larger text, calm spacing, and reading tools.' },
+  { id: 'senior', label: 'Senior Mode', description: 'Extra-large text, strong contrast, big controls, and a simplified layout.' },
+  { id: 'voiceFirst', label: 'Voice First', description: 'Put Piper read-aloud and guided voice tools within easy reach.' },
 ]
 
 export default function AccessibilityPresetSelector({ compact = false, onSelect }) {

@@ -16,6 +16,9 @@ Output: {"packing_list": [category items], "weather_summary": str, "pacing_notes
 """
 from __future__ import annotations
 import hashlib, json, re, urllib.request
+from llm.easy_reading import easy_reading_enabled, with_easy_reading
+from services.weather_service import get_weather
+
 from .base import llm_reason, trip_days
 
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
@@ -78,9 +81,9 @@ def _geocode_city(city: str) -> tuple[float, float]:
         if data.get("results"):
             r = data["results"][0]
             return r["latitude"], r["longitude"]
-    except Exception:
-        pass
-    return 39.9042, 116.4074  # Default: Beijing
+    except Exception as exc:
+        raise RuntimeError(f"Could not geocode planning destination '{city}'.") from exc
+    raise RuntimeError(f"Could not geocode planning destination '{city}'.")
 
 
 def _fetch_open_meteo_weather(lat: float, lng: float, start: str, end: str) -> dict:
@@ -321,6 +324,81 @@ def _supportive_checklist(weather_daily: list[dict], activity_styles: list[str],
     return items
 
 
+def _metric(weather: dict, key: str) -> list[float]:
+    values = []
+    for day in weather.get("daily", []):
+        try:
+            if day.get(key) is not None:
+                values.append(float(day[key]))
+        except (TypeError, ValueError):
+            continue
+    return values
+
+
+def _fallback_packing(weather: dict, styles: list[str]) -> list[str]:
+    """Safety essentials that an LLM-generated checklist may not omit."""
+    items = ["Passport & travel documents", "Phone + charger / power bank", "Reusable water bottle"]
+    highs = _metric(weather, "high_c")
+    lows = _metric(weather, "low_c")
+    snow = _metric(weather, "snowfall_cm")
+    wind = _metric(weather, "wind_speed_max_kmh")
+    uv = _metric(weather, "uv_index_max")
+    if lows and min(lows) < 10:
+        items += ["Warm jacket", "Layerable sweaters"]
+    if lows and min(lows) <= 0:
+        items += ["Thermal base layers", "Gloves, warm hat & scarf"]
+    if highs and max(highs) > 26:
+        items += ["Light breathable clothing", "Sun hat"]
+    if any(float(day.get("rain_chance") or 0) >= 0.4 for day in weather.get("daily", [])):
+        items += ["Compact umbrella", "Water-resistant shoes"]
+    if snow and max(snow) > 0:
+        items += ["Insulated waterproof boots", "Warm waterproof outer layer"]
+    if wind and max(wind) >= 35:
+        items.append("Windproof outer layer")
+    if (uv and max(uv) >= 6) or (highs and max(highs) > 26):
+        items += ["Broad-spectrum sunscreen", "Sunglasses"]
+    normalized_styles = {str(style).strip().casefold() for style in styles}
+    if "adventure" in normalized_styles:
+        items += ["Comfortable hiking shoes", "Daypack"]
+    if "cultural" in normalized_styles:
+        items.append("Modest layer for temples/shrines")
+    items += ["Comfortable walking shoes", "Transit/IC card", "Small first-aid kit"]
+    return items
+
+
+def _merge_packing(*groups) -> list[str]:
+    items = []
+    seen = set()
+    for group in groups:
+        if not isinstance(group, list):
+            continue
+        for item in group:
+            value = item.get("name", "") if isinstance(item, dict) else item
+            cleaned = str(value).strip()
+            key = cleaned.casefold()
+            if cleaned and key not in seen:
+                items.append(cleaned)
+                seen.add(key)
+    return items
+
+
+def _clearest_dates(weather: dict, limit: int = 2) -> list[str]:
+    def score(day: dict):
+        return (
+            float(day.get("rain_chance") or 0),
+            float(day.get("precipitation_mm") or 0),
+            float(day.get("snowfall_cm") or 0),
+            float(day.get("wind_speed_max_kmh") or 0),
+            day.get("date", ""),
+        )
+
+    live_days = [
+        day for day in weather.get("daily", [])
+        if day.get("source") == "open_meteo_forecast"
+    ]
+    return [day["date"] for day in sorted(live_days, key=score)[:limit]]
+
+
 def run(trip_input: dict) -> dict:
     destination = trip_input["location"]
     origin = trip_input.get("origin", "")
@@ -331,14 +409,9 @@ def run(trip_input: dict) -> dict:
     preferences = trip_input.get("preferences", {})
     activity_styles = preferences.get("activity_style", [])
 
-    # ---- Weather: Try Open-Meteo first, fallback to LLM ----
-    lat, lng = _geocode_city(destination)
-    weather = _fetch_open_meteo_weather(lat, lng, trip_input["dates"]["start"], trip_input["dates"]["end"])
-
-    if not weather:
-        # Fallback to LLM seasonal estimate
-        from services.weather_service import get_weather as get_llm_weather
-        weather = get_llm_weather(destination, trip_input["dates"])
+    # Use the normalized weather service so live forecasts and clearly labeled
+    # seasonal fallbacks retain the same contract across v1 and v2.
+    weather = get_weather(destination, trip_input["dates"])
 
     # ---- NEW: Read activity agent outputs for gear recommendations ----
     activity_outputs = trip_input.get("_activity_outputs", [])
@@ -404,7 +477,10 @@ def run(trip_input: dict) -> dict:
 
     # ---- Build enriched packing checklist ----
     # Get LLM-generated packing list as baseline
-    llm_result = llm_reason(PACKING_CHECKLIST_PROMPT, {
+    llm_result = llm_reason(with_easy_reading(
+        PACKING_CHECKLIST_PROMPT,
+        easy_reading_enabled(trip_input),
+    ), {
         "destination": destination,
         "dates": trip_input["dates"],
         "num_days": len(days),
@@ -494,12 +570,22 @@ def run(trip_input: dict) -> dict:
 
     # ---- Pacing notes ----
     rain_days = sum(1 for d in weather_daily if d.get("rain_chance", 0) > 0.5)
-    pacing = (
+    clearest_dates = _clearest_dates(weather)
+    clear_date_note = (
+        f" Favor {', '.join(clearest_dates)} for outdoor activities based on the current forecast."
+        if clearest_dates else
+        " Keep outdoor timing flexible because these dates use seasonal estimates."
+    )
+    pacing = (llm_result or {}).get("pacing_notes") or (
         f"{len(days)} day(s) in {destination}. "
         f"{f'{rain_days} day(s) with significant rain chance — plan indoor activities on those days. ' if rain_days else ''}"
         f"Temperature range: {avg_low:.0f}–{avg_high:.0f}°C. "
-        f"Front-load outdoor activities on clearer days."
+        f"Front-load outdoor activities on clearer days.{clear_date_note}"
     )
+    if clearest_dates and not any(value in pacing for value in clearest_dates):
+        pacing = f"{pacing.rstrip()} {clear_date_note.strip()}"
+    if not clearest_dates and "seasonal" not in pacing.casefold():
+        pacing = f"{pacing.rstrip()} {clear_date_note.strip()}"
 
     # ---- Store to shared database ----
     try:
@@ -522,14 +608,19 @@ def run(trip_input: dict) -> dict:
     weather_summary = weather.get("summary",
         f"Seasonal estimate for {destination}: {avg_low:.0f}–{avg_high:.0f}°C. Verify closer to departure.")
 
-    # ---- Flat packing list for orchestrator compatibility ----
-    flat_list = []
-    for cat, items in packing_checklist.items():
-        for item in items:
-            if isinstance(item, dict):
-                flat_list.append(f"[{cat}] {item['name']}")
-            elif isinstance(item, str):
-                flat_list.append(item)
+    # ---- Flat packing list for orchestrator/frontend compatibility ----
+    # Keep model suggestions first, then append non-negotiable weather essentials
+    # and the richer structured v2 recommendations without duplicates.
+    structured_names = [
+        item
+        for items in packing_checklist.values()
+        for item in items
+    ]
+    flat_list = _merge_packing(
+        (llm_result or {}).get("packing_list", []),
+        _fallback_packing(weather, activity_styles),
+        structured_names,
+    )
 
     return {
         "packing_list": flat_list,
@@ -542,6 +633,7 @@ def run(trip_input: dict) -> dict:
         "verification_required": True,
         "trip_id": trip_id,
         "weather_source": weather.get("source", "llm_estimate"),
+        "weather_location": weather.get("location"),
         "hotel_amenities": hotel_amenities,
         "shopping_budget": shopping_budget,
         "activity_gear_items": [

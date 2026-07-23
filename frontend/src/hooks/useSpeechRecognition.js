@@ -45,10 +45,12 @@ export default function useSpeechRecognition({ onTranscript, language } = {}) {
     }
     recognition.onresult = (event) => {
       let transcript = ''
+      let isFinal = true
       for (let index = 0; index < event.results.length; index += 1) {
         transcript += event.results[index][0]?.transcript || ''
+        if (event.results[index].isFinal === false) isFinal = false
       }
-      if (transcript.trim()) onTranscript?.(transcript.trim())
+      if (transcript.trim()) onTranscript?.(transcript.trim(), { isFinal })
     }
     recognition.onerror = (event) => {
       hadErrorRef.current = true

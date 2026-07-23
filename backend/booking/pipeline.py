@@ -93,7 +93,7 @@ def confirm_booking(req: BookingConfirmRequest) -> BookingResult:
             route=None,
         )
 
-    order_no = booking.get("order_no") or f"ORD-{req.hotel.id}"
+    order_no = booking.get("order_no")
 
     # Only persist when the live attempt actually reached a bookable state.
     if booking["status"] not in ("pending_payment", "confirmed"):

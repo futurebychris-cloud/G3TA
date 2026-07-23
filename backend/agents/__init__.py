@@ -30,8 +30,8 @@ planning_agent = _load_agent("planning")
 transportation_agent = _load_agent("transportation")
 
 AGENT_ORDER = [
-    "transportation",  # MUST be first — flights/transport cost allocated first
-    "budget",
+    "budget",          # completes first; its caps guide every recommendation agent
+    "transportation",
     "housing",
     "activity",
     "food",
