@@ -1,13 +1,28 @@
 import { useState } from 'react'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { vi } from 'vitest'
+import { beforeEach, vi } from 'vitest'
+import { synthesizeSpeech } from '../../api.js'
 import { ACCESSIBILITY_STORAGE_KEY, AccessibilityProvider } from '../../accessibility/AccessibilityContext.jsx'
 import { TextToSpeechProvider } from '../../hooks/useTextToSpeech.js'
 import MapView from '../MapView.jsx'
 import ConfirmationDialog from './ConfirmationDialog.jsx'
 import EmergencyInformation from './EmergencyInformation.jsx'
 import NextStepHelper from './NextStepHelper.jsx'
+
+vi.mock('../../api.js', () => ({ synthesizeSpeech: vi.fn() }))
+
+beforeEach(() => {
+  synthesizeSpeech.mockResolvedValue(new Blob([new Uint8Array(64)], { type: 'audio/wav' }))
+  URL.createObjectURL = vi.fn(() => 'blob:piper-senior')
+  URL.revokeObjectURL = vi.fn()
+  window.Audio = class Audio {
+    play = vi.fn(async () => this.onplay?.())
+    pause = vi.fn()
+    removeAttribute = vi.fn()
+    load = vi.fn()
+  }
+})
 
 function renderSenior(children) {
   localStorage.setItem(ACCESSIBILITY_STORAGE_KEY, JSON.stringify({
@@ -26,11 +41,6 @@ function renderSenior(children) {
 describe('Senior Mode trip helpers', () => {
   it('shows a readable emergency card and reads it on request', async () => {
     const user = userEvent.setup()
-    const speak = vi.fn()
-    window.speechSynthesis = { cancel: vi.fn(), speak, pause: vi.fn(), resume: vi.fn() }
-    window.SpeechSynthesisUtterance = class SpeechSynthesisUtterance {
-      constructor(text) { this.text = text }
-    }
     renderSenior(
       <EmergencyInformation result={{
         agent_outputs: { housing: { recommended: { name: 'Harbor Hotel', address: '8 River Road', phone: '+1 555 0100' } } },
@@ -44,8 +54,8 @@ describe('Senior Mode trip helpers', () => {
     expect(screen.getByText('8 River Road')).toBeVisible()
     expect(screen.getByText('112')).toBeVisible()
     await user.click(screen.getByRole('button', { name: 'Read emergency information aloud' }))
-    expect(speak).toHaveBeenCalledOnce()
-    expect(speak.mock.calls[0][0].text).toContain('Harbor Hotel')
+    await waitFor(() => expect(synthesizeSpeech).toHaveBeenCalledOnce())
+    expect(synthesizeSpeech.mock.calls[0][0]).toContain('Harbor Hotel')
   })
 
   it('opens a very short immediate-next-step dialog', async () => {

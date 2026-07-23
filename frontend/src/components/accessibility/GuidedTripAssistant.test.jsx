@@ -3,9 +3,15 @@ import userEvent from '@testing-library/user-event'
 import { beforeEach, vi } from 'vitest'
 import { parseTripIntake } from '../../api.js'
 import { AccessibilityProvider } from '../../accessibility/AccessibilityContext.jsx'
+import { TextToSpeechProvider } from '../../hooks/useTextToSpeech.js'
 import GuidedTripAssistant from './GuidedTripAssistant.jsx'
 
-vi.mock('../../api.js', () => ({ parseTripIntake: vi.fn() }))
+vi.mock('../../api.js', () => ({
+  parseTripIntake: vi.fn(),
+  // Speech playback has its own focused tests. Keep automatic question audio
+  // pending here so questionnaire timing cannot race form-navigation assertions.
+  synthesizeSpeech: vi.fn(() => new Promise(() => {})),
+}))
 
 const ANSWERS = [
   'New York',
@@ -44,11 +50,13 @@ const RESULT = {
 function renderAssistant(onApplyDraft = vi.fn()) {
   render(
     <AccessibilityProvider>
-      <GuidedTripAssistant
-        open
-        onClose={vi.fn()}
-        onApplyDraft={onApplyDraft}
-      />
+      <TextToSpeechProvider>
+        <GuidedTripAssistant
+          open
+          onClose={vi.fn()}
+          onApplyDraft={onApplyDraft}
+        />
+      </TextToSpeechProvider>
     </AccessibilityProvider>,
   )
   return onApplyDraft

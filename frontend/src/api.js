@@ -24,6 +24,31 @@ export async function parseTripIntake(description) {
   return resp.json()
 }
 
+// Render all accessible read-aloud content with the local Piper service.
+export async function synthesizeSpeech(text, { language = 'en', speed = 1, signal } = {}) {
+  const resp = await fetch(`${API_BASE}/speech/synthesize`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'audio/wav' },
+    body: JSON.stringify({ text, language, speed }),
+    signal,
+  })
+  if (!resp.ok) {
+    let message = 'Piper voice is unavailable. Please start the local voice service and try again.'
+    try {
+      const body = await resp.json()
+      if (typeof body.detail === 'string' && body.detail.length < 240) message = body.detail
+    } catch {
+      // Keep the concise Piper-specific fallback.
+    }
+    throw new Error(message)
+  }
+  const audio = await resp.blob()
+  if (!audio.type.includes('audio') || audio.size <= 44) {
+    throw new Error('Piper returned invalid audio. Please try again.')
+  }
+  return audio
+}
+
 // Streams the full plan. Calls onEvent(evt) for each SSE message:
 //   {type:'agent_start', agent}
 //   {type:'agent_done', agent, output?}

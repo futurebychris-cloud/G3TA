@@ -12,6 +12,8 @@ export default defineConfig({
       // Forward all API calls to backend; Vite serves the SPA source itself.
       '/plan': 'http://localhost:8000',
       '/booking': 'http://localhost:8000',
+      '/intake': 'http://localhost:8000',
+      '/speech': 'http://localhost:8000',
       '/health': 'http://localhost:8000',
       '/agents': 'http://localhost:8000',
     },
