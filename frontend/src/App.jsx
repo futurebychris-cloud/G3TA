@@ -47,6 +47,31 @@ const TABS = [
   { id: 'reasoning', label: 'Agent log', icon: ListChecks },
 ]
 
+function tripInputFromGuidedDraft(draft) {
+  const travelers = Number(draft.num_people) || 1
+  return {
+    location: String(draft.location || '').trim(),
+    origin: String(draft.origin || '').trim(),
+    dates: {
+      start: String(draft.dates?.start || ''),
+      end: String(draft.dates?.end || ''),
+    },
+    budget: {
+      total: Number(draft.budget?.total),
+      currency: String(draft.budget?.currency || 'USD').trim().toUpperCase(),
+    },
+    preferences: {
+      bites: draft.preferences?.bites || [],
+      transportation_type: draft.preferences?.transportation_type || [],
+      activity_style: draft.preferences?.activity_style || [],
+    },
+    time_constraints: String(draft.time_constraints || '').trim(),
+    must_go_sites: draft.must_go_sites || [],
+    num_people: travelers,
+    is_group: travelers >= 5,
+  }
+}
+
 function Brand() {
   return (
     <div className="brand" aria-label="G3TA home">
@@ -218,13 +243,11 @@ export default function App() {
     window.setTimeout(() => setGuidedTripOpen(true), 0)
   }
 
-  function applyIntakeDraft(draft, notice) {
+  function completeGuidedTrip(draft, notice) {
     setIntakeDraft({ ...draft, appliedAt: Date.now() })
     setIntakeNotice(notice)
-    window.setTimeout(() => {
-      document.getElementById('plan')?.scrollIntoView?.({ behavior: settings.reducedMotion ? 'auto' : 'smooth' })
-      document.getElementById('trip-origin')?.focus()
-    }, 0)
+    setGuidedTripOpen(false)
+    void handleSubmit(tripInputFromGuidedDraft(draft))
   }
 
   useEffect(() => {
@@ -357,7 +380,7 @@ export default function App() {
       <GuidedTripAssistant
         open={guidedTripOpen}
         onClose={() => setGuidedTripOpen(false)}
-        onApplyDraft={applyIntakeDraft}
+        onComplete={completeGuidedTrip}
         returnFocusRef={accessibilityButtonRef}
       />
       <AccessibilityOnboarding />

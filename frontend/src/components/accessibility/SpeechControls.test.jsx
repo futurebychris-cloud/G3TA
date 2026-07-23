@@ -66,7 +66,7 @@ describe('voice input', () => {
     await user.click(screen.getByRole('button', { name: 'Enter destination by voice' }))
     expect(screen.getByRole('status')).toHaveTextContent('Listening')
     recognition.onresult({ results: [[{ transcript: 'Shanghai' }]] })
-    expect(onTranscript).toHaveBeenCalledWith('Shanghai')
+    expect(onTranscript).toHaveBeenCalledWith('Shanghai', { isFinal: true })
     await user.click(screen.getByRole('button', { name: 'Stop voice input' }))
     expect(recognition.stop).toHaveBeenCalledOnce()
     expect(screen.getByRole('status')).toHaveTextContent('Voice input stopped')
