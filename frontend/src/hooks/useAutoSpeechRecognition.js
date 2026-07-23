@@ -16,7 +16,7 @@ function preferredMimeType() {
 }
 
 export default function useAutoSpeechRecognition({
-  onTranscript, uiLanguage = 'en', translate = false, maxListenMs = DEFAULT_MAX_LISTEN_MS,
+  onTranscript, onError, uiLanguage = 'en', translate = false, maxListenMs = DEFAULT_MAX_LISTEN_MS,
 } = {}) {
   const recorderRef = useRef(null)
   const streamRef = useRef(null)
@@ -95,6 +95,7 @@ export default function useAutoSpeechRecognition({
         } catch (error) {
           if (!controller.signal.aborted) {
             setStatus(error?.message || (isChineseUi ? '无法识别语音，请重试。' : 'Speech could not be transcribed. Please try again.'))
+            onError?.(error)
           }
         } finally {
           if (requestRef.current === controller) requestRef.current = null
@@ -113,7 +114,7 @@ export default function useAutoSpeechRecognition({
       setIsListening(false)
       setStatus(isChineseUi ? '无法使用麦克风，您可以继续打字。' : 'The microphone is unavailable. You can continue typing.')
     }
-  }, [isChineseUi, maxListenMs, onTranscript, release, stop, supported, targetLanguage, translate])
+  }, [isChineseUi, maxListenMs, onError, onTranscript, release, stop, supported, targetLanguage, translate])
 
   useEffect(() => () => {
     requestRef.current?.abort()

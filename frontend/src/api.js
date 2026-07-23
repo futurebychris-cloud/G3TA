@@ -6,12 +6,23 @@ const API_BASE = import.meta.env.VITE_API_BASE || ''
 // Normalize guided answers into a validated draft. The caller decides whether
 // to edit that draft or immediately start the planner.
 export async function parseTripIntake(description, { language = 'en' } = {}) {
-  const resp = await fetch(`${API_BASE}/intake/parse`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ description, language }),
-  })
-  if (!resp.ok) {
+  // The intake call rides on a DeepSeek round-trip; transient network blips or
+  // 5xx responses get one automatic retry before surfacing an error.
+  let lastError
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 1500))
+    let resp
+    try {
+      resp = await fetch(`${API_BASE}/intake/parse`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ description, language }),
+      })
+    } catch (networkError) {
+      lastError = new Error('The guided assistant could not reach the server. Retrying…')
+      continue
+    }
+    if (resp.ok) return resp.json()
     let message = 'The guided assistant is unavailable. Your description is still here, and the standard form remains available.'
     try {
       const body = await resp.json()
@@ -19,9 +30,10 @@ export async function parseTripIntake(description, { language = 'en' } = {}) {
     } catch {
       // Keep the safe fallback when the backend has no JSON error body.
     }
-    throw new Error(message)
+    lastError = new Error(message)
+    if (resp.status < 500) break // client errors won't improve on retry
   }
-  return resp.json()
+  throw lastError
 }
 
 // Render all accessible read-aloud content with the local Piper service.

@@ -290,6 +290,18 @@ export default function GuidedTripAssistant({ open, onClose, onComplete, returnF
   const prevSpeechStateRef = useRef('idle')
 
   const suppressAutoListenRef = useRef(false)
+  const retryCountRef = useRef(0)
+
+  // Silence or a failed transcription re-opens the mic (twice at most per
+  // question) instead of leaving the question stuck with no visible cause.
+  function handleNoSpeech() {
+    if (!openRef.current || status !== 'answering') return
+    if (retryCountRef.current >= 2) return
+    retryCountRef.current += 1
+    window.setTimeout(() => {
+      if (openRef.current) setAutoListen((count) => count + 1)
+    }, 600)
+  }
 
   // travelvoice demo behavior: the moment the question finishes being read
   // aloud, start listening automatically — fully hands-free question loop.
@@ -310,6 +322,7 @@ export default function GuidedTripAssistant({ open, onClose, onComplete, returnF
 
   useEffect(() => {
     setDetectedLanguage('')
+    retryCountRef.current = 0
   }, [step, language])
 
   useEffect(() => {
@@ -375,6 +388,10 @@ export default function GuidedTripAssistant({ open, onClose, onComplete, returnF
     setStatus('loading')
     setError('')
     guidedSpeech.stop()
+    // The intake normalization is a DeepSeek round-trip (several seconds) —
+    // the spoken confirmation tells the traveler the submission is underway.
+    // (The status==='answering' guard keeps this read from opening the mic.)
+    guidedSpeech.playText(copy.starting, { force: true, language, userInitiated: true })
     const requestVersion = ++intakeRequestVersionRef.current
     try {
       const parsed = await parseTripIntake(answersForAssistant(answerSet, language), { language })
@@ -532,7 +549,8 @@ export default function GuidedTripAssistant({ open, onClose, onComplete, returnF
               key={language}
               label={question.label}
               readText={`${question.prompt} ${question.hint}`}
-              listenSeconds={['start_date', 'end_date', 'budget'].includes(question.id) ? 5 : 3}
+              listenSeconds={['start_date', 'end_date', 'budget', 'cuisines', 'activity_styles', 'time_constraints'].includes(question.id) ? 5 : 3}
+              onNoSpeech={handleNoSpeech}
               language={language === 'zh' ? 'zh-CN' : 'en'}
               listenTrigger={autoListen}
               onSpeakStart={() => setAnswers((current) => ({ ...current, [question.id]: '' }))}

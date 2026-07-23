@@ -54,6 +54,7 @@ export default function FieldVoiceControls({
   onText,
   onSpeakStart,
   onDetectedLanguage,
+  onNoSpeech,
   listenTrigger = 0,
   language = 'en',
   listenSeconds = 3,
@@ -75,6 +76,12 @@ export default function FieldVoiceControls({
     uiLanguage: language,
     translate: true,
     maxListenMs: listenSeconds * 1000,
+    onError: () => {
+      // Silence / failed transcription — flash the mic red and let the parent
+      // decide whether to re-listen.
+      flashError()
+      onNoSpeech?.()
+    },
     onTranscript: (transcript, meta = {}) => {
       onDetectedLanguage?.({ code: meta.language || '', name: meta.languageName || '' })
       if (options && onMatch) {
