@@ -223,9 +223,8 @@ function ResultHeader({ result }) {
           <span className="section-index">CURATED FOR YOU</span>
           <h1>{result.destination}</h1>
         </div>
-        <div className="trip-stamp" aria-hidden="true"><span>VG</span><small>PLANNED<br />WITH AI</small></div>
       </div>
-      <div className="result-heading-actions">
+      <div className="result-heading-actions under-header">
         <ReadAloudButton id="trip-summary" text={spokenSummary} label={`trip summary for ${result.destination}`} />
       </div>
       <LineFocusReader text={result.summary} className="trip-summary" />
@@ -295,6 +294,12 @@ export default function App() {
     requestControllerRef.current?.abort()
     if (resultTransitionTimerRef.current) window.clearTimeout(resultTransitionTimerRef.current)
   }, [])
+
+  // A smooth scroll started mid-page gets cancelled when the DOM swaps to the
+  // next screen — guarantee every step (progress, result) opens at the top.
+  useEffect(() => {
+    window.scrollTo(0, 0)
+  }, [step])
 
   async function handleSubmit(input) {
     const requestId = ++requestVersionRef.current

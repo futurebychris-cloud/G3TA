@@ -40,7 +40,7 @@ export default function ReadAloudButton({ id, text, label = 'this content' }) {
       </button>
       {speech.state !== 'idle' && (
         <button type="button" className="stop-reading-button" onClick={speech.stop} aria-label={`Stop reading ${label}`}>
-          <Square size={13} aria-hidden="true" /> Stop
+          <Square size={13} aria-hidden="true" /><span>Stop</span>
         </button>
       )}
       <span className={speech.error ? 'speech-playback-error' : 'sr-only'} role="status" aria-live="polite">

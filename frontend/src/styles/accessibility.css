@@ -319,43 +319,34 @@
 @keyframes voice-pulse { to { opacity: 0; transform: scale(1.25); } }
 
 .result-heading-actions { display: flex; justify-content: flex-end; margin: -18px 0 18px; }
-.read-aloud-controls { display: inline-flex; align-items: center; gap: 9px; }
-/* Voice/accessibility controls are always solid, bright orange (--voice) —
-   a color reserved exclusively for these so they read as "voice feature"
-   at a glance, anywhere in the app. */
-.read-aloud-button {
-  min-height: 48px;
+/* Under the result page header: left-aligned, tight to the title. */
+.result-heading-actions.under-header { justify-content: flex-start; margin: 8px 0 0; }
+.read-aloud-controls { display: inline-flex; align-items: center; gap: 8px; }
+/* Read Aloud matches the sitewide voice icon buttons (.va-btn look): purple
+   gradient rounded square, icon only. */
+.read-aloud-button,
+.stop-reading-button {
+  width: 46px;
+  height: 36px;
   display: inline-flex;
   align-items: center;
-  gap: 9px;
-  padding: 0 20px;
+  justify-content: center;
+  padding: 0;
   border: 0;
-  border-radius: 999px;
-  background: var(--voice);
+  border-radius: 10px;
+  background: var(--brand-gradient);
+  background-size: 200% 100%;
+  background-position: 0 50%;
   color: white;
   cursor: pointer;
-  font-size: .92rem;
-  font-weight: 800;
-  box-shadow: 0 8px 20px rgba(230, 101, 10, 0.32);
-  transition: 160ms ease;
+  box-shadow: 0 4px 12px rgba(79, 70, 229, .28);
+  transition: background-position 260ms ease, box-shadow 140ms ease, transform 140ms ease;
 }
-.read-aloud-button:hover { background: var(--voice-deep); transform: translateY(-1px); box-shadow: 0 10px 24px rgba(230, 101, 10, 0.4); }
-.read-aloud-button.active { background: var(--voice-deep); box-shadow: 0 0 0 4px rgba(255, 138, 43, 0.25), 0 8px 20px rgba(230, 101, 10, 0.4); }
-.stop-reading-button {
-  min-height: 48px;
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 0 16px;
-  border: 2px solid var(--voice-deep);
-  border-radius: 999px;
-  background: white;
-  color: var(--voice-deep);
-  cursor: pointer;
-  font-size: .88rem;
-  font-weight: 800;
-}
-.stop-reading-button:hover { background: var(--voice); border-color: var(--voice); color: white; }
+.read-aloud-button > span,
+.stop-reading-button > span { display: none; }
+.read-aloud-button:hover,
+.stop-reading-button:hover { background-position: 100% 50%; transform: translateY(-1px); box-shadow: 0 6px 16px rgba(124, 58, 237, .36); }
+.read-aloud-button.active { box-shadow: 0 0 0 5px rgba(239, 68, 68, .85); }
 .speech-unavailable { color: var(--muted); font-size: .8rem; }
 
 /* Optional natural-language helper launched from dyslexia/reading support. */

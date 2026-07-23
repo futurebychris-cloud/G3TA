@@ -266,6 +266,13 @@ def run(trip_input: dict) -> dict:
     # ---- Step 4: Validate against cuisine preferences ----
     matched = [o for o in enriched_options if matches_cuisine_preferences(o, cuisine_tags)] if cuisine_tags else []
     eligible = matched or enriched_options
+    # With only one or two selected cuisines, an exclusively-matched pool makes
+    # every single meal that cuisine and the whole trip report reads as a food
+    # tour. Blend in a few local options so the planner has variety material;
+    # preference order still leads via the prompt.
+    if matched and len(cuisine_tags) < 3:
+        local_extras = [o for o in enriched_options if o not in matched][:6]
+        eligible = matched + local_extras
     used_preference_fallback = bool(cuisine_tags and not matched)
     if daily_food_cap is not None:
         affordable = [
@@ -281,7 +288,9 @@ def run(trip_input: dict) -> dict:
     # ---- Step 5: LLM meal planning ----
     result = llm_reason(
         "You are the Food Agent (Taste Editor). Build a meal plan from ONLY the supplied options. "
-        "The traveler's selected_cuisines are ordered by preference; honor them strongly. "
+        "The traveler's selected_cuisines are ordered by preference; the first choice should lead, "
+        "but do NOT make every meal the same cuisine — when only one or two cuisines are selected, "
+        "include local/destination food for roughly one meal per day so the trip stays varied. "
         "Balance cost against the total trip budget, respect meal slots, and do not repeat a venue "
         "while unused eligible choices remain. Every venue must be in the exact destination. "
         "Return ONLY JSON: {meal_plan: [{date, meals: [{slot, option_id, dish_name, dish_category}]}], reasoning}.",
