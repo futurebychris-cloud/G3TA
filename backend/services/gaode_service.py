@@ -210,14 +210,14 @@ CITY_COST_KM = 0.75  # blended estimate
 
 def city_distance_km(city_a: str, city_b: str) -> float:
     """Estimate distance in km between two city names.
-    
-    Uses cached coordinates + Haversine. Falls back to 800km default 
+
+    Uses cached coordinates + Haversine. Falls back to 800km default
     for unknown cities (reasonable for most China domestic routes).
     """
     coords_a = geocode_city(city_a)
     coords_b = geocode_city(city_b)
     if coords_a and coords_b:
-        return _haversine(coords_a[1], coords_a[0], coords_b[1], coords_b[0])
+        return _haversine(coords_a[0], coords_a[1], coords_b[0], coords_b[1])
     return 800.0  # default for unknown cities
 
 

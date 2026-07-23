@@ -22,6 +22,7 @@ import time
 import urllib.parse
 
 from .base import llm_reason, trip_days
+from .transportation_agent import _route_metadata
 
 # --------------------------------------------------------------------------- #
 # Constants
@@ -477,6 +478,11 @@ def run(trip_input: dict) -> dict:
         f"{origin}{destination}{dates['start']}".encode()).hexdigest()[:12])
     preferences = trip_input.get("preferences", {})
     transport_types = preferences.get("transportation_type", []) if isinstance(preferences, dict) else []
+    requested_modes = [
+        str(mode).strip().lower()
+        for mode in transport_types
+        if str(mode).strip()
+    ] or ["flight"]
 
     scope = _detect_scope(origin, destination)
     errors: list[str] = []
@@ -548,6 +554,17 @@ def run(trip_input: dict) -> dict:
             "errors": errors,
             "verification_required": True,
             "trip_id": trip_id,
+            "route_points": [],
+            "route_summary": {
+                "mode": requested_modes[0],
+                "origin": origin,
+                "destination": destination,
+            },
+            "coverage": {
+                "requested_modes": requested_modes,
+                "available_modes": [],
+                "note": "No live transportation option was available for the requested route.",
+            },
             "error_message": (
                 f"Could not find any real transport options for "
                 f"{origin} → {destination} on {dates['start']}. "
@@ -634,6 +651,18 @@ def run(trip_input: dict) -> dict:
     reasoning_parts.append(f"¥{cost}")
     reasoning = "Best route: " + " ".join(reasoning_parts)
 
+    route_option = {
+        **recommended,
+        "mode": recommended.get("mode") or recommended.get("type") or "flight",
+    }
+    route_points, route_summary = _route_metadata(origin, destination, route_option)
+    available_modes = list(dict.fromkeys(
+        str(option.get("mode") or option.get("type") or "flight").strip().lower()
+        for option in all_options
+        if str(option.get("mode") or option.get("type") or "flight").strip()
+    ))
+    unsupported_modes = [mode for mode in requested_modes if mode not in available_modes]
+
     return {
         "options": all_options,
         "recommended": recommended,
@@ -647,4 +676,15 @@ def run(trip_input: dict) -> dict:
         "errors": errors,
         "verification_required": True,
         "trip_id": trip_id,
+        "route_points": route_points,
+        "route_summary": route_summary,
+        "coverage": {
+            "requested_modes": requested_modes,
+            "available_modes": available_modes,
+            "note": (
+                "No live option was available for: "
+                f"{', '.join(unsupported_modes)}. Verify with another provider."
+                if unsupported_modes else None
+            ),
+        },
     }

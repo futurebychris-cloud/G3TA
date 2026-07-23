@@ -42,13 +42,20 @@ export function buildRouteModel(result = {}) {
   const housing = mapPoints.find((point) => point.type === 'housing') || null
   const activities = mapPoints.filter((point) => point.type === 'activity')
   const transportation = result.agent_outputs?.transportation || {}
-  const transportPoints = (transportation.route_points || []).filter(validPoint).map((point) => ({
+  const explicitTransportPoints = (transportation.route_points || []).filter(validPoint)
+  const mappedTransportPoints = mapPoints.filter((point) => point.type === 'transport')
+  const rawTransportPoints = explicitTransportPoints.length ? explicitTransportPoints : mappedTransportPoints
+  const transportPoints = rawTransportPoints.map((point, index) => ({
     ...point,
     lat: Number(point.lat),
     lng: Number(point.lng),
+    role: point.role || (index === 0 ? 'departure' : index === rawTransportPoints.length - 1 ? 'arrival' : 'transfer'),
   }))
   const transportMode = String(
-    transportation.route_summary?.mode || transportation.recommended?.mode || 'transportation',
+    transportation.route_summary?.mode
+      || transportation.recommended?.mode
+      || transportation.recommended?.type
+      || 'transportation',
   ).trim().toLowerCase()
   const transportLabel = transportMode.charAt(0).toUpperCase() + transportMode.slice(1)
 

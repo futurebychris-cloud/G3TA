@@ -162,8 +162,6 @@ def booking_search(req: HotelSearchRequest):
         yield _sse({"type": "booking_results", "hotels": results})
 
     return StreamingResponse(generate(), media_type="text/event-stream")
-
-
 @app.post("/booking/confirm")
 def booking_confirm(req: BookingConfirmRequest) -> BookingResult:
     """Confirm a selected hotel: drive Playwright to Ctrip's payment checkpoint.
@@ -428,6 +426,3 @@ def plan_stream(trip: TripInput):
             yield _sse({"type": "error", "message": f"Unexpected error: {e}"})
 
     return StreamingResponse(generate(), media_type="text/event-stream")
-
-
-
