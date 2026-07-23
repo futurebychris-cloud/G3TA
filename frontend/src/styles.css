@@ -232,6 +232,10 @@ button { -webkit-tap-highlight-color: transparent; }
   display: block;
   margin-top: 12px;
   font-size: 0.90em;
+  /* background-clip:text only paints inside the box — give the italic serif
+     descenders (j, y) room or they render cut off. */
+  line-height: 1.06;
+  padding-bottom: 0.08em;
   font-family: "Iowan Old Style", Baskerville, Georgia, serif;
   font-weight: 400;
   font-style: italic;
@@ -243,7 +247,7 @@ button { -webkit-tap-highlight-color: transparent; }
   -webkit-text-fill-color: transparent;
   color: var(--brand-purple);
 }
-.slogan-indent { padding-left: 10px; }
+.slogan-indent { padding-left: 10px; font-size: calc(1em + 4px); }
 .hero-lede {
   max-width: 590px;
   margin: 34px 0 38px 5px;
