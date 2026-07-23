@@ -51,7 +51,7 @@ describe('app accessibility entry point', () => {
     expect(screen.getByRole('radio', { name: 'Senior Mode' })).toBeEnabled()
     await user.click(screen.getByRole('button', { name: 'Open guided setup' }))
     expect(await screen.findByRole('dialog', { name: 'Voice-guided Travel Assistant' })).toBeVisible()
-    expect(screen.getByText('Question 1 of 11')).toBeVisible()
+    expect(screen.getByRole('heading', { name: /^1\. Where will you be traveling from/ })).toBeVisible()
     // With neither speech synthesis nor a recorder available in jsdom, the
     // voice pair renders nothing — typing remains the fallback.
     expect(screen.queryByRole('button', { name: /Answer .* by voice/ })).not.toBeInTheDocument()

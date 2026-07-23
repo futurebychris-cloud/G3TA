@@ -121,7 +121,7 @@ describe('voice-guided trip accessibility add-on', () => {
     const { onComplete, onClose } = renderAssistant()
     parseTripIntake.mockResolvedValue(RESULT)
 
-    expect(screen.getByText('Question 1 of 11')).toBeVisible()
+    expect(screen.getByRole('heading', { name: /^1\. Where will you be traveling from/ })).toBeVisible()
     expect(screen.getByRole('heading', { name: /Where will you be traveling from/ })).toBeVisible()
 
     await answerEveryQuestion(user)
@@ -174,13 +174,14 @@ describe('voice-guided trip accessibility add-on', () => {
       await user.click(screen.getByRole('button', { name: /Answer .* by voice/ }))
       await user.click(screen.getByRole('button', { name: 'Stop listening' }))
       if (index < ANSWERS.length - 1) {
-        expect(await screen.findByText(`Question ${index + 2} of 11`)).toBeVisible()
+        // Recognized text stays visible for ~1s before the next question.
+        expect(await screen.findByRole('heading', { name: new RegExp(`^${index + 2}\\.`) }, { timeout: 4000 })).toBeVisible()
       }
     }
 
-    await waitFor(() => expect(onComplete).toHaveBeenCalledOnce())
+    await waitFor(() => expect(onComplete).toHaveBeenCalledOnce(), { timeout: 4000 })
     expect(screen.queryByRole('button', { name: /Fill the trip form/ })).not.toBeInTheDocument()
-  })
+  }, 40000)
 
   it('switches the visible guide, recognition, and spoken reply language to Chinese', async () => {
     const user = userEvent.setup()
@@ -190,7 +191,7 @@ describe('voice-guided trip accessibility add-on', () => {
 
     await user.click(screen.getByRole('button', { name: '中文' }))
 
-    expect(screen.getByRole('heading', { name: '您将从哪个城市出发？' })).toBeVisible()
+    expect(screen.getByRole('heading', { name: /您将从哪个城市出发/ })).toBeVisible()
     expect(screen.getByRole('button', { name: '中文' })).toHaveAttribute('aria-pressed', 'true')
     await user.click(screen.getByRole('button', { name: '用语音回答出发城市' }))
     expect(await screen.findByText(/正在聆听/)).toBeInTheDocument()

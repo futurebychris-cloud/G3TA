@@ -284,16 +284,26 @@ export default function GuidedTripAssistant({ open, onClose, onComplete, returnF
   }, [guidedSpeech.playText, language, question.prompt])
 
   const introducedRef = useRef(false)
+  const advanceTimerRef = useRef(null)
   const [autoListen, setAutoListen] = useState(0)
   const [detectedLanguage, setDetectedLanguage] = useState('')
   const prevSpeechStateRef = useRef('idle')
 
+  const suppressAutoListenRef = useRef(false)
+
   // travelvoice demo behavior: the moment the question finishes being read
   // aloud, start listening automatically — fully hands-free question loop.
+  // A manual interruption (e.g. switching language) sets the suppression flag
+  // so cancelling speech doesn't masquerade as "finished reading".
   useEffect(() => {
     const finishedSpeaking = prevSpeechStateRef.current === 'speaking' && guidedSpeech.state === 'idle'
     prevSpeechStateRef.current = guidedSpeech.state
-    if (finishedSpeaking && open && status === 'answering' && !guidedSpeech.error) {
+    if (!finishedSpeaking) return
+    if (suppressAutoListenRef.current) {
+      suppressAutoListenRef.current = false
+      return
+    }
+    if (open && status === 'answering' && !guidedSpeech.error) {
       setAutoListen((count) => count + 1)
     }
   }, [guidedSpeech.error, guidedSpeech.state, open, status])
@@ -305,8 +315,9 @@ export default function GuidedTripAssistant({ open, onClose, onComplete, returnF
   useEffect(() => {
     if (!open || status === 'loading') return undefined
     const timer = window.setTimeout(() => {
-      // First read after opening introduces the assistant by name, then the question.
-      const intro = introducedRef.current ? '' : `${copy.title}. `
+      // First read after opening introduces the assistant by name and the
+      // multilingual note, then the question.
+      const intro = introducedRef.current ? '' : `${copy.title}. ${copy.description} `
       introducedRef.current = true
       speakQuestion(`${intro}${repairMessage ? `${repairMessage} ` : ''}`)
       // Bring the response box into view so the answer field is ready right away.
@@ -319,9 +330,12 @@ export default function GuidedTripAssistant({ open, onClose, onComplete, returnF
     if (!open) {
       introducedRef.current = false
       intakeRequestVersionRef.current += 1
+      window.clearTimeout(advanceTimerRef.current)
       guidedSpeech.stop()
     }
   }, [guidedSpeech.stop, open])
+
+  useEffect(() => () => window.clearTimeout(advanceTimerRef.current), [])
 
   useEffect(() => () => {
     intakeRequestVersionRef.current += 1
@@ -414,11 +428,17 @@ export default function GuidedTripAssistant({ open, onClose, onComplete, returnF
     setAnswers(nextAnswers)
     setError('')
     if (!isFinal) return
-    if (isLastQuestion) {
-      reviewAnswers(nextAnswers)
-    } else {
-      move(1, nextAnswers)
-    }
+    // Show the recognized text in the input for a second before advancing,
+    // so it's visible that the answer was understood.
+    window.clearTimeout(advanceTimerRef.current)
+    advanceTimerRef.current = window.setTimeout(() => {
+      if (!openRef.current) return
+      if (isLastQuestion) {
+        reviewAnswers(nextAnswers)
+      } else {
+        move(1, nextAnswers)
+      }
+    }, 1000)
   }
 
   const currentAnswer = answers[question.id] || ''
@@ -430,6 +450,12 @@ export default function GuidedTripAssistant({ open, onClose, onComplete, returnF
 
   function changeLanguage(nextLanguage) {
     if (nextLanguage === language) return
+    // Kill the old-language session completely: cancelling mid-read must not
+    // trigger the auto-listen, and no pending advance may carry over.
+    if (guidedSpeech.state === 'speaking' || guidedSpeech.state === 'loading') {
+      suppressAutoListenRef.current = true
+    }
+    window.clearTimeout(advanceTimerRef.current)
     guidedSpeech.stop()
     setLanguage(nextLanguage)
     setError('')
@@ -484,15 +510,7 @@ export default function GuidedTripAssistant({ open, onClose, onComplete, returnF
       <div className="guided-trip-body" lang={language === 'zh' ? 'zh-CN' : 'en'}>
         <>
           <section className="guided-question" aria-labelledby="guided-question-label">
-            <span className="section-index">
-              {question.label}:{' '}
-              <span className="guided-progress-inline">
-                <span>{copy.question} {step + 1} {copy.of} {questions.length}</span>
-                {' — '}
-                <span>{Math.round(((step + 1) / questions.length) * 100)}% {copy.complete}</span>
-              </span>
-            </span>
-            <h3 id="guided-question-label">{question.prompt}</h3>
+            <h3 id="guided-question-label">{step + 1}. {question.prompt}</h3>
             <p>{question.hint}</p>
           </section>
 
@@ -511,6 +529,7 @@ export default function GuidedTripAssistant({ open, onClose, onComplete, returnF
               placeholder={copy.placeholder}
             />
             <FieldVoiceControls
+              key={language}
               label={question.label}
               readText={`${question.prompt} ${question.hint}`}
               listenSeconds={6}
