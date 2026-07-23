@@ -10,7 +10,7 @@ import {
   RefreshCw,
   Utensils,
 } from 'lucide-react'
-import OrbitGlobe from './OrbitGlobe.jsx'
+import AgentTown from './AgentTown.jsx'
 
 const META = {
   budget: { label: 'Budget architect', note: 'Setting sensible category limits', icon: Calculator },
@@ -22,40 +22,47 @@ const META = {
   orchestrator: { label: 'Lead orchestrator', note: 'Composing every idea into one plan', icon: BrainCircuit },
 }
 
-export default function ProgressTracker({ agents, statuses, error, onRetry }) {
-  const doneCount = agents.filter((agent) => statuses[agent] === 'done').length
-  const percentage = Math.round((doneCount / agents.length) * 100)
-  const activeAgent = agents.find((agent) => statuses[agent] === 'running')
+export default function ProgressTracker({ agents, statuses, events = [], trip, error, onRetry }) {
+  const visibleAgents = agents.filter((agent) => META[agent])
+  const statusFor = (agent) => (
+    error && statuses[agent] === 'running' ? 'paused' : (statuses[agent] || 'pending')
+  )
+  const doneCount = visibleAgents.filter((agent) => statusFor(agent) === 'done').length
+  const percentage = Math.round((doneCount / Math.max(visibleAgents.length, 1)) * 100)
+  const activeAgents = error ? [] : visibleAgents.filter((agent) => statusFor(agent) === 'running')
 
   return (
-    <section className="progress-stage" aria-labelledby="planning-progress-heading" aria-busy={!error && percentage < 100}>
-      <div className="progress-art">
-        <div className="progress-orbit-wrap"><OrbitGlobe compact /></div>
-        <span className="section-index">LIVE ORCHESTRATION</span>
-        <h1 id="planning-progress-heading">Your trip is<br /><em>taking shape.</em></h1>
-        <p aria-live="polite" aria-atomic="true">
-          {activeAgent
-            ? `${META[activeAgent].label} is working now. Each specialist hands a structured recommendation to the final orchestrator.`
-            : 'Connecting the team and preparing your brief.'}
-        </p>
-        <div className="progress-meter">
-          <div className="progress-meter-label"><span>{percentage}% composed</span><span>{doneCount} of {agents.length}</span></div>
-          <div className="progress-track" role="progressbar" aria-label="Trip planning progress" aria-valuenow={percentage} aria-valuemin="0" aria-valuemax="100"><span style={{ width: `${percentage}%` }} /></div>
+    <section className="progress-stage progress-stage--town" aria-labelledby="planning-progress-heading" aria-busy={!error && percentage < 100}>
+      <h1 id="planning-progress-heading" className="sr-only">Your trip is taking shape</h1>
+      <div className="progress-town-shell">
+        <AgentTown agents={visibleAgents} statuses={statuses} events={events} trip={trip} paused={Boolean(error)} />
+        <div className="progress-town-footer">
+          <p aria-live="polite" aria-atomic="true">
+            {error
+              ? 'The town session is paused. Your completed handoffs are still safe.'
+              : activeAgents.length
+                ? `${activeAgents.map((agent) => META[agent].label).join(', ')} ${activeAgents.length === 1 ? 'is' : 'are'} talking through the plan now.`
+                : 'Connecting the team and preparing your brief.'}
+          </p>
+          <div className="progress-meter">
+            <div className="progress-meter-label"><span>{percentage}% composed</span><span>{doneCount} of {visibleAgents.length}</span></div>
+            <div className="progress-track" role="progressbar" aria-label="Trip planning progress" aria-valuenow={percentage} aria-valuemin="0" aria-valuemax="100"><span style={{ width: `${percentage}%` }} /></div>
+          </div>
         </div>
       </div>
 
       <div className="agent-board">
         <div className="agent-board-head">
           <div>
-            <span className="section-index">AGENT ROOM</span>
-            <h2>Working session</h2>
+            <span className="section-index">TOWN ROSTER</span>
+            <h2>Who is working</h2>
           </div>
-          <span className="live-badge"><span className="live-pulse" aria-hidden="true" /> Live status</span>
+          <span className={`live-badge${error ? ' paused' : ''}`} aria-live="polite"><span className="live-pulse" aria-hidden="true" /> {error ? 'Paused' : 'Live status'}</span>
         </div>
 
         <ol className="agent-list">
-          {agents.map((agent, index) => {
-            const status = statuses[agent] || 'pending'
+          {visibleAgents.map((agent, index) => {
+            const status = statusFor(agent)
             const { label, note, icon: AgentIcon } = META[agent]
             return (
               <li key={agent} className={`agent-row ${status}`}>
@@ -65,6 +72,7 @@ export default function ProgressTracker({ agents, statuses, error, onRetry }) {
                 <span className="agent-state" aria-live={status === 'running' ? 'polite' : undefined}>
                   {status === 'done' && <><Check size={15} /> Complete</>}
                   {status === 'running' && <><LoaderCircle className="spinner" size={15} /> Thinking</>}
+                  {status === 'paused' && 'Paused'}
                   {status === 'pending' && 'Queued'}
                 </span>
               </li>

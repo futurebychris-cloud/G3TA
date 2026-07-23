@@ -658,6 +658,19 @@
 [data-reduced-motion="true"] .spinner { animation: none; }
 [data-reduced-motion="true"] .spinner::after { content: "…"; }
 
+[data-easy-reading="true"] .town-scene,
+[data-easy-reading="true"] .town-speech,
+[data-easy-reading="true"] .town-channel-feed em { font-family: Arial, Verdana, sans-serif; }
+[data-easy-reading="true"] .town-mission-chip,
+[data-easy-reading="true"] .town-resident-label,
+[data-easy-reading="true"] .town-channel { letter-spacing: normal; }
+[data-accessibility-preset="senior"] .progress-stage--town { display: block; }
+[data-accessibility-preset="senior"] .progress-town-shell { min-height: 0; border-right: 0; border-bottom: 2px solid var(--ink); }
+[data-accessibility-preset="senior"] .town-scene-head h2 { font-size: clamp(2.4rem, 5vw, 3.5rem); }
+[data-accessibility-preset="senior"] .town-channel-feed { grid-template-columns: 1fr; }
+[data-accessibility-preset="senior"] .town-channel-feed p:not(:last-child) { display: none; }
+[data-accessibility-preset="senior"] .progress-stage--town .agent-board { min-height: 0; }
+
 @media (prefers-reduced-motion: reduce) {
   .voice-button.listening::after { display: none; }
   .spinner { animation: none; }
