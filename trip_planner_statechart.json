@@ -1,0 +1,445 @@
+[
+  {
+    "id": 0,
+    "type": 2,
+    "text": "Welcome to G3TA. Choose the standard trip brief or the voice-guided accessible experience.",
+    "transition_list": [
+      {
+        "condition_text": "User chooses the standard trip brief",
+        "next_node_id": 1
+      },
+      {
+        "condition_text": "User chooses voice-guided setup",
+        "next_node_id": 20
+      }
+    ]
+  },
+  {
+    "id": 1,
+    "type": 1,
+    "text": "Collect or review the origin, destination, dates, budget, traveler count, preferences, timing needs, and must-see places. Do not begin planning until the user submits the trip brief.",
+    "transition_list": [
+      {
+        "condition_text": "User submits the trip brief",
+        "next_node_id": 2
+      },
+      {
+        "condition_text": "User switches to voice-guided setup",
+        "next_node_id": 20
+      }
+    ]
+  },
+  {
+    "id": 2,
+    "type": 3,
+    "text": "Validate and normalize the submitted trip brief.",
+    "function": {
+      "name": "validate_trip_input",
+      "parameters": [
+        {
+          "type": "object",
+          "parameter_name": "trip_input"
+        }
+      ]
+    },
+    "transition_list": [
+      {
+        "condition_text": "Trip input is valid",
+        "next_node_id": 3
+      },
+      {
+        "condition_text": "Trip input is invalid",
+        "next_node_id": 90
+      }
+    ]
+  },
+  {
+    "id": 3,
+    "type": 3,
+    "text": "Create the stable trip identifier and save the trip metadata.",
+    "function": {
+      "name": "prepare_trip_input",
+      "parameters": [
+        {
+          "type": "object",
+          "parameter_name": "trip_input"
+        }
+      ]
+    },
+    "transition_list": [
+      {
+        "condition_text": "Planning session is ready",
+        "next_node_id": 4
+      },
+      {
+        "condition_text": "Planning session could not be created",
+        "next_node_id": 91
+      }
+    ]
+  },
+  {
+    "id": 4,
+    "type": 3,
+    "text": "Run the Budget Agent first so every specialist receives the same category caps.",
+    "function": {
+      "name": "run_single_agent",
+      "parameters": [
+        {
+          "type": "string",
+          "parameter_name": "agent_name"
+        },
+        {
+          "type": "object",
+          "parameter_name": "trip_input"
+        }
+      ]
+    },
+    "transition_list": [
+      {
+        "condition_text": "Budget Agent completed",
+        "next_node_id": 5
+      },
+      {
+        "condition_text": "Budget Agent failed",
+        "next_node_id": 92
+      }
+    ]
+  },
+  {
+    "id": 5,
+    "type": 3,
+    "text": "Run Transportation, Housing, Food, Activity, and Planning Agents concurrently with the Budget Agent guidance.",
+    "function": {
+      "name": "run_specialist_agents_parallel",
+      "parameters": [
+        {
+          "type": "object",
+          "parameter_name": "guided_trip_input"
+        },
+        {
+          "type": "object",
+          "parameter_name": "budget_output"
+        }
+      ]
+    },
+    "transition_list": [
+      {
+        "condition_text": "All specialist agents completed",
+        "next_node_id": 6
+      },
+      {
+        "condition_text": "A specialist agent failed",
+        "next_node_id": 93
+      }
+    ]
+  },
+  {
+    "id": 6,
+    "type": 3,
+    "text": "Confirm that every location-bearing agent result belongs to the requested destination.",
+    "function": {
+      "name": "validate_agent_geography",
+      "parameters": [
+        {
+          "type": "object",
+          "parameter_name": "trip_input"
+        },
+        {
+          "type": "object",
+          "parameter_name": "agent_outputs"
+        }
+      ]
+    },
+    "transition_list": [
+      {
+        "condition_text": "Agent geography is valid",
+        "next_node_id": 7
+      },
+      {
+        "condition_text": "Agent geography is inconsistent",
+        "next_node_id": 94
+      }
+    ]
+  },
+  {
+    "id": 7,
+    "type": 3,
+    "text": "Reconcile real costs, apply safe budget trade-offs, and synthesize one destination-correct day-by-day itinerary.",
+    "function": {
+      "name": "reconcile_and_synthesize",
+      "parameters": [
+        {
+          "type": "object",
+          "parameter_name": "trip_input"
+        },
+        {
+          "type": "object",
+          "parameter_name": "agent_outputs"
+        }
+      ]
+    },
+    "transition_list": [
+      {
+        "condition_text": "Final itinerary was synthesized",
+        "next_node_id": 8
+      },
+      {
+        "condition_text": "Final itinerary could not be synthesized",
+        "next_node_id": 95
+      }
+    ]
+  },
+  {
+    "id": 8,
+    "type": 2,
+    "text": "The planned trip is ready. Present the itinerary, destination map, reconciled budget, packing list, weather, and agent reasoning log. This is the end of the planning state chart."
+  },
+  {
+    "id": 20,
+    "type": 2,
+    "text": "Start the optional voice-guided accessible trip intake. Explain that the assistant will ask the same trip-brief questions one at a time and will fill, but not submit, the main form.",
+    "transition_list": [
+      {
+        "condition_text": "User starts guided setup",
+        "next_node_id": 21
+      },
+      {
+        "condition_text": "User closes guided setup",
+        "next_node_id": 0
+      }
+    ]
+  },
+  {
+    "id": 21,
+    "type": 1,
+    "text": "Speak the current trip-brief question and accept a voice or typed answer. Ask about origin, destination, dates, budget and currency, cuisines, activity style, transportation, constraints, must-see places, and traveler count.",
+    "transition_list": [
+      {
+        "condition_text": "User provides an answer",
+        "next_node_id": 22
+      },
+      {
+        "condition_text": "Voice input is unavailable",
+        "next_node_id": 96
+      },
+      {
+        "condition_text": "User closes guided setup",
+        "next_node_id": 0
+      }
+    ]
+  },
+  {
+    "id": 22,
+    "type": 3,
+    "text": "Store the current answer without inventing missing information.",
+    "function": {
+      "name": "capture_guided_answer",
+      "parameters": [
+        {
+          "type": "string",
+          "parameter_name": "question_id"
+        },
+        {
+          "type": "string",
+          "parameter_name": "answer"
+        }
+      ]
+    },
+    "transition_list": [
+      {
+        "condition_text": "More guided questions remain",
+        "next_node_id": 21
+      },
+      {
+        "condition_text": "All guided questions were answered",
+        "next_node_id": 23
+      }
+    ]
+  },
+  {
+    "id": 23,
+    "type": 3,
+    "text": "Parse and normalize the complete guided description into a reviewable trip-form draft.",
+    "function": {
+      "name": "parse_intake",
+      "parameters": [
+        {
+          "type": "string",
+          "parameter_name": "guided_description"
+        }
+      ]
+    },
+    "transition_list": [
+      {
+        "condition_text": "All required details are present",
+        "next_node_id": 24
+      },
+      {
+        "condition_text": "Required details are missing",
+        "next_node_id": 97
+      },
+      {
+        "condition_text": "Guided description could not be parsed",
+        "next_node_id": 98
+      }
+    ]
+  },
+  {
+    "id": 24,
+    "type": 1,
+    "text": "Read and display the normalized trip draft for review. Let the user fill the main form or return to a guided question to edit an answer.",
+    "transition_list": [
+      {
+        "condition_text": "User fills the main form with the draft",
+        "next_node_id": 1
+      },
+      {
+        "condition_text": "User edits a guided answer",
+        "next_node_id": 21
+      },
+      {
+        "condition_text": "User closes guided setup",
+        "next_node_id": 0
+      }
+    ]
+  },
+  {
+    "id": 90,
+    "type": 2,
+    "text": "The trip brief needs correction. Keep all entered values visible and identify the invalid or missing fields.",
+    "transition_list": [
+      {
+        "condition_text": "User corrects the trip brief",
+        "next_node_id": 1
+      },
+      {
+        "condition_text": "User starts over",
+        "next_node_id": 0
+      }
+    ]
+  },
+  {
+    "id": 91,
+    "type": 2,
+    "text": "The planning session could not be created. Preserve the trip brief and offer a retry.",
+    "transition_list": [
+      {
+        "condition_text": "User retries session creation",
+        "next_node_id": 3
+      },
+      {
+        "condition_text": "User returns to the trip brief",
+        "next_node_id": 1
+      }
+    ]
+  },
+  {
+    "id": 92,
+    "type": 2,
+    "text": "The Budget Agent could not establish shared spending guidance. Preserve the trip brief and offer a retry.",
+    "transition_list": [
+      {
+        "condition_text": "User retries the Budget Agent",
+        "next_node_id": 4
+      },
+      {
+        "condition_text": "User returns to the trip brief",
+        "next_node_id": 1
+      }
+    ]
+  },
+  {
+    "id": 93,
+    "type": 2,
+    "text": "A specialist agent failed. Do not synthesize an incomplete trip; preserve completed work and offer a retry.",
+    "transition_list": [
+      {
+        "condition_text": "User retries specialist planning",
+        "next_node_id": 5
+      },
+      {
+        "condition_text": "User returns to the trip brief",
+        "next_node_id": 1
+      }
+    ]
+  },
+  {
+    "id": 94,
+    "type": 2,
+    "text": "An agent returned inconsistent destination data. Do not show mixed-city results; preserve the trip brief and offer a clean specialist retry.",
+    "transition_list": [
+      {
+        "condition_text": "User retries specialist planning",
+        "next_node_id": 5
+      },
+      {
+        "condition_text": "User returns to the trip brief",
+        "next_node_id": 1
+      }
+    ]
+  },
+  {
+    "id": 95,
+    "type": 2,
+    "text": "The specialist results could not be combined into a valid itinerary. Preserve the agent outputs and offer synthesis again.",
+    "transition_list": [
+      {
+        "condition_text": "User retries itinerary synthesis",
+        "next_node_id": 7
+      },
+      {
+        "condition_text": "User returns to the trip brief",
+        "next_node_id": 1
+      }
+    ]
+  },
+  {
+    "id": 96,
+    "type": 2,
+    "text": "Voice recognition is unavailable. Keep the user inside guided setup and offer typed answers to the same questions.",
+    "transition_list": [
+      {
+        "condition_text": "User continues with typed answers",
+        "next_node_id": 21
+      },
+      {
+        "condition_text": "User closes guided setup",
+        "next_node_id": 0
+      }
+    ]
+  },
+  {
+    "id": 97,
+    "type": 2,
+    "text": "Required information is missing. Stay in guided setup, explain what is missing, and repeat only the relevant question.",
+    "transition_list": [
+      {
+        "condition_text": "Repeat the missing guided question",
+        "next_node_id": 21
+      },
+      {
+        "condition_text": "User closes guided setup",
+        "next_node_id": 0
+      }
+    ]
+  },
+  {
+    "id": 98,
+    "type": 2,
+    "text": "The guided answers could not be parsed. Keep every answer available and offer another review attempt without sending the user to the regular form.",
+    "transition_list": [
+      {
+        "condition_text": "User retries guided review",
+        "next_node_id": 23
+      },
+      {
+        "condition_text": "User edits a guided answer",
+        "next_node_id": 21
+      },
+      {
+        "condition_text": "User closes guided setup",
+        "next_node_id": 0
+      }
+    ]
+  }
+]
