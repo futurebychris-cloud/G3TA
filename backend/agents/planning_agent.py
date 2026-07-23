@@ -2,6 +2,7 @@
 
 Responsibility (PRD §7): packing list + weather-driven adjustments + day pacing.
 Data source: Open-Meteo forecasts with labeled AI seasonal estimates outside the forecast window.
+v2: Adds cultural fashion recommendations beyond temperature-only packing.
 Output shape: {"packing_list": [...], "weather_summary": str, "pacing_notes": str} (+ daily weather).
 """
 from services.weather_service import get_weather
@@ -33,7 +34,7 @@ def _metric(weather: dict, key: str) -> list[float]:
     return values
 
 
-def _fallback_packing(weather: dict, styles: list[str]) -> list[str]:
+def _fallback_packing(weather: dict, styles: list[str], destination: str = "") -> list[str]:
     items = ["Passport & travel documents", "Phone + charger / power bank", "Reusable water bottle"]
     highs = _metric(weather, "high_c")
     lows = _metric(weather, "low_c")
@@ -60,6 +61,29 @@ def _fallback_packing(weather: dict, styles: list[str]) -> list[str]:
     if "cultural" in normalized_styles:
         items.append("Modest layer for temples/shrines")
     items += ["Comfortable walking shoes", "Transit/IC card", "Small first-aid kit"]
+
+    # ---- Cultural fashion recommendations (v2) ----
+    if destination:
+        try:
+            from services.cultural_fashion_service import get_clothing_recommendations
+            cultural = get_clothing_recommendations(destination, weather)
+            # Add cultural dress code items
+            for dc in cultural.get("cultural_advice", {}).get("dress_codes", []):
+                rule = dc.get("rule", "")
+                if rule and "cover" in rule.lower():
+                    items.append("Modest clothing for religious sites (cover shoulders/knees)")
+                    break
+            # Add traditional wear suggestion if available
+            traditional = cultural.get("cultural_advice", {}).get("traditional_wear", "")
+            if traditional:
+                items.append(f"Option: {traditional}")
+            # Add shopping fashion notes
+            fashion = cultural.get("cultural_advice", {}).get("fashion_trends", "")
+            if fashion:
+                items.append(f"Style note: {fashion[:80]}")
+        except Exception:
+            pass  # Non-critical, skip cultural items if service fails
+
     return items
 
 
@@ -104,7 +128,7 @@ def run(trip_input: dict) -> dict:
         "weather": weather,
     })
 
-    required_packing = _fallback_packing(weather, styles)
+    required_packing = _fallback_packing(weather, styles, trip_input["location"])
     packing = _merge_packing((result or {}).get("packing_list"), required_packing)
     clearest_dates = _clearest_dates(weather)
     clear_date_note = (

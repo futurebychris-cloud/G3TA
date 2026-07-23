@@ -5,8 +5,9 @@ ZERO mock. ZERO urllib+regex web scraping. ALL web data comes from Playwright.
 What we do:
     1. LLM cost index via budget_service (DeepSeek estimates based on destination)
     2. Playwright search on Numbeo / travel cost sites for real market data
-    3. LLM allocation (preference-weighted split of total budget)
-    4. Fallback: deterministic weighted allocation IF LLM is completely unavailable
+    3. User travel history from shared_db for personalized allocation refinement
+    4. LLM allocation (preference-weighted split of total budget)
+    5. Fallback: deterministic weighted allocation IF LLM is completely unavailable
        (clearly labeled as "estimated", not scraped)
 
 The REAL per-item costs come from the specialist agents (transport, housing,
@@ -14,7 +15,7 @@ food, activity). This agent's job is budget ARCHITECTURE — how the total shoul
 be split — using the best available reference data.
 
 Output: {"daily_caps": {...}, "warnings": [...], "pie_data": [...],
-         "allocations": {...}, "web_search_costs": {...}}
+         "allocations": {...}, "web_search_costs": {...}, "user_history": {...}}
 """
 from __future__ import annotations
 
@@ -25,6 +26,7 @@ import time
 
 from .base import llm_reason, trip_days
 from services.budget_service import get_cost_index
+from services.neural_budget import neural_budget_allocation
 
 # --------------------------------------------------------------------------- #
 # Constants
@@ -254,6 +256,67 @@ def _weighted_allocate(total: float, weights: dict, cost_index: dict,
 
 
 # --------------------------------------------------------------------------- #
+# User travel history — queries shared DB for past spending patterns
+# --------------------------------------------------------------------------- #
+
+def _get_user_travel_history(num_trips: int = 5) -> dict:
+    """Query shared DB for user's past trip spending averages.
+    
+    Returns: {avg_food: float, avg_housing: float, avg_transport: float,
+              avg_activity: float, avg_total: float, num_trips_found: int}
+    or empty dict if no history.
+    """
+    try:
+        from booking.shared_db import _conn as _db_conn, _USE_POSTGRES, _PLACEHOLDER
+        with _db_conn() as db:
+            if _USE_POSTGRES:
+                db.execute(
+                    f"SELECT category, AVG(value) as avg_val, COUNT(*) as cnt "
+                    f"FROM shared_expenses GROUP BY category ORDER BY cnt DESC",
+                )
+                rows = db.fetchall()
+            else:
+                rows = db.execute(
+                    "SELECT category, AVG(value) as avg_val, COUNT(*) as cnt "
+                    "FROM shared_expenses GROUP BY category ORDER BY cnt DESC"
+                ).fetchall()
+        
+        if not rows:
+            return {}
+        
+        history = {}
+        cat_map = {
+            "dining": "food", "food": "food",
+            "hotel": "housing", "housing": "housing",
+            "transport": "transportation", "transportation": "transportation",
+            "activity": "activity",
+        }
+        total_spent = 0.0
+        for r in rows:
+            d = dict(r) if not isinstance(r, dict) else r
+            cat = d.get("category", "")
+            mapped = cat_map.get(cat, cat)
+            avg_val = float(d.get("avg_val", 0) or 0)
+            cnt = int(d.get("cnt", 0) or 0)
+            if avg_val > 0:
+                history[f"avg_{mapped}"] = round(avg_val, 2)
+                history[f"count_{mapped}"] = cnt
+                total_spent += avg_val
+        
+        if total_spent > 0:
+            history["avg_total"] = round(total_spent, 2)
+            history["num_trips_found"] = max(int(r.get("cnt", 0) or 0) for r in rows) if rows else 0
+        
+        if history:
+            print(f"[budget] user history found: {history.get('num_trips_found', 0)} past trips, "
+                  f"avg total {history.get('avg_total', 0):.0f}")
+        return history
+    except Exception as e:
+        print(f"[budget] user history query failed (non-fatal): {e}")
+        return {}
+
+
+# --------------------------------------------------------------------------- #
 # Main agent
 # --------------------------------------------------------------------------- #
 
@@ -281,53 +344,122 @@ def run(trip_input: dict, overflow: float | None = None) -> dict:
     if preferences.get("budget_priority"):
         weights = {**weights, **preferences.get("budget_priority", {})}
 
-    # LLM reasoning for smart allocation
+    # ---- NEW: Query user travel history from shared DB ----
+    user_history = _get_user_travel_history()
+    history_available = bool(user_history and user_history.get("num_trips_found", 0) > 0)
+
+    # ---- PRIMARY: Neural Network Budget Allocation ----
+    # Transport-first: prefer the REAL scraped transport cost (from the
+    # Transportation Agent, which the orchestrator runs BEFORE Budget) so the
+    # neural allocation is grounded in actual flight/train prices rather than a
+    # guess. This enforces "transportation MUST BE FIRST (especially the flight)".
+    flight_ref = index.get("flight_reference", total * 0.25)
+    real_transport = trip_input.get("_transport_cost")
+    if real_transport and float(real_transport) > 0:
+        flight_ref = float(real_transport)
+    neural_result = neural_budget_allocation(
+        destination=destination,
+        total_budget=total,
+        num_days=num_days,
+        flight_cost=flight_ref,
+        currency=currency,
+        cost_index=index.get("daily_index", {}),
+    )
+
+    # Blend neural network ratios with user history if available
+    if history_available:
+        history_ratios = {}
+        total_history_avg = user_history.get("avg_total", 1)
+        if total_history_avg > 0:
+            for cat in ["transportation", "housing", "food", "activity"]:
+                hkey = f"avg_{cat}"
+                if hkey in user_history:
+                    history_ratios[cat] = user_history[hkey] / total_history_avg
+        if history_ratios:
+            # Blend: 70% neural + 30% user history
+            blend = {}
+            all_cats = set(list(neural_result["ratios"].keys()) + list(history_ratios.keys()))
+            for cat in all_cats:
+                nn_val = neural_result["ratios"].get(cat, 0.05)
+                hist_val = history_ratios.get(cat, nn_val)
+                blend[cat] = round(nn_val * 0.7 + hist_val * 0.3, 4)
+            # Normalize to sum to 1.0
+            blend_sum = sum(blend.values())
+            if blend_sum > 0:
+                blend = {k: round(v / blend_sum, 4) for k, v in blend.items()}
+            neural_result["ratios"] = blend
+            neural_result["confidence"] = min(neural_result["confidence"] + 0.05, 1.0)
+            print(f"[budget] blended NN ratios with user history: {blend}")
+
+    print(f"[budget] Neural network allocation: ratios={neural_result['ratios']}, "
+          f"confidence={neural_result['confidence']}")
+
+    # LLM reasoning for smart refinement of neural allocation
     payload = {
         "total_budget": total, "currency": currency, "num_days": num_days,
         "destination": destination,
-        "estimated_flight_cost": index.get("flight_reference"),
+        "estimated_flight_cost": flight_ref,
         "destination_daily_cost_index": index["daily_index"],
         "web_scraped_costs": web_costs,
         "web_data_source": web_source,
         "cost_level": index.get("cost_level"),
         "preference_weights": weights,
         "all_preferences": preferences,
+        # Inject neural network results for LLM refinement
+        "neural_ratios": neural_result["ratios"],
+        "neural_daily_caps": neural_result["daily_caps"],
+        "neural_confidence": neural_result["confidence"],
+        # Inject user history for LLM awareness
+        "user_travel_history": user_history if history_available else None,
+        "instruction": (
+            "A neural network has pre-computed optimal budget ratios based on "
+            "real destination cost data. USE these ratios as your primary guidance. "
+            "Only adjust if user preferences strongly override or budget is too tight."
+            + (f" The user has {user_history.get('num_trips_found', 0)} past trips with "
+               f"average spending: food {user_history.get('avg_food', 0):.0f}, "
+               f"housing {user_history.get('avg_housing', 0):.0f}, "
+               f"transport {user_history.get('avg_transportation', 0):.0f}. "
+               f"Consider their spending habits when allocating."
+               if history_available else "")
+        ),
     }
     if overflow:
         payload["overflow_to_trim"] = overflow
-        payload["instruction"] = "Plan is OVER budget. Tighten daily caps to fit."
+        payload["instruction"] += " Plan is OVER budget. Tighten daily caps to fit."
 
     result = llm_reason(BUDGET_SYSTEM_PROMPT, payload)
 
-    # Build allocations
+    # Build allocations — neural network first, LLM refinement second
     if result and "allocations" in result:
         allocations = result["allocations"]
         daily_caps = result.get("daily_caps", {})
         warnings = result.get("warnings", [])
         reasoning = result.get("reasoning", "")
-        allocation_source = "llm_reasoned"
+        allocation_source = "neural_network_refined_by_llm"
     else:
-        allocations = _weighted_allocate(total, weights, index, num_days)
+        # Fallback to neural network directly
+        allocations = {
+            "transportation": flight_ref,
+            "housing": round(neural_result["daily_caps"].get("housing", 0) * num_days, 2),
+            "food": round(neural_result["daily_caps"].get("food", 0) * num_days, 2),
+            "activity": round(neural_result["daily_caps"].get("activity", 0) * num_days, 2),
+            "other": round((neural_result["daily_caps"].get("shopping", 0) + 5) * num_days, 2),
+        }
         daily_caps = {
-            "food": round(allocations.get("food", 0) / num_days, 2) if num_days else 0,
-            "activity": round(allocations.get("activity", 0) / num_days, 2) if num_days else 0,
-            "housing": round(allocations.get("housing", 0) / num_days, 2) if num_days else 0,
-            "local_transport": round(
-                index["daily_index"].get("local_transport", 18), 2
-            ),
+            "food": round(neural_result["daily_caps"].get("food", 0), 2),
+            "activity": round(neural_result["daily_caps"].get("activity", 0), 2),
+            "housing": round(neural_result["daily_caps"].get("housing", 0), 2),
+            "local_transport": round(neural_result["daily_caps"].get("local_transport", 18), 2),
         }
         warnings = []
-        if total < index.get("flight_reference", 0) * 1.5:
-            warnings.append(
-                f"Budget may be tight: {total:.0f} {currency} for "
-                f"{num_days} days in {destination}."
-            )
+        if total < flight_ref * 1.5:
+            warnings.append(f"Budget may be tight: {total:.0f} {currency} for {num_days} days in {destination}.")
         reasoning = (
-            f"Deterministic allocation (LLM unavailable) based on "
-            f"{destination} cost index. All amounts are ESTIMATES — "
-            f"verify with real-time booking sites."
+            f"Neural network allocation ({neural_result['confidence']*100:.0f}% confidence) "
+            f"based on {destination} cost data. "
+            f"LLM refinement unavailable — using pure neural network ratios."
         )
-        allocation_source = "deterministic_fallback"
+        allocation_source = "neural_network_direct"
 
     # Build pie chart data
     pie_data = _build_pie_data(allocations)
@@ -354,6 +486,8 @@ def run(trip_input: dict, overflow: float | None = None) -> dict:
         "reasoning": reasoning,
         "allocations": allocations,
         "pie_data": pie_data,
+        "neural_allocation": neural_result,
+        "ratios": neural_result["ratios"],
         "cost_index": index,
         "web_search_costs": web_costs,
         "web_search_source": web_source,
@@ -363,4 +497,5 @@ def run(trip_input: dict, overflow: float | None = None) -> dict:
         "currency": currency,
         "destination": destination,
         "trip_id": trip_id,
+        "user_history": user_history if history_available else None,
     }

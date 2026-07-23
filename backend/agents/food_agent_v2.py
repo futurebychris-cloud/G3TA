@@ -6,8 +6,15 @@ Upgraded from LLM-only estimates:
 3. Dish classification (main/starter/dessert/drink)
 4. Taste profile filtering & cost calculation
 5. Shared_meals database integration
+6. Meal slot consumption from Activity Agent handoff
+7. Filtering by popularity, preferences, budget constraints
+8. Popularity + cost comparison table for frontend
+9. Auto-ordering integration (restaurant booking via auto_book)
 
-Output: {"daily_meals": [...], "cost": number, "reasoning": str}
+Output: {
+    "daily_meals": [...], "cost": number, "reasoning": str,
+    "popularity_cost_table": [...], "pending_confirmation": [...]
+}
 """
 from __future__ import annotations
 import hashlib, json, re, time, urllib.parse
@@ -194,6 +201,27 @@ def _match_taste_profile(dish_name: str, cuisine: str, taste_prefs: list[str]) -
     return True
 
 
+# ---- Meal-slot proximity scoring ----
+
+def _meal_slot_proximity_score(restaurant: dict, activity_slot: dict) -> float:
+    """Score how well a restaurant matches an activity's meal slot (0-1).
+    
+    Higher score = better match (location proximity + slot alignment).
+    """
+    score = 0.5  # baseline
+    # Slot alignment: if restaurant meal_type matches the activity meal_slot
+    rtype = (restaurant.get("meal_type") or "dinner").lower()
+    aslot = (activity_slot.get("meal_slot") or "").lower()
+    if rtype in aslot:
+        score += 0.3
+    # Area match: restaurant in same area as activity
+    ra = (restaurant.get("area") or "").lower()
+    aa = (activity_slot.get("location") or "").lower()
+    if ra and aa and (ra in aa or aa in ra):
+        score += 0.2
+    return min(score, 1.0)
+
+
 # ---- Main agent ----
 
 def run(trip_input: dict) -> dict:
@@ -207,14 +235,53 @@ def run(trip_input: dict) -> dict:
     ).hexdigest()[:12])
     currency = trip_input["budget"].get("currency", "CNY")
 
-    # ---- Step 1: Try real Google Maps restaurant search ----
+    # ---- NEW: Read meal-slot handoff from Activity Agent ----
+    activity_meal_slots = trip_input.get("_activity_meal_slots", {})
+    if activity_meal_slots:
+        print(f"[food_agent] received meal slots for {len(activity_meal_slots)} day(s) from Activity Agent")
+    
+    # Extract daily food budget from budget agent allocations
+    budget_caps = trip_input.get("_budget_caps", {})
+    daily_food_cap = budget_caps.get("food", 0) if budget_caps else (food_budget / max(len(days), 1) if food_budget else 0)
+    total_food_budget = trip_input.get("_budget_allocations", {}).get("food", food_budget or 0)
+    print(f"[food_agent] daily food cap: {daily_food_cap:.0f} {currency}, total: {total_food_budget:.0f} {currency}")
+
+    # ---- Step 1: Try Gaode POI search (real restaurant data with prices) ----
     real_restaurants = []
-    target_cuisines = cuisine_tags if cuisine_tags else ["local", destination]
-    for cuisine in target_cuisines[:3]:  # Search top 3 cuisines
-        found = _search_google_maps_restaurants(destination, cuisine)
-        real_restaurants.extend(found)
-        if len(real_restaurants) >= 12:
-            break
+    try:
+        from services.gaode_service import search_restaurants as gaode_restaurants
+        target_cuisines = cuisine_tags if cuisine_tags else ["中餐"]
+        for cuisine in target_cuisines[:3]:
+            found = gaode_restaurants(destination, cuisine=cuisine, max_results=10)
+            for r in found:
+                real_restaurants.append({
+                    "name": r["name"],
+                    "cuisine_type": r.get("cuisine_type", cuisine),
+                    "rating": r.get("rating", 0),
+                    "price_level": r.get("price_level", 2),
+                    "estimated_price": r.get("avg_cost", 0) if r.get("avg_cost", 0) > 0 else r.get("price_level", 2) * 30,
+                    "source": "gaode_poi",
+                    "address": r.get("address", ""),
+                    "lat": r.get("lat", 0),
+                    "lng": r.get("lng", 0),
+                })
+            if len(real_restaurants) >= 15:
+                break
+        if real_restaurants:
+            # Filter out restaurants with unrealistic prices
+            real_restaurants = [r for r in real_restaurants if r.get("estimated_price", 0) < 5000]
+            print(f"[food_agent] Gaode POI: {len(real_restaurants)} restaurants with real ratings+avg_cost")
+    except Exception as e:
+        print(f"[food_agent] Gaode POI search failed: {e}")
+
+    # ---- Step 1b: Fall back to Google Maps if Gaode returned nothing ----
+    if len(real_restaurants) < 5:
+        target_cuisines = cuisine_tags if cuisine_tags else ["local", destination]
+        for cuisine in target_cuisines[:3]:
+            found = _search_google_maps_restaurants(destination, cuisine)
+            real_restaurants.extend(found)
+            if len(real_restaurants) >= 12:
+                break
 
     # ---- Step 2: Get LLM food options as fallback/enrichment ----
     all_options = get_food_options(
@@ -225,22 +292,25 @@ def run(trip_input: dict) -> dict:
         time_constraints=trip_input.get("time_constraints", ""),
     )
 
-    # Merge real results with LLM options
+    # Merge real results with LLM options (real data takes priority)
     enriched_options = list(all_options)
     existing_names = {o["name"].casefold() for o in enriched_options}
     for r in real_restaurants:
         if r["name"].casefold() not in existing_names:
+            source = r.get("source", "google_maps")
             enriched_options.append({
-                "id": f"food_google_{len(enriched_options)}",
+                "id": f"food_real_{len(enriched_options)}",
                 "name": r["name"],
                 "cuisine": r.get("cuisine_type", "Local"),
                 "cuisine_family": r.get("cuisine_type", "Local"),
                 "price": r.get("estimated_price", 30),
-                "meal_type": "dinner",  # default; will be adjusted
-                "area": destination,
+                "meal_type": "dinner",
+                "area": r.get("address", destination),
                 "rating": r.get("rating", 0),
-                "tags": [r.get("cuisine_type", "local").lower(), "google_maps"],
-                "source": "google_maps",
+                "tags": [r.get("cuisine_type", "local").lower(), source],
+                "source": source,
+                "lat": r.get("lat"),
+                "lng": r.get("lng"),
             })
 
     # ---- Step 3: Scrape menus for top restaurants ----
@@ -260,12 +330,29 @@ def run(trip_input: dict) -> dict:
     eligible = matched or enriched_options
     used_preference_fallback = bool(cuisine_tags and not matched)
 
+    # ---- NEW Step 4b: Filter by popularity threshold ----
+    MIN_POPULARITY = 3.0  # minimum rating to consider
+    popularity_filtered = [o for o in eligible if o.get("rating", 0) >= MIN_POPULARITY]
+    if popularity_filtered:
+        eligible = popularity_filtered
+    else:
+        print(f"[food_agent] no restaurants above rating {MIN_POPULARITY}, using all eligible")
+
+    # ---- NEW Step 4c: Apply budget filter ----
+    if daily_food_cap > 0:
+        max_per_meal = daily_food_cap / len(_SLOTS) * 1.5  # allow some meals above average
+        budget_filtered = [o for o in eligible if o.get("price", 0) <= max_per_meal * 2]
+        if budget_filtered:
+            eligible = budget_filtered
+            print(f"[food_agent] budget-filtered to {len(eligible)} restaurants (max ~{max_per_meal:.0f}/meal)")
+
     # ---- Step 5: LLM meal planning ----
     result = llm_reason(
         "You are the Food Agent (Taste Editor). Build a meal plan from ONLY the supplied options. "
         "The traveler's selected_cuisines are ordered by preference; honor them strongly. "
         "Balance cost against the total trip budget, respect meal slots, and do not repeat a venue "
         "while unused eligible choices remain. Every venue must be in the exact destination. "
+        "Also use activity_meal_slots to match restaurants near each activity's location & time. "
         "Return ONLY JSON: {meal_plan: [{date, meals: [{slot, option_id, dish_name, dish_category}]}], reasoning}.",
         {
             "destination": destination,
@@ -277,11 +364,13 @@ def run(trip_input: dict) -> dict:
             "all_preferences": trip_input.get("preferences", {}),
             "eligible_options": eligible,
             "dish_map": {k: v for k, v in list(dish_map.items())[:10]},
+            "activity_meal_slots": activity_meal_slots,
+            "daily_food_cap": daily_food_cap,
         },
     )
 
-    # ---- Step 6: Build daily meal plan ----
-    # Slots per day
+    # ---- Step 6: Build daily meal plan with meal-slot proximity ----
+    # Slots per day, sorted by meal-slot proximity to activities
     buckets = {slot: [o for o in eligible if o["meal_type"] == slot] for slot in _SLOTS}
     for slot in _SLOTS:
         if not buckets[slot]:
@@ -311,8 +400,22 @@ def run(trip_input: dict) -> dict:
 
     for day_idx, day in enumerate(days):
         meals = []
+        day_slots = activity_meal_slots.get(day, [])
+        
         for slot_idx, slot in enumerate(_SLOTS):
             pool = buckets[slot]
+            
+            # NEW: Bias selection toward restaurants near activity locations
+            matching_activity = None
+            for aslot in day_slots:
+                if slot in (aslot.get("meal_slot") or ""):
+                    matching_activity = aslot
+                    break
+            
+            if matching_activity and pool:
+                scored = [(o, _meal_slot_proximity_score(o, matching_activity)) for o in pool]
+                scored.sort(key=lambda x: x[1], reverse=True)
+                pool = [o for o, _ in scored]
 
             # Get model pick or fallback
             pick = model_picks.get((day, slot))
@@ -327,6 +430,10 @@ def run(trip_input: dict) -> dict:
 
             if not option or option["id"] in used_ids:
                 unused = [o for o in pool if o["id"] not in used_ids]
+                if not unused:
+                    # Not enough unique restaurants for every slot — allow reuse
+                    # (soft constraint) so every day still gets all 3 meals.
+                    unused = pool
                 if unused:
                     option = unused[meal_index % len(unused)]
 
@@ -349,6 +456,8 @@ def run(trip_input: dict) -> dict:
                     dish_category = _classify_dish_category(dish_name)
 
                 price = option.get("price", 25)
+                rating = option.get("rating", 0)
+                
                 meals.append({
                     "slot": slot,
                     "name": dish_name,
@@ -357,13 +466,41 @@ def run(trip_input: dict) -> dict:
                     "dish_category": dish_category,
                     "price": price,
                     "area": option.get("area", destination),
+                    "rating": rating,
+                    "popularity_score": round(rating * 1.0, 1),
                     "source": option.get("source", "llm"),
+                    "near_activity": matching_activity.get("activity_name", "") if matching_activity else "",
+                    "lat": option.get("lat"),
+                    "lng": option.get("lng"),
                 })
                 total += price
 
             meal_index += 1
 
         daily_meals.append({"date": day, "meals": meals})
+
+    # ---- NEW Step 6b: Build popularity + cost comparison table ----
+    popularity_cost_table = []
+    all_restaurants_seen = set()
+    for daily in daily_meals:
+        for m in daily["meals"]:
+            key = m["restaurant"]
+            if key not in all_restaurants_seen:
+                all_restaurants_seen.add(key)
+                popularity_cost_table.append({
+                    "restaurant": m["restaurant"],
+                    "cuisine": m["cuisine"],
+                    "dish": m["name"],
+                    "dish_category": m["dish_category"],
+                    "price": m["price"],
+                    "rating": m.get("rating", 0),
+                    "popularity_score": m.get("popularity_score", 0),
+                    "source": m.get("source", "llm"),
+                    "area": m.get("area", ""),
+                })
+    # Sort by popularity_score descending
+    popularity_cost_table.sort(key=lambda r: r["popularity_score"], reverse=True)
+    print(f"[food_agent] generated popularity+cost table: {len(popularity_cost_table)} unique restaurants")
 
     # ---- Step 7: Store to shared database ----
     try:
@@ -381,13 +518,31 @@ def run(trip_input: dict) -> dict:
                     dish_name=m["name"],
                     dish_category=m.get("dish_category", ""),
                     dish_price=m["price"],
-                    dish_popularity=7.0 if m.get("source") == "google_maps" else 5.0,
+                    dish_popularity=m.get("popularity_score", 5.0),
                     currency=currency,
                     status="confirmed",
                 )
         print(f"[food_agent] saved {sum(len(d['meals']) for d in daily_meals)} meals to shared DB")
     except Exception as e:
         print(f"[food_agent] DB save failed (non-fatal): {e}")
+
+    # ---- NEW Step 8: Build pending_confirmation list for frontend ----
+    pending_confirmation = []
+    for daily in daily_meals:
+        for m in daily["meals"]:
+            pending_confirmation.append({
+                "date": daily["date"],
+                "slot": m["slot"],
+                "restaurant": m["restaurant"],
+                "dish": m["name"],
+                "dish_category": m["dish_category"],
+                "price": m["price"],
+                "currency": currency,
+                "popularity_score": m.get("popularity_score", 0),
+                "area": m.get("area", ""),
+                "near_activity": m.get("near_activity", ""),
+                "confirmed": False,  # frontend sets this to True on user confirmation
+            })
 
     # ---- Build output ----
     chosen_cuisines = []
@@ -397,10 +552,15 @@ def run(trip_input: dict) -> dict:
                 chosen_cuisines.append(meal["cuisine"])
 
     real_count = sum(1 for d in daily_meals for m in d["meals"] if m.get("source") == "google_maps")
+    slot_info = (
+        f"Meal slots from Activity Agent: {len(activity_meal_slots)} day(s) used. "
+        if activity_meal_slots else ""
+    )
     reasoning = (
         f"Planned {len(days)*3} meals across {len(days)} day(s) in {destination}. "
         f"{real_count} meals sourced from Google Maps, "
         f"{len(dish_map)} menus scraped for dish details. "
+        f"{slot_info}"
         f"Total food estimate: {total:.0f} {currency}. "
         f"Cuisines: {', '.join(chosen_cuisines[:5])}."
     ) if not used_preference_fallback else (
@@ -415,4 +575,7 @@ def run(trip_input: dict) -> dict:
         "destination": destination,
         "verification_required": True,
         "trip_id": trip_id,
+        "popularity_cost_table": popularity_cost_table,
+        "pending_confirmation": pending_confirmation,
+        "meal_slots_used": bool(activity_meal_slots),
     }

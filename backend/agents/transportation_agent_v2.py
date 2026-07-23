@@ -22,7 +22,6 @@ import time
 import urllib.parse
 
 from .base import llm_reason, trip_days
-from .transportation_agent import _route_metadata
 
 # --------------------------------------------------------------------------- #
 # Constants
@@ -478,11 +477,6 @@ def run(trip_input: dict) -> dict:
         f"{origin}{destination}{dates['start']}".encode()).hexdigest()[:12])
     preferences = trip_input.get("preferences", {})
     transport_types = preferences.get("transportation_type", []) if isinstance(preferences, dict) else []
-    requested_modes = [
-        str(mode).strip().lower()
-        for mode in transport_types
-        if str(mode).strip()
-    ] or ["flight"]
 
     scope = _detect_scope(origin, destination)
     errors: list[str] = []
@@ -504,7 +498,9 @@ def run(trip_input: dict) -> dict:
             from services.train12306_service import search_trains as search_12306
             trains_12306 = search_12306(origin, destination, dates["start"])
             if trains_12306:
+                real_price_count = sum(1 for t in trains_12306 if "real_price" in t.get("source", ""))
                 for t in trains_12306:
+                    source_label = t.get("source", "12306_live")
                     all_options.append({
                         "id": f"12306_{t['train_no']}",
                         "type": "train",
@@ -521,9 +517,11 @@ def run(trip_input: dict) -> dict:
                         "seats_second": t["seats_second"],
                         "currency": "CNY",
                         "stops": 0,
-                        "source": "12306_live",
+                        "source": source_label,
                     })
-                print(f"[transport] 12306: {len(trains_12306)} trains")
+                print(f"[transport] 12306: {len(trains_12306)} trains "
+                      f"({real_price_count} with real prices, "
+                      f"{len(trains_12306) - real_price_count} estimated)")
         except Exception as e:
             print(f"[transport] 12306 failed: {e}")
 
@@ -554,17 +552,6 @@ def run(trip_input: dict) -> dict:
             "errors": errors,
             "verification_required": True,
             "trip_id": trip_id,
-            "route_points": [],
-            "route_summary": {
-                "mode": requested_modes[0],
-                "origin": origin,
-                "destination": destination,
-            },
-            "coverage": {
-                "requested_modes": requested_modes,
-                "available_modes": [],
-                "note": "No live transportation option was available for the requested route.",
-            },
             "error_message": (
                 f"Could not find any real transport options for "
                 f"{origin} → {destination} on {dates['start']}. "
@@ -620,71 +607,44 @@ def run(trip_input: dict) -> dict:
         local_est = sum(l["estimated_cost_per_day"] * 0.3 for l in local)
         local_total = round(local_est * len(days), 2)
 
-    # ---- Phase 6: Store to database ----
+    # ---- Phase 6: Auto-booking ----
+    booking_result = None
+    try:
+        from booking.auto_book import book_item
+        ttype = recommended.get("type", "flight")
+        if ttype == "flight":
+            booking_result = book_item("flight", origin=origin, destination=destination,
+                date=dates["start"], adults=trip_input.get("num_people", 1))
+        elif ttype == "train":
+            booking_result = book_item("train", origin=origin, destination=destination,
+                date=dates["start"], train=recommended.get("train_number", ""),
+                adults=trip_input.get("num_people", 1))
+    except Exception as e:
+        booking_result = {"status": "manual_required", "message": str(e)}
+
+    # ---- Phase 7: Store to database ----
+    bref = booking_result.get("order_no") if booking_result else None
+    bstat = "pending_payment" if booking_result and booking_result.get("status") == "pending_payment" else "pending"
     try:
         from booking.shared_db import save_transport
-        save_transport(
-            trip_id=trip_id,
-            transport_type=recommended.get("type", "flight"),
-            scope=scope,
-            from_location=origin,
-            to_location=destination,
+        save_transport(trip_id=trip_id, transport_type=recommended.get("type", "flight"),
+            scope=scope, from_location=origin, to_location=destination,
             departure_time=f"{dates['start']} {recommended.get('departure_time', '08:00')}",
             arrival_time=f"{dates['start']} {recommended.get('arrival_time', '10:00')}",
-            carrier=recommended.get("carrier", ""),
-            flight_number=recommended.get("flight_number", ""),
-            train_number=recommended.get("train_number", ""),
-            price=cost,
-            currency=recommended.get("currency", "CNY"),
-            booking_status="pending",
-        )
+            carrier=recommended.get("carrier", ""), flight_number=recommended.get("flight_number", ""),
+            train_number=recommended.get("train_number", ""), price=cost,
+            currency=recommended.get("currency", "CNY"), booking_status=bstat, booking_ref=bref or "")
     except Exception as e:
         print(f"[transport] DB save failed: {e}")
 
-    reasoning_parts = []
-    if recommended.get("carrier"):
-        reasoning_parts.append(f"{recommended['carrier']}")
-    if recommended.get("flight_number"):
-        reasoning_parts.append(recommended["flight_number"])
-    if recommended.get("train_number"):
-        reasoning_parts.append(recommended["train_number"])
-    reasoning_parts.append(f"¥{cost}")
-    reasoning = "Best route: " + " ".join(reasoning_parts)
-
-    route_option = {
-        **recommended,
-        "mode": recommended.get("mode") or recommended.get("type") or "flight",
-    }
-    route_points, route_summary = _route_metadata(origin, destination, route_option)
-    available_modes = list(dict.fromkeys(
-        str(option.get("mode") or option.get("type") or "flight").strip().lower()
-        for option in all_options
-        if str(option.get("mode") or option.get("type") or "flight").strip()
-    ))
-    unsupported_modes = [mode for mode in requested_modes if mode not in available_modes]
+    reasoning = "Best route: " + " ".join(filter(None, [
+        recommended.get("carrier", ""), recommended.get("flight_number", ""),
+        recommended.get("train_number", ""), f"¥{cost}"]))
 
     return {
-        "options": all_options,
-        "recommended": recommended,
-        "cost": cost,
-        "local_transport_cost": local_total,
-        "local_transport_options": local,
-        "scope": scope,
-        "reasoning": reasoning,
-        "destination": destination,
-        "scrape_status": scrape_status,
-        "errors": errors,
-        "verification_required": True,
-        "trip_id": trip_id,
-        "route_points": route_points,
-        "route_summary": route_summary,
-        "coverage": {
-            "requested_modes": requested_modes,
-            "available_modes": available_modes,
-            "note": (
-                "No live option was available for: "
-                f"{', '.join(unsupported_modes)}. Verify with another provider."
-                if unsupported_modes else None
-            ),
-        },
+        "options": all_options, "recommended": recommended, "cost": cost,
+        "local_transport_cost": local_total, "local_transport_options": local,
+        "scope": scope, "reasoning": reasoning, "destination": destination,
+        "scrape_status": scrape_status, "errors": errors,
+        "booking_result": booking_result, "verification_required": True, "trip_id": trip_id,
     }

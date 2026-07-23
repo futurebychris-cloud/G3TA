@@ -1,7 +1,8 @@
 """Budget Agent.
 
 Responsibility (PRD §7): track running total, flag overspend, allocate per-category caps.
-Data source: destination-aware AI cost estimates.
+Data source: Numbeo real cost data + Neural Network optimal allocation.
+v2: Uses neural_budget for initial ratio prediction, Numbeo for real price data.
 Output shape: {"daily_caps": {...}, "warnings": [...]} (+ reasoning & context fields).
 """
 import math
@@ -16,13 +17,13 @@ SYSTEM_PROMPT = (
     "You are given: total budget, currency, number of days, an estimated round-trip flight "
     "cost, and a per-day cost index for the destination. "
     "Return ONLY a JSON object with keys: "
-    "daily_caps (object with numeric keys food, activity, housing, local_transport), "
+    "daily_caps (object with numeric keys food, activity, housing, local_transport, shopping), "
     "warnings (array of short strings), and reasoning (one or two sentences explaining the split). "
     "Caps are per day and must be realistic for the destination and budget. If the budget is too "
     "low to cover flights plus a reasonable daily spend, say so clearly in warnings."
 )
 
-_CAP_KEYS = ("food", "activity", "housing", "local_transport")
+_CAP_KEYS = ("food", "activity", "housing", "local_transport", "shopping")
 
 
 def _deterministic_caps(total: float, num_days: int, index: dict) -> dict:
@@ -67,9 +68,10 @@ def _normalize_caps(
         try:
             value = float(raw_caps.get(key))
         except (TypeError, ValueError):
-            return fallback
+            # Missing key in LLM output — use fallback value
+            value = float(fallback.get("daily_caps", {}).get(key, 0))
         if not math.isfinite(value) or value < 0:
-            return fallback
+            value = float(fallback.get("daily_caps", {}).get(key, 0))
         caps[key] = round(value, 2)
 
     flight_reference = max(float(index.get("flight_reference", 0)), 0)
@@ -109,34 +111,71 @@ def run(trip_input: dict, overflow: float | None = None) -> dict:
         currency,
     )
 
-    payload = {
-        "total_budget": total,
-        "currency": currency,
-        "num_days": num_days,
-        "estimated_flight_cost": index.get("flight_reference"),
-        "destination_daily_cost_index": index["daily_index"],
-        "cost_level": index.get("cost_level"),
-        "destination": trip_input["location"],
-        "origin": trip_input.get("origin", ""),
-        "dates": trip_input["dates"],
-        "all_preferences": trip_input.get("preferences", {}),
-        "time_constraints": trip_input.get("time_constraints", ""),
-    }
-    if overflow:
-        payload["overflow_to_trim"] = overflow
-        payload["instruction"] = (
-            "The current plan is OVER budget by the overflow_to_trim amount. Tighten the "
-            "daily caps so the trip fits, and add a warning naming what had to give."
+    # ---- Neural Network budget allocation (v2) ----
+    neural_result = None
+    try:
+        from services.neural_budget import neural_budget_allocation
+        neural_result = neural_budget_allocation(
+            destination=trip_input["location"],
+            total_budget=total,
+            num_days=num_days,
+            flight_cost=index.get("flight_reference", 0),
+            currency=currency,
+            cost_index=index,
         )
+        print(f"[budget_agent] neural network allocation: "
+              f"confidence={neural_result['confidence']}, "
+              f"ratios={neural_result['ratios']}")
+    except Exception as e:
+        print(f"[budget_agent] neural allocation failed, using LLM: {e}")
 
-    result = llm_reason(SYSTEM_PROMPT, payload)
-    fallback = _deterministic_caps(total, num_days, index)
-    if not result:
-        result = fallback
-        result["reasoning"] = "Deterministic proportional split (LLM reasoning unavailable)."
+    # If neural network has high confidence, use it directly
+    if neural_result and neural_result.get("confidence", 0) >= 0.65:
+        daily_caps = neural_result["daily_caps"]
+        result = {
+            "daily_caps": daily_caps,
+            "warnings": [],
+            "reasoning": (
+                f"Neural network optimized allocation (confidence: "
+                f"{neural_result['confidence']:.0%}) based on {index.get('cost_level', 'moderate')} "
+                f"cost level in {trip_input['location']}."
+            ),
+            "neural_allocation": neural_result,
+        }
     else:
-        result = _normalize_caps(result, fallback, total, num_days, index)
-        result.setdefault("reasoning", "Daily category limits calculated from the total trip budget.")
+        # Fall back to LLM + deterministic allocation
+        payload = {
+            "total_budget": total,
+            "currency": currency,
+            "num_days": num_days,
+            "estimated_flight_cost": index.get("flight_reference"),
+            "destination_daily_cost_index": index["daily_index"],
+            "cost_level": index.get("cost_level"),
+            "destination": trip_input["location"],
+            "origin": trip_input.get("origin", ""),
+            "dates": trip_input["dates"],
+            "all_preferences": trip_input.get("preferences", {}),
+            "time_constraints": trip_input.get("time_constraints", ""),
+        }
+        if overflow:
+            payload["overflow_to_trim"] = overflow
+            payload["instruction"] = (
+                "The current plan is OVER budget by the overflow_to_trim amount. Tighten the "
+                "daily caps so the trip fits, and add a warning naming what had to give."
+            )
+
+        result = llm_reason(SYSTEM_PROMPT, payload)
+        fallback = _deterministic_caps(total, num_days, index)
+        if not result:
+            result = fallback
+            result["reasoning"] = "Deterministic proportional split (LLM reasoning unavailable)."
+        else:
+            result = _normalize_caps(result, fallback, total, num_days, index)
+            result.setdefault("reasoning", "Daily category limits calculated from the total trip budget.")
+
+        # Attach neural result for reference even when not used
+        if neural_result:
+            result["neural_allocation"] = neural_result
 
     result.setdefault("warnings", [])
     if overflow and not any("trim" in w.lower() or "over" in w.lower() for w in result["warnings"]):

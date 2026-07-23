@@ -390,6 +390,466 @@ def get_local_transport(city: str, num_days: int = 1,
 
 
 # ---------------------------------------------------------------------------
+# Gaode POI Search — Real restaurant & attraction data
+# ---------------------------------------------------------------------------
+
+def search_restaurants(
+    city: str,
+    keywords: str = "",
+    cuisine: str = "",
+    max_results: int = 15,
+) -> list[dict]:
+    """Search restaurants via Gaode POI API with real ratings and price data.
+
+    Uses Gaode's POI (Point of Interest) search API:
+        GET https://restapi.amap.com/v3/place/text?keywords=...&types=餐饮&city=...
+
+    Returns list of restaurant dicts with real data:
+        {name, address, rating, price_level, cuisine_type, lat, lng, source}
+    """
+    if not GAODE_KEY:
+        return _fallback_restaurant_search(city, keywords, cuisine, max_results)
+
+    try:
+        search_keywords = keywords or cuisine or f"{city} 美食"
+        types_code = "050000|060000"  # 餐饮 + 购物(含美食广场)
+
+        url = (
+            f"{GAODE_BASE}/place/text?"
+            + urllib.parse.urlencode({
+                "key": GAODE_KEY,
+                "keywords": search_keywords,
+                "types": types_code,
+                "city": city,
+                "citylimit": "true",
+                "offset": min(max_results, 25),
+                "page": 1,
+                "extensions": "all",
+                "output": "JSON",
+            })
+        )
+        req = urllib.request.Request(url, headers={"User-Agent": "G3TA/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = json.loads(r.read())
+
+        if data.get("status") != "1":
+            print(f"[gaode] POI search failed: {data.get('info', 'unknown')}")
+            return _fallback_restaurant_search(city, keywords, cuisine, max_results)
+
+        pois = data.get("pois", [])
+        if not pois:
+            return _fallback_restaurant_search(city, keywords, cuisine, max_results)
+
+        restaurants = []
+        for poi in pois:
+            name = poi.get("name", "")
+            if not name:
+                continue
+
+            # Gaode POI fields
+            address = poi.get("address", "")
+            rating_str = poi.get("biz_ext", {}).get("rating", "0")
+            cost_str = poi.get("biz_ext", {}).get("cost", "0")
+            typecode = poi.get("typecode", "")
+
+            # Parse rating
+            try:
+                rating = float(rating_str)
+            except (ValueError, TypeError):
+                rating = 0
+
+            # Parse average cost per person
+            try:
+                avg_cost = float(cost_str) if cost_str else 0
+            except (ValueError, TypeError):
+                avg_cost = 0
+
+            # Determine cuisine type from POI type code
+            cuisine_type = _classify_cuisine_from_typecode(typecode, cuisine)
+
+            # Parse location
+            location = poi.get("location", "")
+            lat, lng = 0.0, 0.0
+            if location and "," in location:
+                parts = location.split(",")
+                try:
+                    lng = float(parts[0])
+                    lat = float(parts[1])
+                except (ValueError, IndexError):
+                    pass
+
+            # Parse deep-info (photos, business hours, phone)
+            deep_info = poi.get("deep_info", {}) or {}
+            photos = []
+            for photo_item in deep_info.get("photos", [])[:3]:
+                if isinstance(photo_item, dict) and photo_item.get("url"):
+                    photos.append(photo_item["url"])
+
+            restaurants.append({
+                "name": name,
+                "address": address,
+                "cuisine_type": cuisine_type,
+                "rating": round(rating, 1),
+                "avg_cost": round(avg_cost, 0),
+                "price_level": _cost_to_price_level(avg_cost),
+                "lat": lat,
+                "lng": lng,
+                "photos": photos,
+                "source": "gaode_poi",
+                "city": city,
+            })
+
+        # Sort by rating descending
+        restaurants.sort(key=lambda r: r["rating"], reverse=True)
+        restaurants = restaurants[:max_results]
+
+        print(f"[gaode] POI search: {len(restaurants)} restaurants in {city} "
+              f"(avg rating: {sum(r['rating'] for r in restaurants)/max(len(restaurants),1):.1f})")
+        return restaurants
+
+    except Exception as e:
+        print(f"[gaode] POI restaurant search failed: {e}")
+        return _fallback_restaurant_search(city, keywords, cuisine, max_results)
+
+
+def _cost_to_price_level(avg_cost: float) -> int:
+    """Convert average cost per person to price level (1-4)."""
+    if avg_cost <= 0:
+        return 2
+    if avg_cost < 50:
+        return 1
+    if avg_cost < 120:
+        return 2
+    if avg_cost < 250:
+        return 3
+    return 4
+
+
+def _classify_cuisine_from_typecode(typecode: str, default_cuisine: str) -> str:
+    """Classify cuisine type from Gaode POI type code."""
+    code = typecode.lower() if typecode else ""
+    cuisine_map = {
+        "050100": "中餐厅", "050101": "中餐厅", "050102": "中餐厅",
+        "050200": "外国餐厅", "050201": "西餐", "050202": "日韩料理",
+        "050300": "小吃快餐", "050400": "咖啡厅", "050500": "茶艺馆",
+        "050600": "冷饮店", "050700": "糕饼店", "050800": "甜品店",
+        "060100": "火锅", "060200": "烧烤", "060300": "自助餐",
+        "060400": "海鲜", "060500": "私房菜",
+    }
+    for key, val in cuisine_map.items():
+        if code.startswith(key):
+            return val
+    # Fall back to extracting keywords
+    code_lower = code.lower()
+    for kw, label in [
+        ("hotpot", "火锅"), ("bbq", "烧烤"), ("western", "西餐"),
+        ("japanese", "日料"), ("korean", "韩餐"), ("seafood", "海鲜"),
+        ("cafe", "咖啡"), ("buffet", "自助"), ("noodle", "面食"),
+        ("sushi", "日料"), ("pizza", "西餐"),
+    ]:
+        if kw in code_lower:
+            return label
+    return default_cuisine or "中餐厅"
+
+
+def _fallback_restaurant_search(
+    city: str, keywords: str = "", cuisine: str = "", max_results: int = 10
+) -> list[dict]:
+    """Fallback restaurant search using OSM Nominatim when Gaode key is unavailable."""
+    restaurants = []
+    try:
+        query = f"restaurant {cuisine or keywords or ''} {city}"
+        url = (
+            "https://nominatim.openstreetmap.org/search?"
+            + urllib.parse.urlencode({
+                "q": query.strip(),
+                "format": "json",
+                "limit": max_results,
+                "addressdetails": 1,
+                "namedetails": 1,
+            })
+        )
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "G3TA/1.0 (trip planner)",
+            "Accept-Language": "zh-CN,zh;q=0.9",
+        })
+        with urllib.request.urlopen(req, timeout=10) as r:
+            results = json.loads(r.read())
+
+        for item in results:
+            name = (item.get("namedetails", {}) or {}).get("name") or item.get("display_name", "").split(",")[0]
+            lat = float(item.get("lat", 0))
+            lon = float(item.get("lon", 0))
+            if name and lat and lon:
+                restaurants.append({
+                    "name": name.strip(),
+                    "address": item.get("display_name", ""),
+                    "cuisine_type": cuisine or "Local",
+                    "rating": 0,
+                    "avg_cost": 0,
+                    "price_level": 2,
+                    "lat": lat,
+                    "lng": lon,
+                    "photos": [],
+                    "source": "osm_fallback",
+                    "city": city,
+                })
+    except Exception as e:
+        print(f"[gaode] OSM fallback search failed: {e}")
+
+    return restaurants
+
+
+def search_attraction_pois(
+    city: str,
+    keywords: str = "",
+    max_results: int = 10,
+) -> list[dict]:
+    """Search attractions/tourist sites via Gaode POI API.
+
+    Returns list with: {name, address, rating, ticket_price, lat, lng, source}
+    """
+    if not GAODE_KEY:
+        return []
+
+    try:
+        search_keywords = keywords or f"{city} 景点"
+        url = (
+            f"{GAODE_BASE}/place/text?"
+            + urllib.parse.urlencode({
+                "key": GAODE_KEY,
+                "keywords": search_keywords,
+                "types": "110000|120000|140000|170000",  # 风景名胜|公园|纪念馆|旅游景点
+                "city": city,
+                "citylimit": "true",
+                "offset": min(max_results, 25),
+                "page": 1,
+                "extensions": "all",
+                "output": "JSON",
+            })
+        )
+        req = urllib.request.Request(url, headers={"User-Agent": "G3TA/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = json.loads(r.read())
+
+        if data.get("status") != "1":
+            return []
+
+        pois = data.get("pois", [])
+        attractions = []
+        for poi in pois:
+            name = poi.get("name", "")
+            if not name:
+                continue
+
+            rating_str = poi.get("biz_ext", {}).get("rating", "0")
+            try:
+                rating = float(rating_str)
+            except (ValueError, TypeError):
+                rating = 0
+
+            # Try to get ticket price from deep_info or biz_ext
+            ticket_price = 0
+            biz_ext = poi.get("biz_ext", {}) or {}
+            deep_info = poi.get("deep_info", {}) or {}
+
+            # Check for ticket price in various fields
+            for price_field in ["ticket_price", "cost", "price", "admission"]:
+                val = biz_ext.get(price_field, "") or deep_info.get(price_field, "")
+                if val:
+                    try:
+                        ticket_price = float(str(val).replace("¥", "").replace(",", ""))
+                        break
+                    except (ValueError, TypeError):
+                        pass
+
+            location = poi.get("location", "")
+            lat, lng = 0.0, 0.0
+            if location and "," in location:
+                parts = location.split(",")
+                try:
+                    lng = float(parts[0])
+                    lat = float(parts[1])
+                except (ValueError, IndexError):
+                    pass
+
+            attractions.append({
+                "name": name,
+                "address": poi.get("address", ""),
+                "rating": round(rating, 1),
+                "ticket_price": round(ticket_price, 0),
+                "lat": lat,
+                "lng": lng,
+                "source": "gaode_poi",
+                "city": city,
+                "place_id": poi.get("id", ""),
+            })
+
+        attractions.sort(key=lambda a: a["rating"], reverse=True)
+        return attractions[:max_results]
+
+    except Exception as e:
+        print(f"[gaode] POI attraction search failed: {e}")
+        return []
+
+
+def get_route_path(
+    origin_lat: float, origin_lng: float,
+    dest_lat: float, dest_lng: float,
+    mode: str = "driving",
+) -> list[tuple[float, float]] | None:
+    """Get the actual route polyline path between two points via Gaode API.
+
+    Used for rendering real road routes on the frontend map (not straight lines).
+
+    Args:
+        origin_lat/lng: Starting point
+        dest_lat/lng: Destination
+        mode: "driving", "walking", "transit"
+
+    Returns:
+        List of (lat, lng) coordinate pairs tracing the route path, or None on failure.
+    """
+    if not GAODE_KEY:
+        return None
+
+    try:
+        direction_type = mode if mode in ("driving", "walking", "transit") else "driving"
+        url = (
+            f"{GAODE_BASE}/direction/{direction_type}?"
+            + urllib.parse.urlencode({
+                "key": GAODE_KEY,
+                "origin": f"{origin_lng},{origin_lat}",
+                "destination": f"{dest_lng},{dest_lat}",
+                "strategy": "0",
+                "output": "JSON",
+            })
+        )
+        req = urllib.request.Request(url, headers={"User-Agent": "G3TA/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = json.loads(r.read())
+
+        if data.get("status") != "1":
+            print(f"[gaode] routing failed: {data.get('info', 'unknown')}")
+            return None
+
+        route = data.get("route", {})
+        paths = route.get("paths", [])
+        if not paths:
+            return None
+
+        # Get the polyline from the first path
+        steps = paths[0].get("steps", [])
+        if not steps:
+            return None
+
+        # Gaode returns encoded polylines per step — decode them
+        all_points: list[tuple[float, float]] = []
+        for step in steps:
+            polyline = step.get("polyline", "")
+            if polyline:
+                points = _decode_gaode_polyline(polyline, origin_lat, origin_lng, dest_lat, dest_lng)
+                all_points.extend(points)
+
+        if all_points:
+            print(f"[gaode] route path: {len(all_points)} points, "
+                  f"{paths[0].get('distance', '?')}m, {paths[0].get('duration', '?')}s")
+            return all_points
+
+        return None
+
+    except Exception as e:
+        print(f"[gaode] route path query failed: {e}")
+        return None
+
+
+def _decode_gaode_polyline(
+    polyline: str,
+    o_lat: float, o_lng: float,
+    d_lat: float, d_lng: float,
+) -> list[tuple[float, float]]:
+    """Decode a Gaode-encoded polyline string into lat/lng pairs.
+
+    Gaode uses a variation of Google's polyline encoding with slight differences.
+    This decoder tries multiple strategies.
+    """
+    if not polyline:
+        return []
+
+    points = []
+    i = 0
+    current_lat = 0
+    current_lng = 0
+
+    try:
+        # Try standard Google-style polyline decoding
+        # Gaode format uses semicolon-separated "lng,lat" pairs
+        if ";" in polyline:
+            for pair in polyline.split(";"):
+                parts = pair.strip().split(",")
+                if len(parts) >= 2:
+                    try:
+                        lng = float(parts[0])
+                        lat = float(parts[1])
+                        points.append((lat, lng))
+                    except ValueError:
+                        continue
+                elif len(parts) == 1 and parts[0].strip():
+                    # Single coordinate pair
+                    try:
+                        parts2 = parts[0].split()
+                        if len(parts2) >= 2:
+                            lng = float(parts2[0])
+                            lat = float(parts2[1])
+                            points.append((lat, lng))
+                    except ValueError:
+                        continue
+        else:
+            # Try Google polyline algorithm (Gaode uses same encoding)
+            while i < len(polyline):
+                # Decode latitude
+                shift = 0
+                result = 0
+                while i < len(polyline):
+                    byte = ord(polyline[i]) - 63
+                    i += 1
+                    result |= (byte & 0x1F) << shift
+                    shift += 5
+                    if not (byte & 0x20):
+                        break
+                if result & 1:
+                    current_lat += ~(result >> 1)
+                else:
+                    current_lat += (result >> 1)
+
+                # Decode longitude
+                shift = 0
+                result = 0
+                while i < len(polyline):
+                    byte = ord(polyline[i]) - 63
+                    i += 1
+                    result |= (byte & 0x1F) << shift
+                    shift += 5
+                    if not (byte & 0x20):
+                        break
+                if result & 1:
+                    current_lng += ~(result >> 1)
+                else:
+                    current_lng += (result >> 1)
+
+                points.append((current_lat / 1e5, current_lng / 1e5))
+
+            if points:
+                return points
+
+    except Exception:
+        pass
+
+    # If all decoding failed, return start and end points
+    return [(o_lat, o_lng), (d_lat, d_lng)]
+
+
+# ---------------------------------------------------------------------------
 # Test
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":

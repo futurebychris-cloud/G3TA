@@ -207,6 +207,65 @@ def _scrape_ticket_price(attraction_name: str, city: str) -> dict:
         return {"price": 0, "opening_hours": "", "description": ""}
 
 
+def _scrape_group_ticket_price(attraction_name: str, city: str) -> dict | None:
+    """Try to get group/team ticket pricing from Ctrip for an attraction.
+
+    Searches Ctrip for "团体票" or "团队" pricing variants.
+    Returns: {per_person, min_group_size, source} or None if not found.
+    """
+    try:
+        pw, browser, page = _stealth_browser()
+        search_url = f"https://you.ctrip.com/searchsite/?query={attraction_name}+{city}+团体票"
+        page.goto(search_url, timeout=20000, wait_until="domcontentloaded")
+        page.wait_for_timeout(2500)
+
+        result = None
+
+        # Try to find group pricing in __NEXT_DATA__
+        raw = page.evaluate("() => { const el = document.getElementById('__NEXT_DATA__'); return el ? el.textContent : null; }")
+        if raw:
+            try:
+                data = json.loads(raw)
+                props = data.get("props", {}).get("pageProps", {}) or {}
+
+                def walk_group(obj, depth=0):
+                    if depth > 5:
+                        return
+                    if isinstance(obj, dict):
+                        if "groupPrice" in obj or "teamPrice" in obj:
+                            nonlocal result
+                            gp = obj.get("groupPrice") or obj.get("teamPrice") or 0
+                            result = {"per_person": round(float(gp)), "min_group_size": 3, "source": "ctrip_group"}
+                        for v in obj.values():
+                            walk_group(v, depth + 1)
+                walk_group(props)
+            except Exception:
+                pass
+
+        # DOM fallback: look for "团" or "团队" pricing elements
+        if not result:
+            group_els = page.query_selector_all("[class*='group'], [class*='team'], span:has-text('团')")
+            for el in group_els[:5]:
+                text = el.inner_text()
+                digits = re.findall(r"¥\s*(\d+)", text)
+                if digits:
+                    prices = [int(d) for d in digits]
+                    if prices:
+                        result = {
+                            "per_person": min(prices),
+                            "min_group_size": 3,
+                            "source": "ctrip_group_dom",
+                        }
+                        break
+
+        browser.close()
+        pw.stop()
+        return result
+    except Exception as e:
+        print(f"[activity_agent] group ticket scrape failed: {e}")
+        return None
+
+
 # ---- Classification helpers ----
 
 def _classify_activity_type(name: str, description: str, preferences: list[str]) -> str:
@@ -259,25 +318,22 @@ def _classify_meal_slot(start_time: str, end_time: str) -> str:
     return ",".join(slots) if slots else ""
 
 
-def _determine_best_time(opening_hours: str, preferences: list[str], city: str) -> dict:
-    """Determine the best visit time based on population levels and user preferences."""
-    pref_text = " ".join(preferences).lower()
-    prefers_quiet = any(w in pref_text for w in ["quiet", "安静", "peaceful", "less crowded", "避开高峰"])
-    prefers_sunset = any(w in pref_text for w in ["sunset", "日落", "傍晚", "黄昏"])
-    prefers_sunrise = any(w in pref_text for w in ["sunrise", "日出", "清晨", "early", "早"])
-    prefers_night = any(w in pref_text for w in ["night", "夜景", "夜晚", "晚上"])
+def _determine_best_time(opening_hours: str, preferences: list[str], city: str,
+                         attraction_type: str = "default") -> dict:
+    """Determine the best visit time using real crowd density data.
 
-    # Default: morning is good for most attractions
-    if prefers_sunrise:
-        return {"best_visit_time": "06:00-09:00", "population_level": "low"}
-    if prefers_sunset:
-        return {"best_visit_time": "16:00-19:00", "population_level": "medium"}
-    if prefers_night:
-        return {"best_visit_time": "18:00-21:00", "population_level": "medium"}
-    if prefers_quiet:
-        return {"best_visit_time": "09:00-11:00", "population_level": "low"}
-
-    return {"best_visit_time": "09:00-12:00", "population_level": "medium"}
+    Uses crowd_density_service to combine:
+    1. Attraction-type-specific hourly crowd patterns (museum/park/temple/shopping/etc.)
+    2. Opening hours constraints
+    3. User time preferences (sunrise/sunset/quiet/night)
+    """
+    from services.crowd_density_service import get_best_visit_time
+    return get_best_visit_time(
+        attraction_type=attraction_type,
+        opening_hours=opening_hours,
+        preferences=preferences,
+        city=city,
+    )
 
 
 # ---- Main agent function ----
@@ -303,26 +359,41 @@ def run(trip_input: dict) -> dict:
             site_name = site if isinstance(site, str) else site.get("name", "")
             print(f"[activity_agent] scraping ticket info for: {site_name}")
             ticket_info = _scrape_ticket_price(site_name, destination)
+            # Classify type FIRST so crowd_density_service gets attraction_type
+            act_type = _classify_activity_type(site_name, ticket_info.get("description", ""), activity_styles)
             time_info = _determine_best_time(
-                ticket_info.get("opening_hours", ""), activity_styles, destination
+                ticket_info.get("opening_hours", ""), activity_styles, destination, act_type
             )
+            # Scrape Ctrip for group ticket pricing if applicable
+            base_price = ticket_info.get("price", 0)
+            group_price = _scrape_group_ticket_price(site_name, destination) if is_group and num_people >= 3 else None
             activity = {
                 "name": site_name,
                 "location": destination,
                 "description": ticket_info.get("description", ""),
-                "type": _classify_activity_type(site_name, ticket_info.get("description", ""), activity_styles),
+                "type": act_type,
                 "start_time": time_info["best_visit_time"].split("-")[0] if "-" in time_info["best_visit_time"] else "09:00",
                 "end_time": time_info["best_visit_time"].split("-")[1] if "-" in time_info["best_visit_time"] else "12:00",
-                "ticket_price": ticket_info.get("price", 0),
+                "ticket_price": base_price,
                 "opening_hours": ticket_info.get("opening_hours", ""),
                 "best_visit_time": time_info["best_visit_time"],
                 "population_level": time_info["population_level"],
                 "meal_slot": "",
                 "source": "ctrip" if ticket_info.get("price", 0) > 0 else "web",
             }
-            # Calculate group price
-            if is_group and num_people >= 5:
-                activity["ticket_price"] = round(activity["ticket_price"] * 0.85)  # 15% group discount
+            # Group pricing: use real Ctrip group price if available, else apply tiered discount
+            if is_group and num_people >= 3:
+                if group_price is not None:
+                    activity["ticket_price"] = group_price["per_person"]
+                    activity["group_pricing"] = group_price
+                else:
+                    # Tiered group discounts based on group size
+                    if num_people >= 20:
+                        activity["ticket_price"] = round(base_price * 0.75)
+                    elif num_people >= 10:
+                        activity["ticket_price"] = round(base_price * 0.82)
+                    else:
+                        activity["ticket_price"] = round(base_price * 0.88)
             activity["total_price"] = activity["ticket_price"] * num_people
             activity["meal_slot"] = _classify_meal_slot(activity["start_time"], activity["end_time"])
             activities.append(activity)
@@ -362,7 +433,8 @@ def run(trip_input: dict) -> dict:
                     # Get real ticket price
                     ticket_info = _scrape_ticket_price(s["name"], destination)
                     time_info = _determine_best_time(
-                        ticket_info.get("opening_hours", ""), activity_styles, destination
+                        ticket_info.get("opening_hours", ""), activity_styles, destination,
+                        s.get("type", "default")
                     )
                     activity = {
                         "id": s["id"],
@@ -448,14 +520,29 @@ def run(trip_input: dict) -> dict:
     except Exception as e:
         print(f"[activity_agent] DB save failed (non-fatal): {e}")
 
-    # ---- Build output ----
+    # ---- Build output + Meal slot handoff for Food Agent ----
     total_cost = sum(act.get("total_price", act.get("ticket_price", 0)) for act in activities)
+
+    # Build meal_slot handoff: per-day meal slots that Food Agent reads
+    meal_slot_handoff = {}
+    for i, act in enumerate(activities):
+        day_key = days[i] if i < len(days) else ""
+        if act.get("meal_slot"):
+            meal_slot_handoff.setdefault(day_key, []).append({
+                "activity_name": act["name"],
+                "meal_slot": act["meal_slot"],
+                "start_time": act.get("start_time", ""),
+                "end_time": act.get("end_time", ""),
+                "location": act.get("location", destination),
+                "activity_type": act.get("type", "other"),
+            })
 
     return {
         "recommended": activities,
         "cost": round(total_cost, 2),
         "reasoning": f"Selected {len(activities)} activities in {destination} using "
                      f"{'Ctrip real data' if any(a.get('source') == 'ctrip' for a in activities) else 'web search + LLM'}.",
+        "meal_slot_handoff": meal_slot_handoff,
         "destination": destination,
         "verification_required": True,
         "trip_id": trip_id,

@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Check, CloudDrizzle, CloudRain, CloudSun, Luggage, Sun, TimerReset, Umbrella, Wind } from 'lucide-react'
+import { getChecklist, toggleChecklistItem } from '../api.js'
 
 function weatherIcon(condition, size = 18) {
   const c = (condition || '').toLowerCase()
@@ -23,17 +24,66 @@ function formatDate(dateStr) {
   }
 }
 
-export default function PackingList({ items, weather, pacing, dailyWeather, healthAdvice }) {
-  const [checked, setChecked] = useState(() => new Set())
+/** Normalize an item string like "[clothing] Warm jacket" so we can match it to DB items. */
+function normalizeItemName(itemStr) {
+  // Strip category prefix "[clothing] " if present
+  return itemStr.replace(/^\[.*?\]\s*/, '').trim()
+}
 
-  function toggle(index) {
+export default function PackingList({ items, weather, pacing, dailyWeather, healthAdvice, tripId }) {
+  const [checked, setChecked] = useState(() => new Set())
+  const [dbItemMap, setDbItemMap] = useState(null) // null = loading, Map<itemName, {id, is_packed}> | null on error
+
+  // Fetch checklist from shared_checklist DB to restore packed/unpacked state.
+  useEffect(() => {
+    if (!tripId) return
+    let cancelled = false
+    getChecklist(tripId).then((data) => {
+      if (cancelled) return
+      const map = new Map()
+      for (const row of data.items || []) {
+        map.set(row.item_name, { id: row.id, is_packed: row.is_packed === 1 })
+      }
+      setDbItemMap(map)
+
+      // Initialize checked set from DB
+      setChecked(() => {
+        const dbChecked = new Set()
+        items.forEach((item, index) => {
+          const name = normalizeItemName(item)
+          const db = map.get(name)
+          if (db && db.is_packed) dbChecked.add(index)
+        })
+        return dbChecked
+      })
+    }).catch((err) => {
+      if (!cancelled) {
+        console.warn('[PackingList] failed to sync from DB:', err)
+        setDbItemMap(null) // fall back to local-only
+      }
+    })
+    return () => { cancelled = true }
+  }, [tripId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const toggle = useCallback((index) => {
     setChecked((current) => {
       const next = new Set(current)
-      if (next.has(index)) next.delete(index)
-      else next.add(index)
+      if (next.has(index)) {
+        next.delete(index)
+        // Persist unpack to backend
+        const name = normalizeItemName(items[index])
+        const db = dbItemMap?.get(name)
+        if (db) toggleChecklistItem(db.id, false).catch(() => {})
+      } else {
+        next.add(index)
+        // Persist packed to backend
+        const name = normalizeItemName(items[index])
+        const db = dbItemMap?.get(name)
+        if (db) toggleChecklistItem(db.id, true).catch(() => {})
+      }
       return next
     })
-  }
+  }, [items, dbItemMap])
 
   const hasDailyWeather = dailyWeather && dailyWeather.length > 0
 

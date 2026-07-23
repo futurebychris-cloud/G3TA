@@ -7,8 +7,12 @@ Upgraded from LLM-only estimates:
 4. Health advisory (sickness risks, pests, altitude)
 5. Legal/doc requirements check (visa, passport, permits)
 6. Shared_checklist database integration
+7. Hotel amenities check (toothbrush/toothpaste/lotion/slippers etc.)
+8. Shopping budget from budget Agent leftover
+9. Activity-specific gear/equipment items from Activity Agent output
 
-Output: {"packing_list": [category items], "weather_summary": str, "pacing_notes": str, ...}
+Output: {"packing_list": [category items], "weather_summary": str, "pacing_notes": str,
+         "hotel_amenities": {...}, "shopping_budget": float, "activity_gear_items": [...]}
 """
 from __future__ import annotations
 import hashlib, json, re, urllib.request
@@ -236,7 +240,8 @@ def _legal_checklist(destination: str, origin: str) -> list[dict]:
     return items
 
 
-def _supportive_checklist(weather_daily: list[dict], activity_styles: list[str]) -> list[dict]:
+def _supportive_checklist(weather_daily: list[dict], activity_styles: list[str],
+                          activity_outputs: list[dict] = None) -> list[dict]:
     items = [
         {"name": "Small first-aid kit", "quantity": 1, "reason": "Band-aids, pain relievers, antiseptic"},
         {"name": "Prescription medications", "quantity": 1, "reason": "Bring enough for entire trip + 2 days extra"},
@@ -251,6 +256,68 @@ def _supportive_checklist(weather_daily: list[dict], activity_styles: list[str])
             {"name": "Insect repellent (DEET)", "quantity": 1, "reason": "For outdoor activities"},
             {"name": "Water purification tablets", "quantity": 1, "reason": "For remote areas"},
         ])
+
+    # ---- NEW: Activity-specific gear items from Activity Agent output ----
+    activity_gear_items = []
+    if activity_outputs:
+        for act in activity_outputs:
+            act_type = (act.get("type") or "").lower()
+            act_name = act.get("name", "")
+            
+            # Sport/hiking gear
+            if act_type in ("sport",):
+                if any(kw in act_name.lower() for kw in ["hike", "trek", "hiking", "登山", "徒步"]):
+                    activity_gear_items.extend([
+                        {"name": "Hiking boots / trail shoes", "quantity": 1, "reason": f"Needed for {act_name}"},
+                        {"name": "Trekking poles", "quantity": 1, "reason": f"Recommended for {act_name}"},
+                        {"name": "Quick-dry clothing", "quantity": 2, "reason": f"For {act_name}"},
+                    ])
+                elif any(kw in act_name.lower() for kw in ["ski", "滑雪"]):
+                    activity_gear_items.extend([
+                        {"name": "Thermal base layers", "quantity": 2, "reason": f"For {act_name}"},
+                        {"name": "Ski goggles", "quantity": 1, "reason": f"For {act_name}"},
+                    ])
+                elif any(kw in act_name.lower() for kw in ["swim", "surf", "dive", "游泳", "潜水", "冲浪"]):
+                    activity_gear_items.extend([
+                        {"name": "Swimsuit", "quantity": 2, "reason": f"For {act_name}"},
+                        {"name": "Waterproof phone case", "quantity": 1, "reason": f"For water activities"},
+                        {"name": "Quick-dry towel", "quantity": 1, "reason": f"For {act_name}"},
+                    ])
+                elif any(kw in act_name.lower() for kw in ["bike", "cycling", "骑行", "自行车"]):
+                    activity_gear_items.extend([
+                        {"name": "Padded cycling shorts", "quantity": 1, "reason": f"For {act_name}"},
+                        {"name": "Bike helmet (if not provided)", "quantity": 1, "reason": f"For {act_name}"},
+                    ])
+
+            # Nature/outdoor gear
+            if act_type in ("nature",) and not activity_gear_items:
+                activity_gear_items.extend([
+                    {"name": "Comfortable walking shoes", "quantity": 1, "reason": f"For {act_name}"},
+                    {"name": "Binoculars", "quantity": 1, "reason": f"Great for {act_name}"},
+                ])
+
+            # Beach gear
+            if any(kw in act_name.lower() for kw in ["beach", "海滩", "sea", "ocean"]):
+                activity_gear_items.extend([
+                    {"name": "Beach towel / mat", "quantity": 1, "reason": f"For {act_name}"},
+                    {"name": "Sunscreen SPF50+", "quantity": 1, "reason": f"Sun protection at {act_name}"},
+                    {"name": "Sunglasses", "quantity": 1, "reason": "UV protection"},
+                ])
+
+            # Photography gear for cultural/scenic spots
+            if act_type in ("culture", "entertainment") and act.get("rating", 0) >= 4.0:
+                if not any("camera" in i.get("name", "").lower() for i in activity_gear_items):
+                    activity_gear_items.append(
+                        {"name": "Portable camera / extra SD card", "quantity": 1, "reason": f"Photo-worthy: {act_name}"}
+                    )
+
+    # Deduplicate activity gear
+    seen_gear = {i["name"].lower() for i in items}
+    for gear in activity_gear_items:
+        if gear["name"].lower() not in seen_gear:
+            seen_gear.add(gear["name"].lower())
+            items.append(gear)
+
     return items
 
 
@@ -272,6 +339,68 @@ def run(trip_input: dict) -> dict:
         # Fallback to LLM seasonal estimate
         from services.weather_service import get_weather as get_llm_weather
         weather = get_llm_weather(destination, trip_input["dates"])
+
+    # ---- NEW: Read activity agent outputs for gear recommendations ----
+    activity_outputs = trip_input.get("_activity_outputs", [])
+    if not activity_outputs:
+        # Try from _activity_meal_slots which carries activity names
+        ams = trip_input.get("_activity_meal_slots", {})
+        for day_acts in ams.values():
+            for a in day_acts:
+                activity_outputs.append({
+                    "name": a.get("activity_name", ""),
+                    "type": a.get("activity_type", "other"),
+                    "rating": 4.0,
+                })
+    if activity_outputs:
+        print(f"[planning] received {len(activity_outputs)} activity outputs for gear recommendations")
+
+    # ---- NEW: Hotel amenities check ----
+    hotel_amenities = None
+    hotel_name = trip_input.get("_hotel_name", "")
+    if not hotel_name:
+        # Try to get from housing data in trip input
+        housing_data = trip_input.get("_housing_data", {})
+        hotel_name = housing_data.get("name", "")
+    
+    if hotel_name:
+        try:
+            from services.hotel_amenities_service import check_amenities
+            hotel_amenities = check_amenities(destination, hotel_name)
+            print(f"[planning] hotel amenities check: {hotel_amenities.get('source', 'unknown')}, "
+                  f"missing: {hotel_amenities.get('missing_items', [])}")
+        except Exception as e:
+            print(f"[planning] hotel amenities check failed (non-fatal): {e}")
+    else:
+        # Fallback: market defaults only
+        try:
+            from services.hotel_amenities_service import check_amenities
+            hotel_amenities = check_amenities(destination)
+            print(f"[planning] hotel amenities (market defaults): {hotel_amenities.get('packing_note', '')}")
+        except Exception as e:
+            print(f"[planning] amenities defaults failed: {e}")
+
+    # ---- NEW: Shopping budget from budget leftover ----
+    shopping_budget = 0.0
+    budget_allocations = trip_input.get("_budget_allocations", {})
+    budget_ratios = trip_input.get("_budget_ratios", {})
+    total_budget = float(trip_input.get("budget", {}).get("total", 0))
+    currency = trip_input.get("budget", {}).get("currency", "CNY")
+    
+    if "shopping" in budget_allocations:
+        shopping_budget = float(budget_allocations["shopping"])
+    elif "other" in budget_allocations:
+        shopping_budget = float(budget_allocations["other"])
+    else:
+        # Default: 5% of remaining budget after major allocations
+        major_sum = sum(float(v) for k, v in budget_allocations.items() 
+                       if k in ("transportation", "housing", "food", "activity"))
+        leftover = max(total_budget - major_sum, 0)
+        shopping_budget = round(leftover * 0.5, 2)  # 50% of leftover → shopping
+    
+    shopping_budget = round(shopping_budget, 2)
+    if shopping_budget > 0:
+        print(f"[planning] shopping budget: {shopping_budget} {currency}")
 
     # ---- Build enriched packing checklist ----
     # Get LLM-generated packing list as baseline
@@ -296,11 +425,56 @@ def run(trip_input: dict) -> dict:
 
     packing_checklist = {
         "clothing": clothing_items,
-        "item": _supportive_checklist(weather_daily, activity_styles),
+        "item": _supportive_checklist(weather_daily, activity_styles, activity_outputs),
         "supportive": [],
         "legal": _legal_checklist(destination, origin),
         "device": _device_checklist(),
     }
+
+    # ---- NEW: Add missing hotel amenity items to packing list ----
+    if hotel_amenities:
+        missing_amenities = hotel_amenities.get("missing_items", [])
+        amenity_name_map = {
+            "toothbrush": "Toothbrush + toothpaste (not provided by hotel)",
+            "toothpaste": "Toothbrush + toothpaste (not provided by hotel)",
+            "lotion": "Body lotion / moisturizer (not provided by hotel)",
+            "slippers": "Slippers / flip-flops (not provided by hotel)",
+            "hair_dryer": "Travel hair dryer (not provided by hotel)",
+            "shampoo": "Shampoo (not provided by hotel)",
+            "shower_gel": "Shower gel (not provided by hotel)",
+            "toiletries": "Travel toiletries kit (not provided by hotel)",
+            "razor": "Razor (not provided by hotel)",
+            "comb": "Comb / hairbrush (not provided by hotel)",
+            "sewing_kit": "Travel sewing kit",
+            "bathrobe": "Lightweight bathrobe",
+        }
+        added_amenities = set()
+        for key in missing_amenities:
+            if key in amenity_name_map and key not in added_amenities:
+                # Avoid duplicate toothbrush/toothpaste
+                if key == "toothpaste" and "toothbrush" in added_amenities:
+                    continue
+                added_amenities.add(key)
+                packing_checklist["item"].append({
+                    "name": amenity_name_map[key],
+                    "quantity": 1,
+                    "reason": f"Hotel amenity check: {hotel_amenities.get('packing_note', '')}",
+                })
+        if added_amenities:
+            print(f"[planning] added {len(added_amenities)} missing hotel amenity items to checklist")
+
+    # ---- NEW: Add shopping-related items if shopping budget exists ----
+    if shopping_budget > 0:
+        packing_checklist["item"].append({
+            "name": f"Shopping budget: {shopping_budget} {currency}",
+            "quantity": 1,
+            "reason": "Allocated shopping budget from trip plan. Bring foldable shopping bag.",
+        })
+        packing_checklist["item"].append({
+            "name": "Foldable shopping bag / eco bag",
+            "quantity": 2,
+            "reason": "For shopping and souvenirs",
+        })
 
     if llm_result and llm_result.get("checklist"):
         # Enrich with LLM suggestions
@@ -368,4 +542,10 @@ def run(trip_input: dict) -> dict:
         "verification_required": True,
         "trip_id": trip_id,
         "weather_source": weather.get("source", "llm_estimate"),
+        "hotel_amenities": hotel_amenities,
+        "shopping_budget": shopping_budget,
+        "activity_gear_items": [
+            i["name"] for i in _supportive_checklist(weather_daily, activity_styles, activity_outputs)
+            if i.get("reason", "").startswith("Needed for") or i.get("reason", "").startswith("For ")
+        ],
     }

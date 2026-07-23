@@ -108,3 +108,21 @@ export async function getBookingRoutes() {
   if (!resp.ok) throw new Error(`Failed to load routes (${resp.status})`)
   return resp.json()
 }
+
+// Fetch all checklist items for a trip from the shared_checklist database.
+export async function getChecklist(tripId) {
+  const resp = await fetch(`${API_BASE}/api/checklist/${tripId}`)
+  if (!resp.ok) throw new Error(`Failed to load checklist (${resp.status})`)
+  return resp.json()
+}
+
+// Toggle a checklist item's is_packed status.
+export async function toggleChecklistItem(itemId, isPacked) {
+  const resp = await fetch(`${API_BASE}/api/checklist/${itemId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ is_packed: isPacked }),
+  })
+  if (!resp.ok) throw new Error(`Failed to update checklist item (${resp.status})`)
+  return resp.json()
+}
