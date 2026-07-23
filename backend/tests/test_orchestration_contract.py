@@ -59,7 +59,7 @@ class OrchestrationContractTests(unittest.TestCase):
         self.assertNotIn("_budget_caps", TRIP)
         self.assertEqual(guided["_budget_caps"], {"food": 40, "housing": 120})
 
-    def test_plan_runs_budget_first_and_guides_every_other_agent(self):
+    def test_plan_runs_transport_first_then_guides_downstream_agents(self):
         calls = []
         lock = threading.Lock()
 
@@ -76,9 +76,14 @@ class OrchestrationContractTests(unittest.TestCase):
                 patch.object(orchestrator, "reconcile_and_synthesize", return_value={"schedule": []}):
             result = orchestrator.plan(TRIP)
 
-        self.assertEqual(calls[0][0], "budget")
-        remaining = calls[1:]
-        self.assertEqual({name for name, _ in remaining}, set(orchestrator._AGENTS) - {"budget"})
+        self.assertEqual([calls[0][0], calls[1][0]], ["transportation", "budget"])
+        self.assertNotIn("_budget_caps", calls[0][1])
+        self.assertNotIn("_budget_caps", calls[1][1])
+        remaining = calls[2:]
+        self.assertEqual(
+            {name for name, _ in remaining},
+            set(orchestrator._AGENTS) - {"transportation", "budget"},
+        )
         for _, agent_input in remaining:
             self.assertEqual(agent_input["_budget_caps"], {"food": 35, "housing": 110})
         self.assertEqual(result["trip_id"], "stable-trip-id")

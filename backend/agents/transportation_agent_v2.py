@@ -508,6 +508,67 @@ def _local_transport_options(city: str) -> list[dict]:
 
 
 # --------------------------------------------------------------------------- #
+# AMap-compatible route metadata
+# --------------------------------------------------------------------------- #
+
+def _route_point(option: dict, prefix: str, label: str, role: str) -> dict | None:
+    """Build one optional AMap point without making coordinates mandatory."""
+    lat = option.get(f"{prefix}_lat")
+    lng = option.get(f"{prefix}_lng")
+    coordinate_system = (
+        str(option.get("coordinate_system") or "")
+        .casefold()
+        .replace("_", "-")
+        .replace(" ", "")
+    )
+    if (
+        coordinate_system not in {"gcj-02", "gcj02", "amap", "amap-compatible"}
+        or isinstance(lat, bool)
+        or isinstance(lng, bool)
+        or not isinstance(lat, (int, float))
+        or not isinstance(lng, (int, float))
+        or not math.isfinite(lat)
+        or not math.isfinite(lng)
+        or not -90 <= lat <= 90
+        or not -180 <= lng <= 180
+    ):
+        return None
+    return {
+        "label": label,
+        "type": "transport",
+        "role": role,
+        "lat": lat,
+        "lng": lng,
+        "coordinate_system": "GCJ-02",
+    }
+
+
+def _route_metadata(
+    origin: str,
+    destination: str,
+    recommended: dict,
+) -> tuple[list[dict], dict]:
+    """Preserve the route metadata contract used by the AMap frontend."""
+    departure_airport = recommended.get("departure_airport") or origin
+    arrival_airport = recommended.get("arrival_airport") or destination
+    points = [
+        _route_point(recommended, "departure", departure_airport, "departure"),
+        _route_point(recommended, "arrival", arrival_airport, "arrival"),
+    ]
+    return [point for point in points if point], {
+        "mode": recommended.get("mode") or "flight",
+        "origin": origin,
+        "destination": destination,
+        "departure_airport": departure_airport,
+        "arrival_airport": arrival_airport,
+        "carrier": recommended.get("carrier"),
+        "departure_time": recommended.get("departure_time"),
+        "duration": recommended.get("duration"),
+        "stops": recommended.get("stops", 0),
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Main agent
 # --------------------------------------------------------------------------- #
 
@@ -529,6 +590,11 @@ def run(trip_input: dict) -> dict:
         f"{origin}{destination}{dates['start']}".encode()).hexdigest()[:12])
     preferences = trip_input.get("preferences", {})
     transport_types = preferences.get("transportation_type", []) if isinstance(preferences, dict) else []
+    requested_modes = [
+        str(mode).strip().lower()
+        for mode in transport_types
+        if str(mode).strip()
+    ] or ["flight"]
 
     scope = _detect_scope(origin, destination)
     errors: list[str] = []
@@ -632,6 +698,17 @@ def run(trip_input: dict) -> dict:
                 "note": "No live or estimated transport option is currently available.",
             },
             "trip_id": trip_id,
+            "route_points": [],
+            "route_summary": {
+                "mode": requested_modes[0],
+                "origin": origin,
+                "destination": destination,
+            },
+            "coverage": {
+                "requested_modes": requested_modes,
+                "available_modes": [],
+                "note": "No live transportation option was available for the requested route.",
+            },
             "error_message": (
                 f"Could not find any real transport options for "
                 f"{origin} → {destination} on {dates['start']}. "
@@ -728,14 +805,17 @@ def run(trip_input: dict) -> dict:
     except Exception as e:
         print(f"[transport] DB save failed: {e}")
 
-    route_points, route_summary = _route_metadata(origin, destination, recommended)
-    requested_modes = transport_types or ["flight"]
+    route_option = {
+        **recommended,
+        "mode": recommended.get("mode") or recommended.get("type") or "flight",
+    }
+    route_points, route_summary = _route_metadata(origin, destination, route_option)
     available_modes = list(dict.fromkeys(
         str(option.get("mode") or option.get("type") or "flight").strip().lower()
         for option in all_options
         if str(option.get("mode") or option.get("type") or "flight").strip()
     ))
-    unsupported = [mode for mode in requested_modes if mode.lower() not in available_modes]
+    unsupported = [mode for mode in requested_modes if mode not in available_modes]
 
     return {
         "options": all_options,

@@ -375,7 +375,7 @@ def _merge_packing(*groups) -> list[str]:
         for item in group:
             value = item.get("name", "") if isinstance(item, dict) else item
             cleaned = str(value).strip()
-            key = cleaned.casefold()
+            key = re.sub(r"^\[[^\]]+\]\s*", "", cleaned).casefold()
             if cleaned and key not in seen:
                 items.append(cleaned)
                 seen.add(key)
@@ -409,9 +409,22 @@ def run(trip_input: dict) -> dict:
     preferences = trip_input.get("preferences", {})
     activity_styles = preferences.get("activity_style", [])
 
-    # Use the normalized weather service so live forecasts and clearly labeled
-    # seasonal fallbacks retain the same contract across v1 and v2.
-    weather = get_weather(destination, trip_input["dates"])
+    # Prefer the detailed Open-Meteo path used by the v2 packing logic, then
+    # fall back to the normalized weather service when geocoding or the live
+    # forecast is unavailable.
+    try:
+        lat, lng = _geocode_city(destination)
+        weather = _fetch_open_meteo_weather(
+            lat,
+            lng,
+            trip_input["dates"]["start"],
+            trip_input["dates"]["end"],
+        )
+    except Exception as exc:
+        print(f"[planning] detailed weather unavailable, using normalized fallback: {exc}")
+        weather = None
+    if not weather:
+        weather = get_weather(destination, trip_input["dates"])
 
     # ---- NEW: Read activity agent outputs for gear recommendations ----
     activity_outputs = trip_input.get("_activity_outputs", [])
@@ -612,8 +625,9 @@ def run(trip_input: dict) -> dict:
     # Keep model suggestions first, then append non-negotiable weather essentials
     # and the richer structured v2 recommendations without duplicates.
     structured_names = [
-        item
-        for items in packing_checklist.values()
+        f"[{category}] {item.get('name', '')}" if isinstance(item, dict)
+        else f"[{category}] {item}"
+        for category, items in packing_checklist.items()
         for item in items
     ]
     flat_list = _merge_packing(
