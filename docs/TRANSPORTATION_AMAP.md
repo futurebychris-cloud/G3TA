@@ -47,22 +47,20 @@ Official references:
 
 ## Display behavior
 
-- `Flight` / `Train` / `Car`: labels the selected transportation mode correctly
-  and draws its endpoints as an overview, not turn-by-turn navigation.
-- `Day N`: displays `hotel -> mapped activities -> hotel`.
-- `Walking` / `Driving`: requests a real AMap route for every local segment.
-- `Line preview`: the safe default; it connects known coordinates without hiding
-  the fallback behind a map whose overseas tiles may not be authorized yet.
-- `AMap overview`: explicitly switches a transportation route from the static
-  preview to AMap markers and a Polyline after the JS API has loaded.
-- Missing credentials and loader failures automatically use the static preview.
-  If overseas tiles or a route request are unavailable, `Line preview` remains
-  an explicit, always-visible fallback instead of leaving the user with a blank map.
+- `Full trip`: gradually reveals the mapped local itinerary.
+- `Day N`: requests `hotel -> mapped activities/meals -> hotel` segments.
+- `Walking` / `Driving`: requests a real AMap route for each local segment, so
+  the two modes use different provider paths.
+- A car transportation recommendation requests an AMap driving route.
+- Flight and train endpoints use a clearly labeled geographic overview; it is
+  not presented as a provider-confirmed carrier track.
+- Reduced Motion shows the route immediately without the reveal animation.
+- Missing credentials or loader failures show an explicit configuration/error
+  panel rather than a fake route.
 
 Only records with valid latitude/longitude pairs are displayed. Generated terminal,
 hotel and activity coordinates are planning estimates and must be checked before use.
-Meal stops are not displayed because the current Food Agent output has no coordinate
-fields; that agent and its data contract are intentionally outside this change.
+Unresolved named POIs are skipped instead of being stacked at the city center.
 
 ## Local checks
 

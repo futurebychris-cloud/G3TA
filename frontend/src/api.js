@@ -3,6 +3,43 @@
 
 const API_BASE = import.meta.env.VITE_API_BASE || ''
 
+export async function getHealth() {
+  const resp = await fetch(`${API_BASE}/health`)
+  if (!resp.ok) throw new Error(`Health check failed (${resp.status})`)
+  return resp.json()
+}
+
+
+export async function parseTripDescription(description, { signal } = {}) {
+  const resp = await fetch(`${API_BASE}/intake/parse`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ description }),
+    signal,
+  })
+  if (!resp.ok) {
+    const body = await resp.json().catch(() => ({}))
+    throw new Error(body.detail || `Trip assistant failed (${resp.status})`)
+  }
+  return resp.json()
+}
+
+
+export async function synthesizeSpeech(text, speed = 1, { signal } = {}) {
+  const language = /[\u3400-\u9fff]/u.test(String(text)) ? 'zh' : 'en'
+  const resp = await fetch(`${API_BASE}/speech/synthesize`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, speed, language }),
+    signal,
+  })
+  if (!resp.ok) {
+    const body = await resp.json().catch(() => ({}))
+    throw new Error(body.detail || `Read aloud failed (${resp.status})`)
+  }
+  return resp.blob()
+}
+
 // Streams the full plan. Calls onEvent(evt) for each SSE message:
 //   {type:'agent_start', agent}
 //   {type:'agent_done', agent, output?}
@@ -24,6 +61,7 @@ export async function streamPlan(tripInput, onEvent, { signal } = {}) {
   const reader = resp.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
+  let sawTerminalEvent = false
 
   while (true) {
     const { value, done } = await reader.read()
@@ -37,9 +75,46 @@ export async function streamPlan(tripInput, onEvent, { signal } = {}) {
       const line = chunk.split('\n').find((l) => l.startsWith('data:'))
       if (!line) continue
       const payload = JSON.parse(line.slice(5).trim())
+      if (['complete', 'error', 'cancelled'].includes(payload.type)) {
+        sawTerminalEvent = true
+      }
       onEvent(payload)
     }
   }
+  if (!sawTerminalEvent && !signal?.aborted) {
+    throw new Error('The planning stream ended before a result was returned. Please retry.')
+  }
+}
+
+
+export async function cancelPlan(requestId, { keepalive = false } = {}) {
+  const resp = await fetch(`${API_BASE}/plan/cancel/${encodeURIComponent(requestId)}`, {
+    method: 'POST',
+    keepalive,
+  })
+  if (!resp.ok && resp.status !== 404) {
+    throw new Error(`Cancel failed (${resp.status})`)
+  }
+  return resp.ok ? resp.json() : { request_id: requestId, status: 'finished' }
+}
+
+
+export async function finalizePlan(trip, existingResult, adjustedBudget, { signal } = {}) {
+  const resp = await fetch(`${API_BASE}/plan/finalize`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      trip,
+      existing_result: existingResult,
+      adjusted_budget: adjustedBudget || undefined,
+    }),
+    signal,
+  })
+  if (!resp.ok) {
+    const detail = await resp.text().catch(() => resp.statusText)
+    throw new Error(`Finalize failed (${resp.status}): ${detail}`)
+  }
+  return resp.json()
 }
 
 // Streams the 4-stage hotel booking search. Calls onEvent(evt) for each SSE message:
@@ -74,41 +149,6 @@ export async function streamBookingSearch(req, onEvent) {
   }
 }
 
-// Confirm a selected hotel: drive the Ctrip Playwright booking to the payment step.
-export async function confirmBooking(req) {
-  const resp = await fetch(`${API_BASE}/booking/confirm`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(req),
-  })
-  if (!resp.ok) {
-    const detail = await resp.text().catch(() => resp.statusText)
-    throw new Error(`Booking confirm failed (${resp.status}): ${detail}`)
-  }
-  return resp.json()
-}
-
-// Mark a stored route as paid (user paid in their own WeChat/Alipay).
-export async function markBookingPaid(routeId, orderNo) {
-  const resp = await fetch(`${API_BASE}/booking/mark_paid`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ route_id: routeId, order_no: orderNo }),
-  })
-  if (!resp.ok) {
-    const detail = await resp.text().catch(() => resp.statusText)
-    throw new Error(`Mark paid failed (${resp.status}): ${detail}`)
-  }
-  return resp.json()
-}
-
-// List all stored confirmed routes (audit trail).
-export async function getBookingRoutes() {
-  const resp = await fetch(`${API_BASE}/booking/routes`)
-  if (!resp.ok) throw new Error(`Failed to load routes (${resp.status})`)
-  return resp.json()
-}
-
 // Fetch all checklist items for a trip from the shared_checklist database.
 export async function getChecklist(tripId) {
   const resp = await fetch(`${API_BASE}/api/checklist/${tripId}`)
@@ -117,11 +157,11 @@ export async function getChecklist(tripId) {
 }
 
 // Toggle a checklist item's is_packed status.
-export async function toggleChecklistItem(itemId, isPacked) {
+export async function toggleChecklistItem(itemId, tripId, isPacked) {
   const resp = await fetch(`${API_BASE}/api/checklist/${itemId}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ is_packed: isPacked }),
+    body: JSON.stringify({ trip_id: tripId, is_packed: isPacked }),
   })
   if (!resp.ok) throw new Error(`Failed to update checklist item (${resp.status})`)
   return resp.json()

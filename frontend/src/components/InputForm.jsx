@@ -9,10 +9,12 @@ import {
   PlaneTakeoff,
   Sparkles,
   UtensilsCrossed,
+  Users,
   Waves,
   Check,
 } from 'lucide-react'
 import VoiceInputButton from './accessibility/VoiceInputButton.jsx'
+import GuidedTripAssistant from './GuidedTripAssistant.jsx'
 
 const CUISINES = [
   'Japanese',
@@ -28,6 +30,13 @@ const CUISINES = [
 ]
 const STYLES = ['cultural', 'adventure', 'relaxed']
 const TRANSPORT = ['flight', 'train', 'car']
+const BUDGET_PRIORITIES = {
+  balanced: {},
+  comfort: { housing: 1.5 },
+  food: { food: 1.5 },
+  experiences: { activity: 1.5 },
+  transport: { transportation: 1.5 },
+}
 
 function dateFromToday(offsetDays) {
   const date = new Date()
@@ -85,6 +94,10 @@ export default function InputForm({ onSubmit }) {
     transportation_type: ['flight'],
     activity_style: ['cultural', 'adventure'],
     time_constraints: 'fixed dates',
+    num_people: 1,
+    must_go_sites: '',
+    food_budget: '',
+    budget_priority: 'balanced',
   })
 
   function toggle(field, value) {
@@ -108,15 +121,46 @@ export default function InputForm({ onSubmit }) {
         bites: form.bites,
         transportation_type: form.transportation_type,
         activity_style: form.activity_style,
+        taste: form.bites,
+        food_budget: form.food_budget ? Number(form.food_budget) : 0,
+        budget_priority: BUDGET_PRIORITIES[form.budget_priority] || {},
       },
       time_constraints: form.time_constraints.trim(),
+      must_go_sites: form.must_go_sites.split(',').map((value) => value.trim()).filter(Boolean),
+      num_people: Number(form.num_people),
+      is_group: Number(form.num_people) > 1,
     })
   }
 
   const set = (key) => (event) => setForm((current) => ({ ...current, [key]: event.target.value }))
 
+  function applyGuidedDraft(draft) {
+    setForm((current) => ({
+      ...current,
+      origin: draft.origin || current.origin,
+      location: draft.location || current.location,
+      start: draft.dates?.start || current.start,
+      end: draft.dates?.end || current.end,
+      total: draft.budget?.total || current.total,
+      currency: draft.budget?.currency || current.currency,
+      bites: draft.preferences?.bites?.length ? draft.preferences.bites : current.bites,
+      transportation_type: draft.preferences?.transportation_type?.length
+        ? draft.preferences.transportation_type
+        : current.transportation_type,
+      activity_style: draft.preferences?.activity_style?.length
+        ? draft.preferences.activity_style
+        : current.activity_style,
+      time_constraints: draft.time_constraints || current.time_constraints,
+      must_go_sites: draft.must_go_sites?.length
+        ? draft.must_go_sites.join(', ')
+        : current.must_go_sites,
+      num_people: draft.num_people || current.num_people,
+    }))
+  }
+
   return (
     <form className="planner-card" onSubmit={submit}>
+      <GuidedTripAssistant onApply={applyGuidedDraft} />
       <div className="core-fields">
         <label className="field route-field">
           <span className="field-label"><PlaneTakeoff size={15} /> Flying from</span>
@@ -182,6 +226,31 @@ export default function InputForm({ onSubmit }) {
           <PreferenceGroup field="bites" values={CUISINES} selected={form.bites} onToggle={toggle} />
           <PreferenceGroup field="activity_style" values={STYLES} selected={form.activity_style} onToggle={toggle} />
           <PreferenceGroup field="transportation_type" values={TRANSPORT} selected={form.transportation_type} onToggle={toggle} />
+
+          <div className="trip-extra-fields">
+            <label>
+              <span><Users size={15} /> Travelers</span>
+              <input type="number" min="1" max="100" value={form.num_people} onChange={set('num_people')} />
+            </label>
+            <label>
+              <span>Must-go places</span>
+              <input value={form.must_go_sites} onChange={set('must_go_sites')} placeholder="The Bund, Yu Garden" />
+            </label>
+            <label>
+              <span>Food budget (optional)</span>
+              <input type="number" min="0" value={form.food_budget} onChange={set('food_budget')} placeholder={form.currency} />
+            </label>
+            <label>
+              <span>Main budget priority</span>
+              <select value={form.budget_priority} onChange={set('budget_priority')}>
+                <option value="balanced">Balanced</option>
+                <option value="comfort">Hotel comfort</option>
+                <option value="food">Food</option>
+                <option value="experiences">Experiences</option>
+                <option value="transport">Transportation</option>
+              </select>
+            </label>
+          </div>
 
           <label className="constraint-field">
             <span><Clock3 size={16} /> Anything we should work around?</span>

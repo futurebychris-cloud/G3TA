@@ -1,18 +1,18 @@
-import { useEffect, useMemo, useState } from 'react'
-import { BedDouble, Check, LoaderCircle, MapPin, RefreshCw, Search, ShieldAlert, Star, ImageOff, Info, Wallet, Sparkles, Bath, Coffee, Wifi, Tv, Wind, Car, Dumbbell, Waves, UtensilsCrossed } from 'lucide-react'
-import { streamBookingSearch, confirmBooking, markBookingPaid } from '../api.js'
+import { useMemo, useState } from 'react'
+import { BedDouble, Check, ExternalLink, LoaderCircle, MapPin, RefreshCw, Search, ShieldAlert, Star, ImageOff, Info, Sparkles, Bath, Coffee, Wifi, Tv, Wind, Car, Dumbbell, Waves, UtensilsCrossed } from 'lucide-react'
+import { streamBookingSearch } from '../api.js'
 
 const STAGES = [
-  { key: 'search', label: 'Search', note: 'Querying the live hotel APIs and Ctrip', icon: Search },
+  { key: 'search', label: 'Search', note: 'Querying the currently configured hotel sources', icon: Search },
   { key: 'filtering', label: 'Filtering', note: 'Dropping above budget / below rating, ranking', icon: Check },
   { key: 'outputting', label: 'Outputting', note: 'Compiling your shortlist of stays', icon: BedDouble },
-  { key: 'confirming', label: 'Confirming', note: 'Driving the booking to the payment step', icon: Wallet },
 ]
 
 const SOURCE_LABEL = {
-  api: 'Real hotel API',
-  ctrip: 'Ctrip (携程) live',
-  openstreetmap: 'OpenStreetMap (real, price to confirm)',
+  api: 'Configured hotel API',
+  ctrip: 'Ctrip (携程) public listing',
+  openstreetmap: 'OpenStreetMap place record (price unavailable)',
+  mock: 'Offline demo data (not live)',
 }
 
 // Map Chinese/English label keywords to Lucide icons
@@ -64,16 +64,11 @@ export default function BookingPanel({ trip }) {
   const [searching, setSearching] = useState(false)
 
   const [selected, setSelected] = useState(null)
-  const [identity, setIdentity] = useState({ name: '', id_number: '', phone: '' })
-  const [payment, setPayment] = useState('wechat')
-  const [confirming, setConfirming] = useState(false)
-  const [confirmResult, setConfirmResult] = useState(null)
 
   async function runSearch() {
     setError(null)
     setHotels([])
     setSelected(null)
-    setConfirmResult(null)
     setSource(null)
     setStages(Object.fromEntries(STAGES.map((s) => [s.key, 'pending'])))
     setSearching(true)
@@ -83,9 +78,9 @@ export default function BookingPanel({ trip }) {
         location: trip.location,
         check_in: trip.dates.start,
         check_out: trip.dates.end,
-        adults: 1,
+        adults: trip.num_people || 1,
         children: 0,
-        rooms: 1,
+        rooms: Math.max(1, Math.ceil((trip.num_people || 1) / 2)),
         max_price_per_night: cap ? Number(cap) : undefined,
         preferences: (Array.isArray(trip.preferences)
           ? trip.preferences
@@ -109,63 +104,17 @@ export default function BookingPanel({ trip }) {
     }
   }
 
-  // Auto-run the search when the panel opens.
-  useEffect(() => {
-    runSearch()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  async function handleConfirm() {
-    if (!selected) return
-    setConfirming(true)
-    setStages((s) => ({ ...s, confirming: 'running' }))
-    setConfirmResult(null)
-    try {
-      const res = await confirmBooking({
-        id_number: identity.id_number,
-        name: identity.name || undefined,
-        phone: identity.phone || undefined,
-        hotel: {
-          id: selected.id,
-          name: selected.name,
-          url: selected.url || '',
-          room_type: null,
-          price_total: selected.price_per_night || null,
-          currency: selected.currency || 'CNY',
-        },
-        check_in: trip.dates.start,
-        check_out: trip.dates.end,
-        rooms: 1,
-        adults: 1,
-        children: 0,
-        payment_method: payment,
-      })
-      setConfirmResult(res)
-      setStages((s) => ({ ...s, confirming: 'done' }))
-    } catch (e) {
-      setError(e.message)
-      setStages((s) => ({ ...s, confirming: 'pending' }))
-    } finally {
-      setConfirming(false)
-    }
-  }
-
-  async function handleMarkPaid() {
-    if (!confirmResult?.route) return
-    const updated = await markBookingPaid(confirmResult.route.id, confirmResult.route.order_no)
-    setConfirmResult((r) => ({ ...r, status: 'confirmed', route: updated }))
-  }
-
   return (
     <div className="booking-panel">
       <div className="panel-heading">
         <div>
-          <span className="section-index">BOOK YOUR STAY</span>
-          <h2>Real hotels, real booking.<br />No invented data.</h2>
+          <span className="section-index">COMPARE YOUR STAY</span>
+          <h2>Research here.<br />Book with the provider.</h2>
         </div>
         <p>
-          Live search across the real hotel APIs, then Ctrip (携程) via Playwright, then
-          OpenStreetMap. Pick a stay and we drive the booking to the payment step.
+          Search configured hotel providers, Ctrip, then OpenStreetMap. Prices and
+          availability can change; G3TA never marks a stay paid or confirmed without
+          provider proof.
         </p>
       </div>
 
@@ -180,7 +129,7 @@ export default function BookingPanel({ trip }) {
           />
         </label>
         <button className="text-button" onClick={runSearch} disabled={searching}>
-          <RefreshCw size={15} className={searching ? 'spin' : ''} /> {searching ? 'Searching…' : 'Search again'}
+          <RefreshCw size={15} className={searching ? 'spin' : ''} /> {searching ? 'Searching…' : hotels.length ? 'Search again' : 'Search stays'}
         </button>
       </div>
 
@@ -279,21 +228,12 @@ export default function BookingPanel({ trip }) {
                 <div className="hotel-map-links">
                   <MapPin size={13} />
                   <a
-                    href={`https://www.google.com/maps?q=${h.lat},${h.lng}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    Google Maps
-                  </a>
-                  <span>·</span>
-                  <a
                     href={`https://uri.amap.com/marker?position=${h.lng},${h.lat}&name=${encodeURIComponent(h.name)}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     onClick={(e) => e.stopPropagation()}
                   >
-                    高德地图
+                    Open in AMap 高德地图
                   </a>
                 </div>
               )}
@@ -366,7 +306,7 @@ export default function BookingPanel({ trip }) {
                 className="select-btn"
                 onClick={(e) => { e.stopPropagation(); setSelected(h) }}
               >
-                {selected?.id === h.id ? 'Selected' : 'Select'}
+                {selected?.id === h.id ? 'Selected' : 'Review'}
               </button>
             </article>
             )
@@ -376,43 +316,19 @@ export default function BookingPanel({ trip }) {
 
       {selected && (
         <div className="confirm-box">
-          <h3>Confirm booking — {selected.name}</h3>
-          <div className="id-grid">
-            <label><span>Name</span>
-              <input value={identity.name} onChange={(e) => setIdentity({ ...identity, name: e.target.value })} placeholder="Traveler name" />
-            </label>
-            <label><span>ID number</span>
-              <input value={identity.id_number} onChange={(e) => setIdentity({ ...identity, id_number: e.target.value })} placeholder="ID / passport no." />
-            </label>
-            <label><span>Phone</span>
-              <input value={identity.phone} onChange={(e) => setIdentity({ ...identity, phone: e.target.value })} placeholder="Contact phone" />
-            </label>
-          </div>
-          <div className="pay-toggle">
-            <button className={payment === 'wechat' ? 'active' : ''} onClick={() => setPayment('wechat')}>微信 WeChat</button>
-            <button className={payment === 'alipay' ? 'active' : ''} onClick={() => setPayment('alipay')}>支付宝 Alipay</button>
-          </div>
-          <button className="confirm-btn" onClick={handleConfirm} disabled={confirming}>
-            {confirming ? <><LoaderCircle className="spinner" size={15} /> Confirming…</> : 'Confirm booking'}
-          </button>
-
-          {confirmResult && (
-            <div className={`confirm-result ${confirmResult.status}`}>
-              {confirmResult.status === 'pending_payment' && (
-                <>
-                  <p className="ok">{confirmResult.message}</p>
-                  <p>Order no: <strong>{confirmResult.order_no}</strong></p>
-                  <p className="muted">Pay in your own {payment === 'wechat' ? 'WeChat' : 'Alipay'} app, then:</p>
-                  <button className="paid-btn" onClick={handleMarkPaid}>标记已支付 (Mark as paid)</button>
-                </>
-              )}
-              {confirmResult.status === 'confirmed' && (
-                <p className="ok"><Check size={15} /> Booking confirmed — order {confirmResult.route?.order_no}.</p>
-              )}
-              {confirmResult.status === 'failed' && (
-                <p className="fail">{confirmResult.message}</p>
-              )}
-            </div>
+          <h3>Continue safely — {selected.name}</h3>
+          <p>
+            Recheck the room, cancellation policy, final price, taxes, and availability
+            on the provider before entering traveler or payment details.
+          </p>
+          {selected.url ? (
+            <a className="confirm-btn" href={selected.url} target="_blank" rel="noopener noreferrer">
+              Open provider to verify and book <ExternalLink size={15} />
+            </a>
+          ) : (
+            <p className="source-note">
+              <ShieldAlert size={15} /> This source did not provide a booking URL. Search the hotel name on your preferred provider.
+            </p>
           )}
         </div>
       )}

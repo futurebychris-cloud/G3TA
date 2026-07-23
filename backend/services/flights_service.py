@@ -83,8 +83,13 @@ def get_flight_options(
     dates: dict,
     budget: dict | None = None,
     transport_types: list[str] | None = None,
+    *,
+    use_ai: bool = True,
 ) -> list[dict]:
     transport_types = transport_types or ["flight"]
+    if not use_ai:
+        return _fallback(origin, destination, transport_types)
+
     result = generate_json(SYSTEM_PROMPT, {
         "origin": origin,
         "destination": destination,

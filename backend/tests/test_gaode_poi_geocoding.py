@@ -5,6 +5,40 @@ from services import gaode_service
 
 
 class GaodePoiGeocodingTests(unittest.TestCase):
+    def test_restaurant_search_resolves_city_adcode_and_rejects_other_cities(self):
+        def place_response(path, params, timeout=8):
+            self.assertEqual(path, "/place/text")
+            self.assertEqual(params["city"], "310000")
+            self.assertEqual(params["citylimit"], "true")
+            return {
+                "status": "1",
+                "pois": [
+                    {
+                        "name": "北京错误餐厅",
+                        "adcode": "110101",
+                        "location": "116.4,39.9",
+                        "biz_ext": {"rating": "4.9"},
+                    },
+                    {
+                        "name": "上海正确餐厅",
+                        "adcode": "310101",
+                        "cityname": "上海市",
+                        "location": "121.47,31.23",
+                        "biz_ext": {"rating": "4.7"},
+                    },
+                ],
+            }
+
+        with (
+            patch.object(gaode_service, "GAODE_KEY", "test-web-service-key"),
+            patch.object(gaode_service, "_gaode_city_filter", return_value="310000"),
+            patch.object(gaode_service, "_gaode_json", side_effect=place_response),
+        ):
+            results = gaode_service.search_restaurants("Shanghai", max_results=10)
+
+        self.assertEqual([item["name"] for item in results], ["上海正确餐厅"])
+        self.assertEqual(results[0]["adcode"], "310101")
+
     def test_bilingual_pois_use_city_limited_place_search_and_remain_distinct(self):
         locations = {
             "外滩": "121.492127,31.233516",

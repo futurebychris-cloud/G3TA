@@ -1,13 +1,13 @@
-"""Transportation Agent v2 (Route Scout) — REAL multi-source prices.
+"""Transportation Agent v2 (Route Scout) — multi-source transport comparison.
 
 Data sources (tried in priority order):
-  1. 12306.cn public API → real-time Chinese train schedules + prices
-  2. Ctrip flights (Playwright) → international + domestic flight prices
-  3. Ctrip trains (Playwright) → fallback train data
-  4. Gaode Maps / OSRM → real local transport distances + cost estimates
+  1. 12306.cn public endpoint → current Chinese train records when available
+  2. Ctrip public flight/train pages through Playwright
+  3. Configured flight providers
+  4. Gaode Maps / OSRM → local distance and cost estimates
 
-If all scraping fails, the error is surfaced clearly — we do NOT fall back to
-fake data. The orchestrator will see the error and relay it to the user.
+If providers fail, clearly labeled estimates may keep the plan usable. Every
+option carries source metadata and requires verification before purchase.
 
 Output: {"options": [...], "recommended": {...}, "cost": number,
          "local_transport_cost": number, "scrape_status": "ok"|"partial"|"failed",
@@ -23,8 +23,9 @@ import time
 import urllib.parse
 
 from services.flights_service import get_flight_options
+from services.runtime_cache import cached_call
 
-from .base import llm_reason, trip_days
+from .base import llm_reason, report_progress, trip_days
 
 # --------------------------------------------------------------------------- #
 # Constants
@@ -205,7 +206,9 @@ def _scrape_ctrip_flights(origin: str, destination: str, date_str: str) -> tuple
 
         print(f"[transport] navigating to Ctrip flights ({scope}): {origin}→{destination} {date_str}")
         print(f"[transport] URL: {url}")
-        page.goto(url, timeout=30000, wait_until="domcontentloaded")
+        navigation_response = page.goto(
+            url, timeout=30000, wait_until="domcontentloaded"
+        )
         time.sleep(5)  # let JS render flight list
 
         # Log what URL we actually landed on (Ctrip may redirect)
@@ -217,6 +220,17 @@ def _scrape_ctrip_flights(origin: str, destination: str, date_str: str) -> tuple
 
         # --- Strategy 1: __NEXT_DATA__ JSON (most reliable) ---
         content = page.content()
+        response_status = (
+            navigation_response.status if navigation_response is not None else None
+        )
+        if response_status == 432 or "whaleguard block" in content.lower():
+            error = (
+                "Ctrip flight request was blocked by WhaleGuard"
+                + (f" (HTTP {response_status})" if response_status else "")
+                + ". Use a valid logged-in Ctrip browser session and retry; "
+                "the scraper does not bypass verification challenges."
+            )
+            return flights, error
         m = re.search(r'<script[^>]*id="__NEXT_DATA__"[^>]*>(.*?)</script>', content)
         if m:
             try:
@@ -508,72 +522,11 @@ def _local_transport_options(city: str) -> list[dict]:
 
 
 # --------------------------------------------------------------------------- #
-# AMap-compatible route metadata
-# --------------------------------------------------------------------------- #
-
-def _route_point(option: dict, prefix: str, label: str, role: str) -> dict | None:
-    """Build one optional AMap point without making coordinates mandatory."""
-    lat = option.get(f"{prefix}_lat")
-    lng = option.get(f"{prefix}_lng")
-    coordinate_system = (
-        str(option.get("coordinate_system") or "")
-        .casefold()
-        .replace("_", "-")
-        .replace(" ", "")
-    )
-    if (
-        coordinate_system not in {"gcj-02", "gcj02", "amap", "amap-compatible"}
-        or isinstance(lat, bool)
-        or isinstance(lng, bool)
-        or not isinstance(lat, (int, float))
-        or not isinstance(lng, (int, float))
-        or not math.isfinite(lat)
-        or not math.isfinite(lng)
-        or not -90 <= lat <= 90
-        or not -180 <= lng <= 180
-    ):
-        return None
-    return {
-        "label": label,
-        "type": "transport",
-        "role": role,
-        "lat": lat,
-        "lng": lng,
-        "coordinate_system": "GCJ-02",
-    }
-
-
-def _route_metadata(
-    origin: str,
-    destination: str,
-    recommended: dict,
-) -> tuple[list[dict], dict]:
-    """Preserve the route metadata contract used by the AMap frontend."""
-    departure_airport = recommended.get("departure_airport") or origin
-    arrival_airport = recommended.get("arrival_airport") or destination
-    points = [
-        _route_point(recommended, "departure", departure_airport, "departure"),
-        _route_point(recommended, "arrival", arrival_airport, "arrival"),
-    ]
-    return [point for point in points if point], {
-        "mode": recommended.get("mode") or "flight",
-        "origin": origin,
-        "destination": destination,
-        "departure_airport": departure_airport,
-        "arrival_airport": arrival_airport,
-        "carrier": recommended.get("carrier"),
-        "departure_time": recommended.get("departure_time"),
-        "duration": recommended.get("duration"),
-        "stops": recommended.get("stops", 0),
-    }
-
-
-# --------------------------------------------------------------------------- #
 # Main agent
 # --------------------------------------------------------------------------- #
 
 def run(trip_input: dict) -> dict:
-    """Run the transport agent — ALL prices from live Playwright scraping.
+    """Run the transport agent using provider records plus labeled fallbacks.
 
     Returns:
         {
@@ -595,26 +548,90 @@ def run(trip_input: dict) -> dict:
         for mode in transport_types
         if str(mode).strip()
     ] or ["flight"]
+    wants_flight = any(mode in {"flight", "plane", "air"} for mode in requested_modes)
+    wants_train = any(mode in {"train", "rail"} for mode in requested_modes)
+    wants_car = any(mode in {"car", "drive", "driving"} for mode in requested_modes)
 
     scope = _detect_scope(origin, destination)
     errors: list[str] = []
     all_options: list[dict] = []
     days = trip_days(trip_input)
 
-    # ---- Phase 1: Scrape Ctrip flights (always try first) ----
-    flights, flight_err = _scrape_ctrip_flights(origin, destination, dates["start"])
-    if flight_err:
-        print(f"[transport] FLIGHT ERROR: {flight_err}")
-        errors.append(flight_err)
-    if flights:
-        print(f"[transport] got {len(flights)} flights, prices: {[f['price'] for f in flights[:3]]}...")
-        all_options.extend(flights)
+    # ---- Phase 1: Honor the requested intercity modes --------------------
+    if wants_car:
+        report_progress(trip_input, "正在通过高德计算城际驾车路线")
+        try:
+            from services.gaode_service import get_intercity_driving
+            road = cached_call(
+                "transport-intercity-driving",
+                (origin, destination),
+                lambda: get_intercity_driving(origin, destination),
+                ttl_seconds=1800,
+            )
+            if road:
+                duration_min = int(float(road.get("duration_min", 0) or 0))
+                hours, minutes = divmod(duration_min, 60)
+                duration = (
+                    f"{hours}h {minutes}m" if hours
+                    else f"{minutes}m"
+                )
+                car_option = {
+                    "id": "amap-driving-route",
+                    "type": "car",
+                    "mode": "car",
+                    "carrier": "AMap driving route",
+                    "from": origin,
+                    "to": destination,
+                    "departure_time": "Flexible",
+                    "arrival_time": "Route-dependent",
+                    "duration": duration,
+                    "distance_km": road.get("distance_km"),
+                    "price": road.get("estimated_cost_cny", 0),
+                    "currency": "CNY",
+                    "stops": 0,
+                    "source": f"{road.get('source', 'road')}_route_cost_estimate",
+                    "price_basis": road.get("cost_basis"),
+                }
+                if road.get("coordinate_system") == "GCJ-02":
+                    car_option.update({
+                        "coordinate_system": "GCJ-02",
+                        "departure_lat": road["origin_lat"],
+                        "departure_lng": road["origin_lng"],
+                        "arrival_lat": road["destination_lat"],
+                        "arrival_lng": road["destination_lng"],
+                    })
+                all_options.append(car_option)
+        except Exception as exc:
+            errors.append(f"Driving route unavailable: {exc}")
+
+    if wants_flight:
+        report_progress(trip_input, "正在查询航班与实时票价")
+        flights, flight_err = cached_call(
+            "transport-flights",
+            (origin, destination, dates["start"]),
+            lambda: _scrape_ctrip_flights(origin, destination, dates["start"]),
+            ttl_seconds=900,
+            persist=True,
+            source="ctrip_playwright_flights",
+        )
+        if flight_err:
+            print(f"[transport] FLIGHT ERROR: {flight_err}")
+            errors.append(flight_err)
+        if flights:
+            print(f"[transport] got {len(flights)} flights, prices: {[f['price'] for f in flights[:3]]}...")
+            all_options.extend(flights)
 
     # ---- Phase 2: 12306 trains (preferred for domestic China) ----
-    if scope == "national":
+    if wants_train and scope == "national":
+        report_progress(trip_input, "正在查询 12306 列车班次")
         try:
             from services.train12306_service import search_trains as search_12306
-            trains_12306 = search_12306(origin, destination, dates["start"])
+            trains_12306 = cached_call(
+                "transport-12306",
+                (origin, destination, dates["start"]),
+                lambda: search_12306(origin, destination, dates["start"]),
+                ttl_seconds=300,
+            )
             if trains_12306:
                 real_price_count = sum(1 for t in trains_12306 if "real_price" in t.get("source", ""))
                 for t in trains_12306:
@@ -644,8 +661,23 @@ def run(trip_input: dict) -> dict:
             print(f"[transport] 12306 failed: {e}")
 
     # ---- Phase 3: Ctrip trains (fallback if 12306 returned nothing) ----
-    if scope == "national" and not any(o.get("source") == "12306_live" for o in all_options):
-        trains, train_err = _scrape_ctrip_trains(origin, destination, dates["start"])
+    if (
+        wants_train
+        and scope == "national"
+        and not any(
+            str(option.get("source", "")).startswith("12306_live")
+            for option in all_options
+        )
+    ):
+        report_progress(trip_input, "12306 无可用结果，正在查询备用列车来源")
+        trains, train_err = cached_call(
+            "transport-ctrip-trains",
+            (origin, destination, dates["start"]),
+            lambda: _scrape_ctrip_trains(origin, destination, dates["start"]),
+            ttl_seconds=900,
+            persist=True,
+            source="ctrip_playwright_trains",
+        )
         if train_err:
             print(f"[transport] TRAIN ERROR: {train_err}")
             errors.append(train_err)
@@ -657,6 +689,7 @@ def run(trip_input: dict) -> dict:
     # Live providers are preferred. If they are unavailable, retain the old safe
     # destination-aware estimate path instead of crashing the entire itinerary.
     if not all_options:
+        report_progress(trip_input, "实时来源不可用，正在生成明确标注的估算方案")
         try:
             estimated = get_flight_options(
                 origin,
@@ -664,6 +697,7 @@ def run(trip_input: dict) -> dict:
                 dates,
                 trip_input.get("budget", {}),
                 transport_types,
+                use_ai=False,
             )
             if estimated:
                 all_options.extend(estimated)
@@ -688,18 +722,6 @@ def run(trip_input: dict) -> dict:
             "verification_required": True,
             "route_points": [],
             "route_summary": {
-                "origin": origin,
-                "destination": destination,
-                "mode": transport_types[0] if transport_types else "flight",
-            },
-            "coverage": {
-                "requested_modes": transport_types or ["flight"],
-                "available_modes": [],
-                "note": "No live or estimated transport option is currently available.",
-            },
-            "trip_id": trip_id,
-            "route_points": [],
-            "route_summary": {
                 "mode": requested_modes[0],
                 "origin": origin,
                 "destination": destination,
@@ -714,9 +736,13 @@ def run(trip_input: dict) -> dict:
                 f"{origin} → {destination} on {dates['start']}. "
                 f"Errors: {'; '.join(errors)}"
             ),
+            "trip_id": trip_id,
         }
-    elif all(option.get("source") != "12306_live" and "ctrip" not in str(option.get("source", ""))
-             for option in all_options):
+    elif all(
+        not str(option.get("source", "")).startswith("12306_live")
+        and "ctrip" not in str(option.get("source", ""))
+        for option in all_options
+    ):
         scrape_status = "estimated"
     elif errors:
         scrape_status = "partial"
@@ -724,16 +750,18 @@ def run(trip_input: dict) -> dict:
         scrape_status = "ok"
 
     # ---- Phase 5: LLM selects best option ----
+    report_progress(trip_input, "正在比较价格、时长和换乘次数")
     result = None
-    try:
-        result = llm_reason(TRANSPORT_PROMPT, {
-            "origin": origin, "destination": destination, "dates": dates,
-            "total_budget": trip_input.get("budget", {}), "preferences": preferences,
-            "category_budget_caps": trip_input.get("_budget_caps", {}),
-            "transport_types": transport_types, "options": all_options, "scope": scope,
-        })
-    except Exception as e:
-        print(f"[transport] LLM selection failed ({e}), using cheapest option")
+    if len(all_options) > 1:
+        try:
+            result = llm_reason(TRANSPORT_PROMPT, {
+                "origin": origin, "destination": destination, "dates": dates,
+                "total_budget": trip_input.get("budget", {}), "preferences": preferences,
+                "category_budget_caps": trip_input.get("_budget_caps", {}),
+                "transport_types": transport_types, "options": all_options, "scope": scope,
+            })
+        except Exception as e:
+            print(f"[transport] LLM selection failed ({e}), using cheapest option")
 
     recommended = None
     selection_reasoning = None
@@ -749,14 +777,24 @@ def run(trip_input: dict) -> dict:
         nonstop = [o for o in priced if o.get("stops", 0) == 0]
         pool = nonstop or priced or all_options
         recommended = min(pool, key=lambda o: o.get("price", float("inf")))
-        selection_reasoning = "Cheapest suitable option selected (LLM reasoning unavailable)."
+        selection_reasoning = (
+            "Only available option matched the selected transport mode."
+            if len(all_options) == 1
+            else "Cheapest suitable option selected (LLM reasoning unavailable)."
+        )
 
     cost = recommended.get("price", 0)
 
     # ---- Phase 6: Local transport (Gaode/OSRM real routing) ----
+    report_progress(trip_input, "正在估算目的地市内交通")
     try:
         from services.gaode_service import get_local_transport as gaode_transport
-        local_info = gaode_transport(destination, num_days=len(days))
+        local_info = cached_call(
+            "transport-local",
+            (destination, len(days)),
+            lambda: gaode_transport(destination, num_days=len(days)),
+            ttl_seconds=1800,
+        )
         local = [
             {"mode": m["mode"], "estimated_cost_per_day": m["cost_per_day"],
              "currency": m["currency"], "notes": m["notes"]}
@@ -771,24 +809,20 @@ def run(trip_input: dict) -> dict:
         local_est = sum(l["estimated_cost_per_day"] * 0.3 for l in local)
         local_total = round(local_est * len(days), 2)
 
-    # ---- Phase 6: Auto-booking ----
-    booking_result = None
-    try:
-        from booking.auto_book import book_item
-        ttype = recommended.get("type") or recommended.get("mode") or "flight"
-        if ttype == "flight":
-            booking_result = book_item("flight", origin=origin, destination=destination,
-                date=dates["start"], adults=trip_input.get("num_people", 1))
-        elif ttype == "train":
-            booking_result = book_item("train", origin=origin, destination=destination,
-                date=dates["start"], train=recommended.get("train_number", ""),
-                adults=trip_input.get("num_people", 1))
-    except Exception as e:
-        booking_result = {"status": "manual_required", "message": str(e)}
+    # Planning is read-only. A route recommendation must never trigger a provider
+    # browser or create an order without a separate, authenticated user action.
+    ttype = recommended.get("type") or recommended.get("mode") or "flight"
+    booking_result = {
+        "status": "comparison_only",
+        "message": (
+            "G3TA compared this option but did not place an order. "
+            "Verify the current fare and complete purchase with the provider."
+        ),
+    }
 
     # ---- Phase 7: Store to database ----
-    bref = booking_result.get("order_no") if booking_result else None
-    bstat = "pending_payment" if booking_result and booking_result.get("status") == "pending_payment" else "pending"
+    bref = None
+    bstat = "pending"
     try:
         from booking.shared_db import save_transport
         save_transport(

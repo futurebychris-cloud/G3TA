@@ -1,0 +1,211 @@
+{
+  "schema_version": 1,
+  "kind": "static_provider_snapshot",
+  "generated_at": "2026-07-23T07:13:28.371662+00:00",
+  "attribution": {
+    "openstreetmap": "© OpenStreetMap contributors (ODbL)"
+  },
+  "excluded_data": [
+    "credentials and personal information",
+    "cookies and session tokens",
+    "flight and train availability",
+    "live transport and hotel prices",
+    "weather"
+  ],
+  "entries": [
+    {
+      "namespace": "budget-web-costs",
+      "cache_key": "66c9bf88f18725517d98c3d73a534cd1aeff5fc3930c50e05fcab426bcc928a6",
+      "query_json": "\"Shanghai\"",
+      "scope_key": "505725780a14bbd45ef3aa181f1509df2efd07744f413c532cd5a2337ac575f1",
+      "source": "playwright_public_cost_search",
+      "captured_at_epoch": 1784789001.40359,
+      "payload": {
+        "transport": 3.0
+      }
+    },
+    {
+      "namespace": "budget-web-costs",
+      "cache_key": "e6fe93dd11d5f181df9f049dad04b7f64977e2353be9b86d2363edd7df08e2c3",
+      "query_json": "\"shanghai\"",
+      "scope_key": "505725780a14bbd45ef3aa181f1509df2efd07744f413c532cd5a2337ac575f1",
+      "source": "playwright_public_cost_search",
+      "captured_at_epoch": 1784790604.483289,
+      "payload": {
+        "transport": 3.0
+      }
+    },
+    {
+      "namespace": "hotel-planning-search",
+      "cache_key": "b03dcaacb263071e78c6d43127e87450ae0ce0acef63500fd36cae7fd733322e",
+      "query_json": "[\"shanghai\",{\"end\":\"2026-08-03\",\"start\":\"2026-07-30\"},92.11,null,[]]",
+      "scope_key": "505725780a14bbd45ef3aa181f1509df2efd07744f413c532cd5a2337ac575f1",
+      "source": "hotel_provider_or_ctrip_playwright",
+      "captured_at_epoch": 1784790653.6196039,
+      "payload": [
+        {
+          "id": "osm_567412899",
+          "name": "隆德丰国际大酒店",
+          "rating": 4.0,
+          "area": "Shanghai",
+          "lat": 31.2430926,
+          "lng": 121.5275812,
+          "tags": [
+            "premium"
+          ],
+          "url": "https://www.openstreetmap.org/node/567412899",
+          "currency": "",
+          "source": "openstreetmap"
+        },
+        {
+          "id": "osm_784179351",
+          "name": "中福世福汇大酒店",
+          "rating": 4.0,
+          "area": "上海市",
+          "lat": 31.2342529,
+          "lng": 121.4801517,
+          "tags": [
+            "premium"
+          ],
+          "url": "https://www.openstreetmap.org/node/784179351",
+          "currency": "",
+          "source": "openstreetmap"
+        },
+        {
+          "id": "osm_476068109",
+          "name": "上海海鸥丽晶酒店",
+          "rating": null,
+          "area": "",
+          "lat": 31.2457297,
+          "lng": 121.4872012,
+          "tags": [],
+          "url": "https://www.openstreetmap.org/node/476068109",
+          "currency": "",
+          "source": "openstreetmap"
+        },
+        {
+          "id": "osm_476779776",
+          "name": "世茂皇家艾美酒店",
+          "rating": null,
+          "area": "Shanghai",
+          "lat": 31.2367348,
+          "lng": 121.4717101,
+          "tags": [
+            "wifi",
+            "accessible"
+          ],
+          "url": "https://www.openstreetmap.org/node/476779776",
+          "currency": "",
+          "source": "openstreetmap"
+        },
+        {
+          "id": "osm_495629462",
+          "name": "东方滨江大酒店",
+          "rating": null,
+          "area": "",
+          "lat": 31.2415416,
+          "lng": 121.4930065,
+          "tags": [],
+          "url": "https://www.openstreetmap.org/node/495629462",
+          "currency": "",
+          "source": "openstreetmap"
+        },
+        {
+          "id": "osm_600473613",
+          "name": "华美达上海五角场大酒店",
+          "rating": null,
+          "area": "",
+          "lat": 31.2949673,
+          "lng": 121.5153176,
+          "tags": [
+            "accessible"
+          ],
+          "url": "https://www.openstreetmap.org/node/600473613",
+          "currency": "",
+          "source": "openstreetmap"
+        },
+        {
+          "id": "osm_600473617",
+          "name": "Holiday Inn Express Wujiaochang",
+          "rating": null,
+          "area": "",
+          "lat": 31.2933033,
+          "lng": 121.5148509,
+          "tags": [],
+          "url": "https://www.openstreetmap.org/node/600473617",
+          "currency": "",
+          "source": "openstreetmap"
+        },
+        {
+          "id": "osm_614627712",
+          "name": "Courtyard万豪酒店",
+          "rating": null,
+          "area": "",
+          "lat": 31.2281743,
+          "lng": 121.5215791,
+          "tags": [
+            "accessible"
+          ],
+          "url": "https://www.openstreetmap.org/node/614627712",
+          "currency": "",
+          "source": "openstreetmap"
+        },
+        {
+          "id": "osm_619220944",
+          "name": "万豪酒店",
+          "rating": null,
+          "area": "",
+          "lat": 31.2323261,
+          "lng": 121.4652303,
+          "tags": [
+            "accessible"
+          ],
+          "url": "https://www.openstreetmap.org/node/619220944",
+          "currency": "",
+          "source": "openstreetmap"
+        },
+        {
+          "id": "osm_654578461",
+          "name": "Crowne Plaza Shanghai Nanjing Road",
+          "rating": null,
+          "area": "",
+          "lat": 31.2367321,
+          "lng": 121.4723645,
+          "tags": [
+            "accessible"
+          ],
+          "url": "https://www.openstreetmap.org/node/654578461",
+          "currency": "",
+          "source": "openstreetmap"
+        },
+        {
+          "id": "osm_739234071",
+          "name": "Pullman Shanghai Skyway",
+          "rating": null,
+          "area": "Shanghai",
+          "lat": 31.2062423,
+          "lng": 121.4664011,
+          "tags": [
+            "wifi",
+            "accessible"
+          ],
+          "url": "https://www.openstreetmap.org/node/739234071",
+          "currency": "",
+          "source": "openstreetmap"
+        },
+        {
+          "id": "osm_815462228",
+          "name": "Mingtown Etour Youth Hostel",
+          "rating": null,
+          "area": "",
+          "lat": 31.2314265,
+          "lng": 121.4649296,
+          "tags": [],
+          "url": "https://www.openstreetmap.org/node/815462228",
+          "currency": "",
+          "source": "openstreetmap"
+        }
+      ]
+    }
+  ]
+}

@@ -1,6 +1,5 @@
-"""Real budget data from Numbeo cost-of-living API + web scraping.
+"""Budget references from Numbeo web data plus labeled static estimates.
 
-Replaces DeepSeek LLM estimates with actual crowd-sourced cost data.
 Numbeo provides: meal prices, hotel indices, local transport costs, etc.
 
 Usage:
@@ -79,7 +78,7 @@ _NUMBEO_CITY_MAP: dict[str, str] = {
     "delhi": "Delhi",
 }
 
-# Hardcoded cost data as reliable fallback (sourced from Numbeo June 2026 averages)
+# Static reference estimates used only when the public page is unavailable.
 # Values are in USD per day for a mid-range traveler
 _COST_DATABASE: dict[str, dict] = {
     "Shanghai": {
@@ -228,7 +227,7 @@ def get_cost_index(
     dates: dict | None = None,
     currency: str = "USD",
 ) -> dict:
-    """Return real cost index data for the destination.
+    """Return a labeled cost index for the destination.
 
     Returns: {
         currency, cost_level, daily_index: {food, activity, housing, local_transport, shopping},

@@ -81,7 +81,7 @@ export default function AccessibilityPanel({ open, onClose, returnFocusRef }) {
           <label className="speed-setting">
             <span className="setting-copy">
               <strong>Reading Speed</strong>
-              <small>Controls browser read-aloud speed.</small>
+              <small>Controls local Piper read-aloud speed.</small>
             </span>
             <span className="speed-control">
               <input

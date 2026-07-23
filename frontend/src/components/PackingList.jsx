@@ -73,17 +73,17 @@ export default function PackingList({ items, weather, pacing, dailyWeather, heal
         // Persist unpack to backend
         const name = normalizeItemName(items[index])
         const db = dbItemMap?.get(name)
-        if (db) toggleChecklistItem(db.id, false).catch(() => {})
+        if (db) toggleChecklistItem(db.id, tripId, false).catch(() => {})
       } else {
         next.add(index)
         // Persist packed to backend
         const name = normalizeItemName(items[index])
         const db = dbItemMap?.get(name)
-        if (db) toggleChecklistItem(db.id, true).catch(() => {})
+        if (db) toggleChecklistItem(db.id, tripId, true).catch(() => {})
       }
       return next
     })
-  }, [items, dbItemMap])
+  }, [items, dbItemMap, tripId])
 
   const hasDailyWeather = dailyWeather && dailyWeather.length > 0
 

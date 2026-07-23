@@ -1,259 +1,253 @@
-# Multi-Agent AI Trip Planner
+# G3TA Multi-Agent Trip Planner
 
-> NYU Shanghai AI Pre-College final project — a **base plate** for the team build.
-> Six specialist AI agents + an orchestrator turn a single trip request into a
-> complete, auditable itinerary. The v2 pipeline prefers live provider data and browser
-> research, then uses clearly labeled estimates when a source is unavailable.
+G3TA is an NYU Shanghai team project that turns one reviewed trip brief into a
+day-by-day itinerary. Six specialist agents share a single trip ID, exchange
+structured handoffs, and expose their progress in an Agent Town interface.
 
-**LLM:** DeepSeek (`deepseek-chat`, OpenAI-compatible endpoint).
+DeepSeek supplies reasoning where needed. AMap powers the interactive route
+view. Provider records are preferred when available, while estimates and
+repository snapshots are labeled separately.
 
----
+## Current capabilities
 
-## What it does
+- Voice-or-text trip drafting followed by a normal editable form.
+- Transport-first orchestration with visible per-agent progress.
+- Destination and date guards that reject stale data from another trip.
+- AMap places, walking/driving routes, and a gradual route-reveal animation.
+- Day-by-day itinerary, budget review, packing checklist, weather, and agent log.
+- Hotel comparison that sends the traveler to the provider to verify and book.
+- Piper English/Mandarin read-aloud with no operating-system voice fallback.
+- Standard, Easy Reading, Senior Mode, Voice First, high contrast, reduced
+  motion, larger text, and line-focus controls.
+- Cooperative cancellation, a configurable overall planning deadline, provider
+  caching, backend/frontend tests, CI, and a production container build.
 
-You enter a destination, dates, budget, and preferences. Six agents each own one
-domain. The Budget Agent runs first so its category caps guide the other five
-agents, which then run concurrently; an **Orchestrator** merges their
-outputs into one day-by-day itinerary:
+## Truth and safety boundaries
 
-| Agent | Owns | Current data source |
+- Planning is read-only. Generating a route never starts a booking or submits
+  traveler information.
+- Activity, meal, and transportation database rows start as `pending`, not
+  `confirmed`.
+- Flight, train, hotel, and restaurant availability must be verified with the
+  provider before purchase.
+- Offline mock search data is allowed only with `ALLOW_MOCK_RESULTS=1` and is
+  labeled `mock`. Mock mode never creates an order number or payment state.
+- Repository provider snapshots are disabled by default. If explicitly enabled,
+  they contain public, slowly changing metadata only—never current prices,
+  schedules, weather, availability, cookies, secrets, or personal information.
+- Passport/ID and phone fields are no longer collected by the public frontend or
+  persisted by the normal planning pipeline.
+- Legacy provider-browser experiments are disabled by default, protected by an
+  operator token, and return `501 Not Implemented` for unsupported purchase flows.
+- This remains a local/team demo, not a production multi-user service. Put any
+  public deployment behind real user authentication, rate limits, HTTPS, and
+  provider-compliant integrations.
+
+## Canonical pipeline
+
+```text
+Trip brief
+   │
+   ▼
+Transportation ── actual/estimated route cost ──► Budget
+                                                   │
+                              ┌────────────────────┴───────────────────┐
+                              ▼                                        ▼
+                         Activity                                  Housing
+                              └────────────────────┬───────────────────┘
+                                                   ▼
+                                                 Food
+                                                   ▼
+                                               Planning
+                                                   ▼
+                                            Lead orchestrator
+                                                   ▼
+                                    itinerary + map + provenance
+```
+
+The actual order is:
+
+1. Transportation
+2. Budget
+3. Activity and Housing in parallel
+4. Food
+5. Planning
+6. Lead orchestrator synthesis
+
+## Data sources
+
+| Area | Preferred source | Honest fallback |
 |---|---|---|
-| Budget | per-category caps and overspend warnings | Cost index + browser research + DeepSeek reasoning |
-| Transportation | intercity route and local mobility | Ctrip, 12306, Gaode/OSRM; labeled estimate fallback |
-| Housing | real-priced lodging recommendation | Hotel APIs, Ctrip, then OpenStreetMap discovery |
-| Food | day-by-day meals matching cuisine and caps | Google Maps research + normalized destination options |
-| Activity | distinct activities and must-see choices | Ctrip/web research + verified-name attraction catalog |
-| Planning | packing list, daily weather, pacing | Open-Meteo forecast + labeled seasonal fallback |
+| Transportation | 12306 public query, Ctrip public pages | clearly labeled destination-aware estimate |
+| Local routes and POIs | AMap Web Service / JS API; OSRM where used | no fabricated route |
+| Housing | configured hotel API; Ctrip listing when an authenticated local session is available | planning omits lodging cost; explicit comparison may show an OpenStreetMap place record without a live price |
+| Food | AMap POIs, optional public search | labeled estimate |
+| Activities | known-place catalog; optional public browser search | labeled deterministic recommendation |
+| Weather | Open-Meteo forecast | labeled prior-year climate proxy outside forecast coverage |
+| Speech | local Piper service | text remains available; no hidden system-voice fallback |
 
-The demo-able insight (PRD §13): when the combined plan **breaks the budget**, the
-Orchestrator downgrades lodging and records *why* in a **reasoning log** you can
-point at. A geography guard rejects outputs for the wrong destination, and schedule
-validation prevents repeated or invented activities from reaching the UI.
-
-## Accessibility options
-
-Use the **Accessibility** button in the top-right header to choose independent reading and
-interaction tools. A first-run setup offers **Standard**, **Easy Reading**, **Senior Mode**, and
-**Voice First** as optional starting points. Standard remains the default, and every setting can
-still be changed independently after selecting a preset. Available options are:
-
-- Easy Reading, Bigger Text, More Text Spacing, and High Contrast;
-- Reduce Motion and a system-based reading font (`Arial, Verdana, Tahoma, sans-serif`);
-- one-line or three-line Line Focus;
-- Piper Read Aloud controls with adjustable reading speed;
-- browser voice input beside the destination field;
-- an optional **Voice-guided trip setup** inside Dyslexia & Reading Support. It speaks the
-  same trip-form questions one at a time, advances after each final voice answer, repeats any
-  required detail it cannot confirm, and starts planning after the final validated answer.
-
-### Senior Mode
-
-Senior Mode builds on the same accessibility settings; it does not create a separate theme or
-duplicate the speech and reading systems. Selecting it enables Bigger Text, More Text Spacing,
-High Contrast, Reduce Motion, Easy Reading, Read Aloud at `0.9×`, Reading Font, and three-line
-Line Focus. Users can then override any one of those choices from the Accessibility panel.
-
-In trip results, Senior Mode also provides larger touch targets and travel facts, a smaller set of
-primary trip sections, and short **Top Recommendation**, **Best Value**, and **Closest** place
-choices with a button to reveal the full list. It adds brief explanations for common travel terms,
-a confirmation before leaving the current trip, one-tap Emergency Information, and a floating
-**What do I do next?** helper. The emergency card labels missing provider data for verification;
-it does not invent phone numbers, street addresses, or embassy details.
-
-Read Aloud controls cover itinerary days, important flight and hotel events, directions, packing,
-and emergency information. They only speak after the user presses a control. Senior Mode's Easy
-Reading instructions and frontend formatting must never change dates, times, prices, locations,
-routes, reservation details, or other factual travel data.
-
-Settings are validated and stored together in browser `localStorage` under
-`g3ta-accessibility-settings-v1`. If storage is blocked, they continue working for the current
-session. **Reset to defaults** removes all selected presentation modes.
-
-Voice input uses the browser Web Speech Recognition API and is mainly available in Chromium and
-some Safari versions; it is generally unavailable in Firefox. All spoken output—including Read
-Aloud and every guided-setup question—is generated by the local Piper service. The frontend never
-falls back to an operating-system voice, so a stopped Piper service produces a clear error while
-normal typing and reading stay available. No paid speech service is used. The guided setup sends
-the completed text answers—not microphone audio—to the configured AI model to normalize dates,
-currency, counts, and preferences. Missing required details stay inside the guide; a complete
-final voice answer starts the normal planning pipeline automatically.
-
-The optional reading font uses installed system fonts. OpenDyslexic is not downloaded or required.
-Easy Reading always has deterministic frontend structure as a fallback. When its optional DeepSeek
-prompt instruction is used, it explicitly requires every date, time, price, location, warning,
-duration, flight number, and factual detail to remain unchanged and prohibits adding facts.
-
-This feature set improves accessibility but is not a claim of complete WCAG conformance. Keyboard,
-screen-reader, browser zoom, voice permission, and operating-system voice behavior should still be
-reviewed manually in supported browsers.
-
-> **Accuracy note:** Live sources can fail, change, or block automated access. DeepSeek
-> does not provide live inventory. Verify every price, schedule, availability claim,
-> opening hour, coordinate, and reservation with the provider before purchase. Flight,
-> train, and restaurant selections are never labeled confirmed without provider proof.
-
-> **Scope note:** This is a one-shot orchestrator/worker pipeline, **not** an
-> AI-Town-style persistent simulation. See PRD §14 for the gap analysis and the
-> recommended extension path before adding memory/reflection/multi-day loops.
-
----
+Every final result includes `data_provenance` and a verification notice. “Live”
+means directly queried provider/public records, not guaranteed inventory or a
+confirmed reservation.
 
 ## Project layout
 
-```
-├── README.md                ← you are here
-├── .env.example             ← copy to .env, add your DeepSeek key
-├── frontend/                ← React (Vite) wizard: form → progress → result
-│   └── src/components/       InputForm, ProgressTracker, ItineraryView, MapView, BudgetView, PackingList, ReasoningLog
+```text
+.
 ├── backend/
-│   ├── main.py               FastAPI app: /plan, /plan/stream, /agents/{name}
-│   ├── orchestrator.py       runs 6 agents, reconciles budget, synthesizes itinerary
-│   ├── agents/               six v2 specialists with the stable v1 safety contracts
-│   ├── booking/              hotel search, provider automation, and SQLite audit stores
-│   ├── services/             ← THE SWAP POINT for real APIs (see below)
-│   └── llm/deepseek_client.py single DeepSeek entry point
-├── piper/                    local English/Mandarin text-to-speech service
-└── docs/AGENT_HANDOFF.md     exact input/output contract for every agent
+│   ├── main.py                    FastAPI routes and SSE planning stream
+│   ├── orchestrator.py            handoffs, guards, reconciliation, synthesis
+│   ├── plan_runtime.py            cancellation lifecycle
+│   ├── security.py                local CORS and booking boundary
+│   ├── agents/                    six specialist agents
+│   ├── services/                  provider adapters, AMap, weather, Piper proxy
+│   ├── booking/                   comparison and operator-only experiments
+│   ├── data/                      optional sanitized provider metadata snapshots
+│   └── tests/
+├── frontend/
+│   └── src/
+│       ├── App.jsx
+│       ├── components/            form, Agent Town, map, itinerary, accessibility
+│       ├── hooks/
+│       └── lib/amap.js
+├── piper/                         local TTS container
+├── docs/AGENT_HANDOFF.md
+├── Dockerfile
+└── docker-compose.yml
 ```
 
----
+## Local setup
 
-## Setup
-
-### 1. Keys
+### 1. Environment files
 
 ```bash
 cp .env.example .env
-# edit .env and set DEEPSEEK_API_KEY=...   (required — every agent calls DeepSeek)
 ```
 
-### 2. Backend (Python 3.10+)
+At minimum, set:
+
+```dotenv
+DEEPSEEK_API_KEY=...
+GAODE_KEY=...                 # AMap Web Service key used by the backend
+```
+
+For the browser map, create an ignored repository-root `.env.local`:
+
+```dotenv
+VITE_AMAP_KEY=...             # AMap Web JS API 2.0 key
+VITE_AMAP_SECURITY_CODE=...   # matching JS security code
+```
+
+The Web Service key and Web JS key are different AMap service types. Restrict
+the browser key to the exact localhost/production domains in the AMap console.
+Never commit `.env` or `.env.local`. Any key that has appeared in Git history
+must be rotated.
+
+### 2. Backend
 
 ```bash
 cd backend
-python3 -m venv .venv && source .venv/bin/activate    # optional but recommended
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
-python -m playwright install chromium                 # browser automation
-uvicorn main:app --reload                              # http://localhost:8000
+python -m playwright install chromium
+uvicorn main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-Quick check: open http://localhost:8000/ → `{"status":"ok", ...}`.
+Health check: `http://127.0.0.1:8000/health`
 
-### 3. Piper voice service (Docker)
+### 3. Frontend
+
+```bash
+cd frontend
+npm ci
+npm run dev -- --host 127.0.0.1
+```
+
+Open `http://127.0.0.1:5173`.
+
+### 4. Piper read-aloud
 
 ```bash
 docker build -t g3ta-piper:latest ./piper
-docker run -d --restart unless-stopped --name g3ta-piper -p 8083:8080 g3ta-piper:latest
-curl http://127.0.0.1:8083/health
+docker run -d --name g3ta-piper -p 127.0.0.1:8083:8080 g3ta-piper:latest
 ```
 
-The bundled voices are English and Mandarin. See `piper/README.md` to mount an authorized
-custom Piper model without changing application code.
+Piper health check: `http://127.0.0.1:8083/health`
 
-### 4. Frontend (Node 18+)
+### One-command container setup
+
+After creating `.env`:
 
 ```bash
-cd frontend
-npm install
-npm run dev                                            # http://localhost:5173
+docker compose up --build
 ```
 
-Open http://localhost:5173, enter any destination, and watch the Budget Agent establish
-caps before the other five specialists run concurrently.
+The compose ports bind to localhost only. The production image builds the
+frontend and serves it through FastAPI at `http://127.0.0.1:8000`.
 
-### Offline sanity check (no key needed)
-
-`backend/_smoke_test.py` stubs the LLM to force the deterministic fallbacks and runs
-the full orchestration for Shanghai and asserts that no retired Tokyo data leaks
-into the result. It does not spend tokens:
+## Tests
 
 ```bash
-cd backend && python3 _smoke_test.py
-```
+cd backend
+.venv/bin/python -m pytest -q
+python _smoke_test.py
 
-### Accessibility tests
-
-The frontend uses Vitest, jsdom, and React Testing Library for settings and preset persistence,
-first-run setup, dialog focus, keyboard behavior, accessible names, immediate-next-step formatting,
-and Piper speech controls:
-
-```bash
-cd frontend
-npm test
+cd ../frontend
+npm test -- --run
 npm run build
 ```
 
-Backend easy-reading factual-preservation and weather tests run with:
+GitHub Actions runs the backend suite plus frontend tests and build.
 
-```bash
-PYTHONPATH=backend backend/.venv/bin/python -m unittest discover -s backend/tests -v
-```
-
----
-
-## Adding Real APIs
-
-External sources are normalized behind stable service and agent contracts. Weather geocodes
-arbitrary destinations and requests up to 16 forecast days from Open-Meteo without an API key.
-Dates outside that window, or requests made while Open-Meteo is unavailable, retain a clearly
-labeled seasonal estimate. Replacing another service means editing that service while keeping
-its return shape; agent logic stays intact.
-
-Open-Meteo data is normalized into the app's daily schema and attributed in the result UI under
-the [CC BY 4.0 licence](https://open-meteo.com/en/license). The free endpoint is for this
-non-commercial educational demo; use an appropriate paid endpoint and key for commercial use.
-
-Set the matching key in `.env` (`FLIGHTS_API_KEY`, `HOTELS_API_KEY`, `MAPS_API_KEY`, …),
-then replace the function body. Open-Meteo does not require a key for this non-commercial demo:
-
-| Service function (file) | Signature | Must return |
-|---|---|---|
-| `flights_service.get_flight_options` | `(origin, destination, dates, budget=None, transport_types=None)` | `[{"id","carrier","mode","price","duration","departure_time","arrival_airport","stops"}]` |
-| `hotels_service.get_hotel_options` | `(destination, dates, max_price_per_night=None, budget=None, preferences=None)` | `[{"id","name","price_per_night","rating","area","lat","lng","tags"}]` |
-| `food_service.get_food_options` | `(destination, cuisine_tags=None, num_days=5, ...)` | `[{"id","name","cuisine","cuisine_family","price","meal_type","area","rating","tags"}]` |
-| `activities_service.get_activity_options` | `(destination, activity_styles=None, requested_count=6, ...)` | `[{"id","name","style","price","duration","area","lat","lng","tags"}]` |
-| `weather_service.get_weather` | `(destination, dates) -> dict` | `{"summary","source","location","daily":[{"date","condition","high_c","low_c","rain_chance","precipitation_mm","snowfall_cm","wind_speed_max_kmh","uv_index_max","source"}]}` |
-| `budget_service.get_cost_index` | `(destination, origin="", dates=None, currency="USD")` | `{"currency","cost_level","daily_index":{"food","activity","housing","local_transport"},"flight_reference"}` |
-
-Example (flights):
-
-```python
-# backend/services/flights_service.py
-def get_flight_options(origin, destination, dates, budget=None, transport_types=None):
-    # Replace the DeepSeek estimate with Amadeus/Skyscanner data, then map the
-    # provider response into the existing normalized option shape.
-    ...
-```
-
-Who owns which integration is an open team question (PRD §15) — coordinate before
-claiming one.
-
----
-
-## API endpoints
+## Main API routes
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/` | health check + agent list |
-| POST | `/intake/parse` | normalize guided answers into a reviewable form draft |
-| POST | `/speech/synthesize` | render accessible spoken output through local Piper |
-| POST | `/agents/{name}` | run one agent (`budget`, `transportation`, `housing`, `food`, `activity`, `planning`) — handy for debugging |
-| POST | `/plan` | run the full orchestration, return the final itinerary |
-| POST | `/plan/stream` | same, streamed as Server-Sent Events so the UI shows live progress |
-| POST | `/booking/search` | stream hotel discovery and filtering results |
-| POST | `/booking/confirm` | attempt to reach Ctrip's verified payment checkpoint |
-| POST | `/booking/mark_paid` | record the user's explicit payment confirmation |
-| GET | `/booking/routes` | list the stored hotel-booking audit trail |
-| POST | `/booking/search/flights` | show flight choices before any booking action |
-| POST | `/booking/search/trains` | show train choices before any booking action |
+| `GET` | `/health` | configuration status without secret values |
+| `POST` | `/intake/parse` | convert a description into a reviewable form draft |
+| `POST` | `/speech/synthesize` | proxy text to Piper and return WAV audio |
+| `POST` | `/plan/stream` | canonical SSE planning flow |
+| `POST` | `/plan/cancel/{request_id}` | cancel one active streamed plan |
+| `POST` | `/plan/finalize` | save reviewed budget targets without rerunning agents |
+| `POST` | `/agents/{name}` | run one agent for local debugging |
+| `POST` | `/booking/search` | compare hotel sources; no purchase |
+| `POST` | `/booking/search/flights` | compare flight results; no purchase |
+| `POST` | `/booking/search/trains` | compare train results; no purchase |
+| `GET/PUT` | `/api/checklist/...` | read/update one trip’s packing state |
 
-Request body for all of them is the trip input — see `docs/AGENT_HANDOFF.md`.
+Operator-only legacy routes under `/booking/confirm`, `/booking/mark_paid`,
+`/booking/routes`, and `/booking/auto/*` require both
+`BOOKING_AUTOMATION_ENABLED=1` and `X-G3TA-Booking-Token`. Unsupported booking
+types deliberately return `501` rather than pretending an order exists.
 
----
+## Optional provider cache and snapshots
 
-## For teammates / their AI agents
+Slow read-only lookups use a short in-process cache. A hosted PostgreSQL
+`DATABASE_URL` can persist provider cache entries; local SQLite is used only for
+ordinary shared planning data.
 
-Start with **`docs/AGENT_HANDOFF.md`** — it's the exact input/output contract for
-every agent and the Orchestrator. To add a real data source, you only need that
-file plus the table above. To extend toward AI-Town-style behavior, read **PRD §14**
-first.
+To export sanitized, Git-friendly public metadata:
+
+```bash
+cd backend
+PYTHONPATH=. .venv/bin/python scripts/export_provider_snapshots.py
+```
+
+To allow those non-live snapshots during an explicit offline demo:
+
+```dotenv
+G3TA_ALLOW_PROVIDER_SNAPSHOTS=1
+```
+
+The separate `scripts/scrape_travel_providers.py` collector records structured
+success/empty/blocked outcomes and stops at login, CAPTCHA, or risk-control
+pages. It is not part of the interactive planning request and refuses to store
+results without a remote PostgreSQL database.
+
+## Team handoff
+
+Read [docs/AGENT_HANDOFF.md](docs/AGENT_HANDOFF.md) before changing an agent
+contract. Keep provider-specific logic inside `backend/services/`, keep
+destination/date fields in every cache key, and add a test whenever a handoff or
+truthfulness label changes.

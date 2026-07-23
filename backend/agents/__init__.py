@@ -1,10 +1,10 @@
-"""The six specialist agents — v2 with real data pipelines.
+"""The six specialist agents — v2 with provider-first data pipelines.
 
 Each module exposes `run(trip_input: dict) -> dict` and reasons over exactly one
 domain. The Orchestrator is the only caller that sees all six outputs together.
 
-v2 agents use Playwright/web scraping for real data (ticket prices, restaurant
-searches, flights, weather API) instead of LLM-only estimates.
+v2 agents prefer public/provider records and preserve clearly labeled estimates
+when a live source is unavailable.
 """
 import os
 
@@ -14,7 +14,7 @@ def _load_agent(name: str):
     if os.path.exists(v2_path):
         try:
             mod = __import__(f"agents.{name}_agent_v2", fromlist=[name])
-            print(f"[agents] loaded {name}_agent_v2 (real-data pipeline)")
+            print(f"[agents] loaded {name}_agent_v2 (provider-first pipeline)")
             return mod
         except Exception as e:
             print(f"[agents] v2 agent '{name}' import failed ({e}), falling back to v1")
@@ -30,10 +30,10 @@ planning_agent = _load_agent("planning")
 transportation_agent = _load_agent("transportation")
 
 AGENT_ORDER = [
-    "budget",          # completes first; its caps guide every recommendation agent
-    "transportation",
-    "housing",
+    "transportation",  # completes first so Budget uses a route-grounded cost
+    "budget",
     "activity",
+    "housing",
     "food",
     "planning",
 ]

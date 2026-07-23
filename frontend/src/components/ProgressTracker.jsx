@@ -8,6 +8,7 @@ import {
   MapPinned,
   Plane,
   RefreshCw,
+  Square,
   Utensils,
 } from 'lucide-react'
 import AgentTown from './AgentTown.jsx'
@@ -22,8 +23,13 @@ const META = {
   orchestrator: { label: 'Lead orchestrator', note: 'Composing every idea into one plan', icon: BrainCircuit },
 }
 
-export default function ProgressTracker({ agents, statuses, events, trip, error, onRetry }) {
+export default function ProgressTracker({ agents, statuses, events, trip, error, onRetry, onCancel }) {
   const visibleAgents = agents.filter((agent) => META[agent])
+  const progressByAgent = Object.fromEntries(
+    (events || [])
+      .filter((event) => event.type === 'progress')
+      .map((event) => [event.agent, event]),
+  )
   const statusFor = (agent) => error && statuses[agent] === 'running' ? 'paused' : (statuses[agent] || 'pending')
   const doneCount = visibleAgents.filter((agent) => statusFor(agent) === 'done').length
   const percentage = Math.round((doneCount / Math.max(visibleAgents.length, 1)) * 100)
@@ -77,14 +83,20 @@ export default function ProgressTracker({ agents, statuses, events, trip, error,
           {visibleAgents.map((agent, index) => {
             const status = statusFor(agent)
             const { label, note, icon: AgentIcon } = META[agent]
+            const progress = progressByAgent[agent]
             return (
               <li key={agent} className={`agent-row ${status}`}>
                 <span className="agent-number">{String(index + 1).padStart(2, '0')}</span>
                 <span className="agent-icon" aria-hidden="true"><AgentIcon size={19} strokeWidth={1.8} /></span>
-                <span className="agent-copy"><strong>{label}</strong><small>{note}</small></span>
+                <span className="agent-copy">
+                  <strong>{label}</strong>
+                  <small>{status === 'running' && progress?.detail ? progress.detail : note}</small>
+                </span>
                 <span className="agent-state" aria-live={status === 'running' ? 'polite' : undefined}>
                   {status === 'done' && <><Check size={15} /> Complete</>}
-                  {status === 'running' && <><LoaderCircle className="spinner" size={15} /> Thinking</>}
+                  {status === 'running' && (
+                    <><LoaderCircle className="spinner" size={15} /> Working · {progress?.elapsed_seconds || 0}s</>
+                  )}
                   {status === 'paused' && 'Paused'}
                   {status === 'pending' && 'Queued'}
                 </span>
@@ -101,7 +113,16 @@ export default function ProgressTracker({ agents, statuses, events, trip, error,
           </div>
         )}
 
-        {!error && <p className="progress-note">Keep this window open — the finished itinerary will appear automatically.</p>}
+        {!error && (
+          <div className="progress-note">
+            <span>Keep this window open — the finished itinerary will appear automatically.</span>
+            {onCancel && (
+              <button type="button" className="text-button" onClick={onCancel}>
+                <Square size={14} /> Cancel planning
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </section>
   )

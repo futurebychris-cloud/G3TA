@@ -1,9 +1,10 @@
+import { useId } from 'react'
 import { Mic, MicOff } from 'lucide-react'
 import useSpeechRecognition from '../../hooks/useSpeechRecognition.js'
 
 export default function VoiceInputButton({ onTranscript, label = 'Enter destination by voice' }) {
   const { supported, isListening, status, start, stop } = useSpeechRecognition({ onTranscript })
-  const statusId = 'voice-input-status'
+  const statusId = useId()
   return (
     <span className="voice-input-control">
       <button

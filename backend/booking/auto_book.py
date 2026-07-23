@@ -1,23 +1,12 @@
-"""Auto-booking module — Playwright-driven booking for all trip components.
+"""Legacy provider-browser experiments plus read-only search helpers.
 
-This module extends the existing Ctrip hotel booking pipeline to also cover
-flights, trains, and restaurants. Each function:
+The public application uses only the read-only flight/train search functions.
+Every function that can submit traveler data or navigate toward an order is
+disabled unless ``BOOKING_AUTOMATION_ENABLED=1``. HTTP access is additionally
+protected by the server-side booking token in :mod:`security`.
 
-  1. Looks up stored user credentials from the DB (name, ID, phone, login cookies)
-  2. Launches the stealth Playwright browser
-  3. Navigates to the provider, searches for the desired item
-  4. Selects the matching option
-  5. Fills traveler identity details
-  6. Drives to the payment checkpoint and stops
-
-All booking stops at the payment step — the user completes payment in their own
-app (WeChat / Alipay / card). The confirmed booking is recorded in the DB.
-
-Supported providers:
-    hotel:      Ctrip (携程)     — ctrip.py book_hotel() wrapper
-    flight:     Ctrip (携程)     — domestic + international flights
-    train:      12306 (中国铁路) — domestic China high-speed + normal trains
-    restaurant: Google Maps / 美团  — reservation link or order placement
+These experiments stop at a provider payment or confirmation checkpoint; they
+do not prove that a purchase or reservation exists.
 """
 from __future__ import annotations
 
@@ -30,24 +19,44 @@ from datetime import datetime
 from typing import Any
 
 
+def _require_booking_automation() -> None:
+    if os.getenv("BOOKING_AUTOMATION_ENABLED", "").strip().casefold() not in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        raise RuntimeError(
+            "Booking automation is disabled. Search and compare options, then "
+            "complete the purchase with the provider."
+        )
+
+
 # --------------------------------------------------------------------------- #
 # Credential store (shared DB + cookies file)
 # --------------------------------------------------------------------------- #
 
-def get_stored_credentials(provider: str = "ctrip") -> dict | None:
-    """Look up stored credentials from the booking DB users table.
+def get_stored_credentials(
+    provider: str = "ctrip",
+    user_id: int | None = None,
+) -> dict | None:
+    """Look up credentials for one explicitly selected traveler.
 
     Returns {name, id_number, phone, cookies_file} or None if no user exists.
+    Falling back to the first database row would mix identities in a multi-user
+    deployment, so an explicit ``user_id`` is required.
     """
+    if user_id is None:
+        return None
     try:
         from booking import db
-        users = db.list_users()
-        if users:
-            u = users[0]  # Use the first stored user
+        u = db.get_user_by_id(user_id)
+        if u:
             cookies_file = os.path.join(
                 os.path.dirname(__file__), f"cookies_{provider}.json"
             )
             return {
+                "id": u.get("id"),
                 "name": u.get("name", ""),
                 "id_number": u.get("id_number", ""),
                 "phone": u.get("phone", ""),
@@ -59,13 +68,11 @@ def get_stored_credentials(provider: str = "ctrip") -> dict | None:
 
 
 def store_credentials(name: str, id_number: str, phone: str) -> int:
-    """Store traveler identity for future auto-booking sessions."""
-    try:
-        from booking import db
-        return db.upsert_user(name, id_number, phone).get("id", 0)
-    except Exception as e:
-        print(f"[auto_book] credential storage failed: {e}")
-        return -1
+    """Deprecated: G3TA no longer persists traveler identity fields."""
+    raise RuntimeError(
+        "Persistent traveler credential storage is disabled. "
+        "Use one-time details only in an authenticated provider request."
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -85,6 +92,7 @@ def auto_book_hotel(
     price_total: float | None = None,
     currency: str = "CNY",
     payment_method: str = "wechat",
+    user_id: int | None = None,
 ) -> dict:
     """Auto-book a hotel via Ctrip Playwright pipeline.
 
@@ -94,7 +102,8 @@ def auto_book_hotel(
       3. Store the confirmed route in DB
       4. Return order details (user pays in their own WeChat/Alipay)
     """
-    creds = get_stored_credentials("ctrip")
+    _require_booking_automation()
+    creds = get_stored_credentials("ctrip", user_id)
     contact = {"name": "", "id_number": "", "phone": ""}
     if creds:
         contact = {
@@ -124,10 +133,10 @@ def auto_book_hotel(
             payment_method=payment_method,
         )
 
-        order_no = booking.get("order_no") or f"HOTEL-{int(time.time())}"
+        order_no = booking.get("order_no")
         status = booking.get("status", "pending_payment")
 
-        if status in ("pending_payment", "confirmed"):
+        if status in ("pending_payment", "confirmed") and order_no:
             booking_db.save_route(
                 user_id=creds.get("id") if creds else None,
                 hotel_name=hotel_name,
@@ -144,13 +153,20 @@ def auto_book_hotel(
                 payment_method=payment_method,
                 status=status,
                 order_no=order_no,
-                raw=str(booking),
+                raw=str({
+                    "status": status,
+                    "order_no": order_no,
+                    "provider": "ctrip",
+                }),
             )
 
         return {
             "status": status,
             "order_no": order_no,
-            "message": booking.get("message", "Hotel booking reached payment checkpoint."),
+            "message": booking.get(
+                "message",
+                "Hotel booking reached a provider checkpoint; verify the order with Ctrip.",
+            ),
             "provider": "ctrip",
             "type": "hotel",
         }
@@ -287,21 +303,10 @@ def auto_book_flight(
     preferred_flight: str = "",
     max_price: float | None = None,
     payment_method: str = "wechat",
+    user_id: int | None = None,
 ) -> dict:
-    """Auto-book a flight via Ctrip flights.
-
-    Steps:
-      1. Search flights for the route + dates
-      2. Filter by max_price (budget agent's transportation allocation)
-      3. Select the best matching flight
-      4. Fill traveler identity from DB credentials
-      5. Drive to payment checkpoint
-      6. Record booking in shared_transport DB table
-    """
-    creds = get_stored_credentials("ctrip")
-    trip_id = hashlib.sha256(
-        f"{origin}{destination}{depart_date}".encode()
-    ).hexdigest()[:12]
+    """Return a reviewed Ctrip flight choice without submitting an order."""
+    _require_booking_automation()
 
     # Search flights
     flights = _search_ctrip_flights(origin, destination, depart_date, return_date, adults)
@@ -337,103 +342,29 @@ def auto_book_flight(
     else:
         selected = min(flights, key=lambda f: f["price"])
 
-    # Drive booking in Playwright
-    pw = None
-    try:
-        pw, browser, page = _stealth_browser()
+    import urllib.parse
 
-        # Navigate to booking page for the selected flight
-        base_url = "https://flights.ctrip.com/international/search"
-        from urllib.parse import quote
-        url = (
-            f"{base_url}#/depart={quote(origin)}&arrive={quote(destination)}"
-            f"&depdate={depart_date}&cabin=y&adult={adults}"
-        )
-        page.goto(url, timeout=30000, wait_until="domcontentloaded")
-        time.sleep(3)
-
-        # Fill traveler identity from DB credentials
-        if creds:
-            for field, value in [
-                ("#passengerName", creds["name"]),
-                ("#passengerId", creds["id_number"]),
-                ("#passengerPhone", creds["phone"]),
-            ]:
-                try:
-                    page.fill(field, value)
-                except Exception:
-                    try:
-                        page.fill(f'[placeholder*="{field}"]', value)
-                    except Exception:
-                        pass
-
-        # Select payment method and proceed to payment checkpoint
-        try:
-            if payment_method == "wechat":
-                page.click('text=微信', timeout=3000)
-            elif payment_method == "alipay":
-                page.click('text=支付宝', timeout=3000)
-        except Exception:
-            pass
-
-        try:
-            page.click('text=提交订单', timeout=3000)
-        except Exception:
-            try:
-                page.click('text=去支付', timeout=3000)
-            except Exception:
-                pass
-
-        time.sleep(2)
-
-        # Store in shared_transport DB
-        try:
-            from booking.shared_db import save_transport
-            save_transport(
-                trip_id=trip_id,
-                transport_type="flight",
-                scope="international",
-                from_location=origin,
-                to_location=destination,
-                departure_time=depart_date,
-                carrier=selected.get("airline", ""),
-                flight_number=selected.get("flight_number", ""),
-                price=selected["price"],
-                currency="CNY",
-                booking_status="pending",
-                booking_ref="",
-            )
-        except Exception as e:
-            print(f"[auto_book] DB save failed (non-fatal): {e}")
-
-        return {
-            "status": "manual_required",
-            "order_no": None,
-            "message": (
-                f"Flight {selected['flight_number']} ({origin}→{destination}) "
-                f"was selected at {selected['price']} CNY. Confirm the passenger details, "
-                "final provider price, and payment in Ctrip; no booking is recorded as confirmed yet."
-            ),
-            "provider": "ctrip",
-            "type": "flight",
-            "details": selected,
-        }
-
-    except Exception as e:
-        print(f"[auto_book] flight booking failed: {e}")
-        return {
-            "status": "failed",
-            "order_no": None,
-            "message": f"Flight booking failed: {e}",
-            "provider": "ctrip",
-            "type": "flight",
-        }
-    finally:
-        if pw:
-            try:
-                pw.stop()
-            except Exception:
-                pass
+    provider_url = (
+        "https://flights.ctrip.com/international/search?"
+        + urllib.parse.urlencode({
+            "origin": origin,
+            "destination": destination,
+            "depart_date": depart_date,
+        })
+    )
+    return {
+        "status": "manual_required",
+        "order_no": None,
+        "message": (
+            f"Flight {selected['flight_number']} ({origin}→{destination}) "
+            f"was selected at {selected['price']} CNY. Recheck the current fare "
+            "and complete purchase with Ctrip; G3TA did not submit an order."
+        ),
+        "provider": "ctrip",
+        "provider_url": provider_url,
+        "type": "flight",
+        "details": selected,
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -573,6 +504,7 @@ def auto_book_train(
     preferred_train: str = "",
     seat_class: str = "second",
     adults: int = 1,
+    user_id: int | None = None,
 ) -> dict:
     """Auto-book a train ticket via 12306.
 
@@ -581,7 +513,8 @@ def auto_book_train(
     booking may require manual account login + CAPTCHA solving. After successful
     booking drive to payment, the order is recorded in shared_transport.
     """
-    creds = get_stored_credentials("12306")
+    _require_booking_automation()
+    creds = get_stored_credentials("12306", user_id)
     trip_id = hashlib.sha256(
         f"{origin_station}{dest_station}{depart_date}".encode()
     ).hexdigest()[:12]
@@ -660,6 +593,7 @@ def auto_book_restaurant(
     time_slot: str = "19:00",
     party_size: int = 2,
     phone: str = "",
+    user_id: int | None = None,
 ) -> dict:
     """Book a restaurant reservation.
 
@@ -671,7 +605,11 @@ def auto_book_restaurant(
     The function searches for the restaurant, navigates to the booking page,
     fills party size + date + time, and stops at the confirmation step.
     """
-    creds = get_stored_credentials("meituan") or get_stored_credentials("ctrip")
+    _require_booking_automation()
+    creds = (
+        get_stored_credentials("meituan", user_id)
+        or get_stored_credentials("ctrip", user_id)
+    )
     trip_id = hashlib.sha256(
         f"{restaurant_name}{date}{time_slot}".encode()
     ).hexdigest()[:12]
@@ -764,6 +702,7 @@ def book_item(
     Returns:
         {status, order_no, message, provider, type, details?}
     """
+    _require_booking_automation()
     handlers = {
         "hotel": lambda: auto_book_hotel(
             hotel_id=kwargs.get("id", ""),
@@ -775,6 +714,7 @@ def book_item(
             adults=kwargs.get("adults", 1),
             price_total=kwargs.get("price"),
             payment_method=kwargs.get("payment", "wechat"),
+            user_id=kwargs.get("user_id"),
         ),
         "flight": lambda: auto_book_flight(
             origin=kwargs.get("origin", ""),
@@ -783,6 +723,7 @@ def book_item(
             adults=kwargs.get("adults", 1),
             max_price=kwargs.get("max_price"),
             payment_method=kwargs.get("payment", "wechat"),
+            user_id=kwargs.get("user_id"),
         ),
         "train": lambda: auto_book_train(
             origin_station=kwargs.get("origin", ""),
@@ -790,12 +731,14 @@ def book_item(
             depart_date=kwargs.get("date", ""),
             preferred_train=kwargs.get("train", ""),
             adults=kwargs.get("adults", 1),
+            user_id=kwargs.get("user_id"),
         ),
         "restaurant": lambda: auto_book_restaurant(
             restaurant_name=kwargs.get("name", ""),
             date=kwargs.get("date", ""),
             time_slot=kwargs.get("time", "19:00"),
             party_size=kwargs.get("party_size", 2),
+            user_id=kwargs.get("user_id"),
         ),
     }
     handler = handlers.get(item_type)
@@ -918,6 +861,7 @@ def book_flight_by_index(
     result_index: int = 0,
     adults: int = 1,
     payment_method: str = "wechat",
+    user_id: int | None = None,
 ) -> dict:
     """Search flights, then book the Nth result (0-indexed) from the top results.
 
@@ -927,6 +871,7 @@ def book_flight_by_index(
     Args:
         result_index: 0-based index into the top search results (0 = cheapest)
     """
+    _require_booking_automation()
     search_result = search_flights(origin, destination, depart_date, adults=adults)
     results = search_result.get("results", [])
 
@@ -952,4 +897,5 @@ def book_flight_by_index(
         adults=adults,
         preferred_flight=preferred,
         payment_method=payment_method,
+        user_id=user_id,
     )

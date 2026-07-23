@@ -1,6 +1,7 @@
 import sys
 import types
 import unittest
+from io import BytesIO
 from unittest.mock import patch
 
 # Keep this focused suite runnable before optional project dependencies are installed.
@@ -127,6 +128,32 @@ class EasyReadingPromptTests(unittest.TestCase):
 
 
 class PlanningWeatherTests(unittest.TestCase):
+    def test_archive_weather_is_labeled_proxy_and_keeps_requested_dates(self):
+        response = BytesIO(
+            b'{"daily":{"time":["2029-08-01","2029-08-02"],'
+            b'"temperature_2m_max":[31,32],"temperature_2m_min":[22,23],'
+            b'"precipitation_sum":[0,4],"weather_code":[1,61]}}'
+        )
+        with patch.object(planning_agent.urllib.request, "urlopen", return_value=response):
+            result = planning_agent._fetch_open_meteo_weather(
+                31.2,
+                121.5,
+                "2030-08-01",
+                "2030-08-02",
+            )
+
+        self.assertEqual(result["source"], "open_meteo_climate_proxy")
+        self.assertTrue(result["verification_required"])
+        self.assertEqual(
+            [day["date"] for day in result["daily"]],
+            ["2030-08-01", "2030-08-02"],
+        )
+        self.assertTrue(all(
+            day["source"] == "open_meteo_climate_proxy"
+            for day in result["daily"]
+        ))
+        self.assertIn("not a forecast", result["summary"])
+
     def test_weather_essentials_are_kept_even_with_llm_packing(self):
         weather = {
             "summary": "Open-Meteo forecast for Montreal.",
@@ -144,7 +171,12 @@ class PlanningWeatherTests(unittest.TestCase):
             "location": "Montreal", "dates": {"start": "2026-07-22", "end": "2026-07-22"},
             "preferences": {"activity_style": ["adventure"]},
         }
-        with patch.object(planning_agent, "_geocode_city", return_value=(45.5, -73.6)), \
+        with patch.dict(
+                "os.environ",
+                {"PLANNING_LLM_PACKING_ENABLED": "1"},
+                clear=False,
+            ), \
+                patch.object(planning_agent, "_geocode_city", return_value=(45.5, -73.6)), \
                 patch.object(planning_agent, "_fetch_open_meteo_weather", return_value=weather), \
                 patch.object(planning_agent, "llm_reason", return_value={
                     "checklist": [{

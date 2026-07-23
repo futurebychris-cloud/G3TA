@@ -218,6 +218,7 @@ export default function MapView({ points = EMPTY_POINTS, result = null, agentOut
         || model.transportationRoute
   const isTransportation = activeRoute.id === 'transportation'
   const isFullTrip = activeRoute.id === 'full-trip'
+  const isDrivingTransportation = isTransportation && /car|driv/.test(transportMode)
   const routeModes = isTransportation ? TRANSPORT_ROUTE_MODES : LOCAL_ROUTE_MODES
 
   useEffect(() => {
@@ -283,7 +284,9 @@ export default function MapView({ points = EMPTY_POINTS, result = null, agentOut
     setRouteAnimationProgress(null)
     setRouteMetrics(null)
     setRouteMessage(isTransportation
-      ? `${transportMode} endpoints are shown as an AMap overview, not turn-by-turn navigation.`
+      ? isDrivingTransportation
+        ? 'Requesting the live AMap driving route between the transportation endpoints…'
+        : `${transportMode} endpoints use an animated geographic overview, not a provider-confirmed track.`
       : `Requesting the AMap ${routeMode} route…`)
 
     async function drawRoute() {
@@ -302,11 +305,12 @@ export default function MapView({ points = EMPTY_POINTS, result = null, agentOut
 
       const segments = routeSegments(activeRoute.stops)
       const planned = await Promise.all(segments.map(async ({ from, to }) => {
-        if (isTransportation) {
+        if (isTransportation && !isDrivingTransportation) {
           return { path: [[from.lng, from.lat], [to.lng, to.lat]], distance: 0, duration: 0, failed: false }
         }
         try {
-          return { ...await searchAmapSegment(AMap, routeMode, from, to), failed: false }
+          const requestedMode = isDrivingTransportation ? 'driving' : routeMode
+          return { ...await searchAmapSegment(AMap, requestedMode, from, to), failed: false }
         } catch (error) {
           return {
             path: [],
@@ -335,7 +339,7 @@ export default function MapView({ points = EMPTY_POINTS, result = null, agentOut
         map.setFitView([...markers, ...polylines], false, [64, 48, 64, 48], 17)
       }
 
-      if (!isTransportation && drawablePaths.length) {
+      if (drawablePaths.length) {
         const traveler = shouldReduceMotion
           ? null
           : new AMap.Marker({
@@ -380,7 +384,7 @@ export default function MapView({ points = EMPTY_POINTS, result = null, agentOut
           }
 
           showRouteProgress(0)
-          const animationDuration = Math.min(12, 6 + drawablePaths.length * 0.75)
+          const animationDuration = Math.min(24, 16 + drawablePaths.length * 1.25)
           routeAnimationRef.current = animate(0, 1, {
             duration: animationDuration,
             ease: 'easeInOut',
@@ -411,7 +415,9 @@ export default function MapView({ points = EMPTY_POINTS, result = null, agentOut
       const duration = planned.reduce((sum, segment) => sum + segment.duration, 0)
       setRouteMetrics({ distance, duration, failedCount, segments: planned.length })
       if (isTransportation) {
-        setRouteMessage('Transportation overview drawn with AMap Marker and Polyline overlays.')
+        setRouteMessage(isDrivingTransportation
+          ? 'Live AMap driving route loaded between the transportation endpoints.'
+          : `${transportMode} overview drawn from provider endpoints. The line is geographic context, not the exact carrier track.`)
       } else if (!planned.length) {
         setRouteMessage('This selection has only one mappable stop, so there is no route segment to calculate.')
       } else if (failedCount) {
@@ -435,6 +441,7 @@ export default function MapView({ points = EMPTY_POINTS, result = null, agentOut
     }
   }, [
     activeRoute,
+    isDrivingTransportation,
     isTransportation,
     mapState,
     routeMode,

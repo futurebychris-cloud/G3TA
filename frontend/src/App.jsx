@@ -1,43 +1,42 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ArrowLeft,
   BedDouble,
-  BrainCircuit,
   CalendarDays,
   Check,
   CircleDollarSign,
   Compass,
-  ListChecks,
   Luggage,
   Map,
   Menu,
   Route,
   ShieldAlert,
   Sparkles,
-  RefreshCw,
 } from 'lucide-react'
-import { streamPlan } from './api.js'
+import { cancelPlan, finalizePlan, getHealth, streamPlan } from './api.js'
+import { useAccessibilitySettings } from './accessibility/AccessibilityContext.jsx'
 import InputForm from './components/InputForm.jsx'
 import ProgressTracker from './components/ProgressTracker.jsx'
 import ItineraryView from './components/ItineraryView.jsx'
 import MapView from './components/MapView.jsx'
 import BudgetView from './components/BudgetView.jsx'
 import PackingList from './components/PackingList.jsx'
-import ReasoningLog from './components/ReasoningLog.jsx'
 import BookingPanel from './components/BookingPanel.jsx'
 import OrbitGlobe from './components/OrbitGlobe.jsx'
 import AccessibilityButton from './components/accessibility/AccessibilityButton.jsx'
 import AccessibilityPanel from './components/accessibility/AccessibilityPanel.jsx'
+import ConfirmationDialog from './components/accessibility/ConfirmationDialog.jsx'
+import EmergencyInformation from './components/accessibility/EmergencyInformation.jsx'
+import NextStepHelper from './components/accessibility/NextStepHelper.jsx'
 
-const AGENTS = ['budget', 'transportation', 'housing', 'food', 'activity', 'planning', 'orchestrator']
+const AGENTS = ['transportation', 'budget', 'activity', 'housing', 'food', 'planning', 'orchestrator']
 
 const TABS = [
   { id: 'itinerary', label: 'Itinerary', icon: Route },
   { id: 'map', label: 'Places', icon: Map },
   { id: 'budget', label: 'Budget', icon: CircleDollarSign },
-  { id: 'stay', label: 'Book stay', icon: BedDouble },
+  { id: 'stay', label: 'Compare stays', icon: BedDouble },
   { id: 'packing', label: 'Packing', icon: Luggage },
-  { id: 'reasoning', label: 'Agent log', icon: ListChecks },
 ]
 
 function Brand() {
@@ -51,6 +50,35 @@ function Brand() {
   )
 }
 
+function SystemStatus() {
+  const [health, setHealth] = useState(null)
+  const [unreachable, setUnreachable] = useState(false)
+
+  useEffect(() => {
+    let active = true
+    getHealth()
+      .then((value) => {
+        if (active) setHealth(value)
+      })
+      .catch(() => {
+        if (active) setUnreachable(true)
+      })
+    return () => { active = false }
+  }, [])
+
+  const ready = health?.status === 'ok'
+  const label = unreachable
+    ? 'Backend unavailable'
+    : health
+      ? ready ? 'Planner ready' : 'Setup needed'
+      : 'Checking services'
+  return (
+    <span className={`system-status${ready ? '' : ' degraded'}`} title={health?.dependencies?.deepseek || ''}>
+      <span className="status-light" /> {label}
+    </span>
+  )
+}
+
 function AppHeader({ step, onReset, onAccessibility, accessibilityButtonRef }) {
   return (
     <header className="site-header">
@@ -58,7 +86,7 @@ function AppHeader({ step, onReset, onAccessibility, accessibilityButtonRef }) {
         <Brand />
       </button>
       <div className="header-actions">
-        <span className="system-status"><span className="status-light" /> DeepSeek online</span>
+        <SystemStatus />
         {step !== 'input' && (
           <button className="text-button" onClick={onReset}>
             <ArrowLeft size={16} /> New journey
@@ -88,7 +116,7 @@ function Landing({ onSubmit }) {
           <div className="hero-proof">
             <div><strong>06</strong><span>Specialist agents</span></div>
             <div><strong>01</strong><span>Coordinated plan</span></div>
-            <div><strong>100%</strong><span>Visible reasoning</span></div>
+            <div><strong>100%</strong><span>Visible progress</span></div>
           </div>
         </div>
         <div className="hero-visual">
@@ -107,27 +135,6 @@ function Landing({ onSubmit }) {
         <InputForm onSubmit={onSubmit} />
       </section>
 
-      <section className="method-strip" aria-label="How it works">
-        <div className="method-intro">
-          <span className="section-index">THE ENSEMBLE</span>
-          <h2>One journey.<br />Many points of view.</h2>
-        </div>
-        <div className="method-step">
-          <span>01</span><BrainCircuit size={22} />
-          <h3>Six minds explore</h3>
-          <p>Specialists independently handle routes, stays, food, experiences, pacing, and cost.</p>
-        </div>
-        <div className="method-step">
-          <span>02</span><CircleDollarSign size={22} />
-          <h3>Trade-offs get tested</h3>
-          <p>The orchestrator checks the whole plan against your budget and records every adjustment.</p>
-        </div>
-        <div className="method-step">
-          <span>03</span><Check size={22} />
-          <h3>You get one clear plan</h3>
-          <p>A coherent day-by-day itinerary, with every useful detail in one calm workspace.</p>
-        </div>
-      </section>
     </main>
   )
 }
@@ -137,6 +144,10 @@ function ResultHeader({ result }) {
   const end = new Date(`${result.dates.end}T00:00:00`)
   const duration = Math.max(1, Math.round((end - start) / 86400000) + 1)
   const dateLabel = `${start.toLocaleDateString('en', { month: 'short', day: 'numeric' })} — ${end.toLocaleDateString('en', { month: 'short', day: 'numeric', year: 'numeric' })}`
+  const provenance = result.data_provenance || {}
+  const liveSources = provenance.live_sources || []
+  const estimatedSources = provenance.estimated_or_unverified_sources || []
+  const deepSeekAssisted = result.synthesis_source === 'deepseek_assisted'
 
   return (
     <section className="trip-masthead">
@@ -146,7 +157,15 @@ function ResultHeader({ result }) {
           <span className="section-index">CURATED FOR YOU</span>
           <h1>{result.destination}</h1>
         </div>
-        <div className="trip-stamp" aria-hidden="true"><span>G3</span><small>PLANNED<br />WITH AI</small></div>
+        <div
+          className="trip-stamp"
+          aria-label={deepSeekAssisted
+            ? 'Plan summary assisted by DeepSeek; schedule rule checked'
+            : 'Plan generated and rule checked deterministically'}
+        >
+          <span aria-hidden="true">G3</span>
+          <small aria-hidden="true">PLANNED<br />{deepSeekAssisted ? 'AI ASSISTED' : 'RULE CHECKED'}</small>
+        </div>
       </div>
       <p className="trip-summary">{result.summary}</p>
       <div className="trip-facts">
@@ -158,7 +177,20 @@ function ResultHeader({ result }) {
       {result.verification_notice && (
         <div className="verification-banner">
           <ShieldAlert size={18} />
-          <span><strong>Planning estimate</strong>{result.verification_notice}</span>
+          <span>
+            <strong>
+              {provenance.mode === 'live' ? 'Live provider records'
+                : provenance.mode === 'mixed' ? 'Mixed live and estimated data'
+                  : 'Planning estimates'}
+            </strong>
+            {result.verification_notice}
+            {(liveSources.length > 0 || estimatedSources.length > 0) && (
+              <small className="provenance-detail">
+                {liveSources.length > 0 && ` Live: ${liveSources.join(', ')}.`}
+                {estimatedSources.length > 0 && ` Estimated or unverified: ${estimatedSources.join(', ')}.`}
+              </small>
+            )}
+          </span>
         </div>
       )}
     </section>
@@ -166,98 +198,130 @@ function ResultHeader({ result }) {
 }
 
 export default function App() {
+  const { settings } = useAccessibilitySettings()
   const [step, setStep] = useState('input')
   const [statuses, setStatuses] = useState({})
+  const [progressEvents, setProgressEvents] = useState([])
   const [result, setResult] = useState(null)
-  const [reviewData, setReviewData] = useState(null)
-  const [adjustedBudget, setAdjustedBudget] = useState(null)
   const [error, setError] = useState(null)
   const [tab, setTab] = useState('itinerary')
   const [tripInput, setTripInput] = useState(null)
   const [accessibilityOpen, setAccessibilityOpen] = useState(false)
+  const [leaveDialogOpen, setLeaveDialogOpen] = useState(false)
   const accessibilityButtonRef = useRef(null)
+  const planControllerRef = useRef(null)
+  const activeRequestIdRef = useRef(null)
+
+  useEffect(() => () => {
+    const requestId = activeRequestIdRef.current
+    if (requestId) {
+      void cancelPlan(requestId, { keepalive: true }).catch(() => {})
+    }
+    planControllerRef.current?.abort()
+  }, [])
+
+  function newRequestId() {
+    return globalThis.crypto?.randomUUID?.()
+      || `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  }
 
   async function handleSubmit(input) {
+    const previousRequestId = activeRequestIdRef.current
+    planControllerRef.current?.abort()
+    if (previousRequestId) {
+      await cancelPlan(previousRequestId).catch(() => {})
+    }
+    const controller = new AbortController()
+    planControllerRef.current = controller
+    const preparedInput = { ...input, request_id: newRequestId() }
+    activeRequestIdRef.current = preparedInput.request_id
     setError(null)
     setResult(null)
-    setReviewData(null)
-    setAdjustedBudget(null)
-    setTripInput(input)
+    setTripInput(preparedInput)
     setStatuses(Object.fromEntries(AGENTS.map((agent) => [agent, 'pending'])))
+    setProgressEvents([])
     setStep('progress')
     window.scrollTo({ top: 0, behavior: 'smooth' })
 
     try {
-      await streamPlan(input, (event) => {
+      await streamPlan(preparedInput, (event) => {
         if (event.type === 'agent_start') {
           setStatuses((current) => ({ ...current, [event.agent]: 'running' }))
+          setProgressEvents((current) => [...current, { ...event, type: 'start' }].slice(-40))
+        } else if (event.type === 'agent_progress') {
+          setProgressEvents((current) => [...current, { ...event, type: 'progress' }].slice(-40))
         } else if (event.type === 'agent_done') {
           setStatuses((current) => ({ ...current, [event.agent]: 'done' }))
-          // Capture agent outputs as they arrive for review
-          if (event.output) {
-            setReviewData((prev) => ({
-              ...prev,
-              agent_outputs: { ...(prev?.agent_outputs || {}), [event.agent]: event.output },
-            }))
-          }
+          setProgressEvents((current) => [...current, { ...event, type: 'done' }].slice(-40))
         } else if (event.type === 'complete') {
+          planControllerRef.current = null
+          activeRequestIdRef.current = null
           setResult(event.result)
-          setReviewData(event.result)
           setTab('itinerary')
-          setStep('review')  // Show review/confirmation before final result
+          setStep('result')
         } else if (event.type === 'error') {
+          planControllerRef.current = null
+          activeRequestIdRef.current = null
           setError(event.message)
+        } else if (event.type === 'cancelled') {
+          planControllerRef.current = null
+          activeRequestIdRef.current = null
+          setError('Trip planning was cancelled.')
         }
-      })
+      }, { signal: controller.signal })
     } catch (requestError) {
-      setError(requestError.message)
+      if (activeRequestIdRef.current === preparedInput.request_id) {
+        activeRequestIdRef.current = null
+      }
+      if (requestError.name !== 'AbortError') setError(requestError.message)
     }
   }
 
-  const handleConfirmAndFinalize = useCallback(async () => {
-    if (!tripInput || !result) return
-    if (!adjustedBudget) {
-      setTab('itinerary')
-      setStep('result')
-      return
-    }
-    setStep('progress')
+  const handleBudgetChange = useCallback(async (adjustedBudget) => {
+    if (!tripInput || !result || !adjustedBudget) return
     setError(null)
 
     try {
-      const res = await fetch(`${import.meta.env.VITE_API_BASE || 'http://localhost:8000'}/plan/finalize`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          trip: tripInput,
-          adjusted_budget: adjustedBudget || undefined,
-        }),
-      })
-      if (!res.ok) throw new Error(`Finalize failed: ${res.status}`)
-      const data = await res.json()
+      const data = await finalizePlan(tripInput, result, adjustedBudget)
       setResult(data)
-      setTab('itinerary')
-      setStep('result')
     } catch (e) {
       setError(e.message)
     }
-  }, [tripInput, result, adjustedBudget])
+  }, [tripInput, result])
 
-  function reset() {
+  const reset = useCallback(() => {
+    planControllerRef.current?.abort()
+    planControllerRef.current = null
+    activeRequestIdRef.current = null
     setStep('input')
     setResult(null)
-    setReviewData(null)
-    setAdjustedBudget(null)
+    setProgressEvents([])
     setError(null)
     setTab('itinerary')
     window.scrollTo({ top: 0, behavior: 'smooth' })
+  }, [])
+
+  async function cancelAndReset() {
+    const requestId = activeRequestIdRef.current || tripInput?.request_id
+    if (requestId && step === 'progress') {
+      await cancelPlan(requestId).catch(() => {})
+    }
+    reset()
+  }
+
+  function requestReset() {
+    if (settings.preset === 'senior' && step !== 'input') {
+      setLeaveDialogOpen(true)
+      return
+    }
+    cancelAndReset()
   }
 
   return (
     <div className={`app-shell view-${step}`}>
       <AppHeader
         step={step}
-        onReset={reset}
+        onReset={requestReset}
         onAccessibility={() => setAccessibilityOpen(true)}
         accessibilityButtonRef={accessibilityButtonRef}
       />
@@ -266,59 +330,41 @@ export default function App() {
         onClose={() => setAccessibilityOpen(false)}
         returnFocusRef={accessibilityButtonRef}
       />
+      <ConfirmationDialog
+        open={leaveDialogOpen}
+        title="Leave this trip?"
+        description="Your current plan will close. Provider purchases are never changed by leaving G3TA."
+        onCancel={() => setLeaveDialogOpen(false)}
+        onConfirm={() => {
+          setLeaveDialogOpen(false)
+          cancelAndReset()
+        }}
+      />
 
       {step === 'input' && <Landing onSubmit={handleSubmit} />}
 
       {step === 'progress' && (
         <main className="progress-page">
-          <ProgressTracker agents={AGENTS} statuses={statuses} error={error} onRetry={reset} />
-        </main>
-      )}
-
-      {step === 'review' && result && (
-        <main className="result-page">
-          <ResultHeader result={result} />
-
-          <section className="review-confirm-banner">
-            <div className="review-confirm-content">
-              <div>
-                <span className="section-index">REVIEW & CONFIRM</span>
-                <h2>Your trip plan is ready for review</h2>
-                <p>
-                  All 6 agents have completed their research with real-time data from Ctrip, Numbeo,
-                  and weather services. Review the budget allocation below — drag the sliders to
-                  adjust spending priorities, then confirm to finalize your itinerary.
-                </p>
-              </div>
-              <div className="review-actions">
-                <button className="primary-button" onClick={handleConfirmAndFinalize}>
-                  <Check size={18} /> Confirm & finalize
-                </button>
-                <button className="text-button" onClick={reset}>
-                  <RefreshCw size={16} /> Start over
-                </button>
-              </div>
-            </div>
-          </section>
-
-          <BudgetView
-            cost={result.cost}
-            budgetAgent={result.agent_outputs?.budget}
-            onBudgetChange={setAdjustedBudget}
+          <ProgressTracker
+            agents={AGENTS}
+            statuses={statuses}
+            events={progressEvents}
+            trip={tripInput}
+            error={error}
+            onRetry={reset}
+            onCancel={cancelAndReset}
           />
-
-          <section className="review-summary" style={{ padding: '32px', maxWidth: 900, margin: '0 auto' }}>
-            <div className="panel-heading">
-              <div><span className="section-index">PREVIEW</span><h2>Day-by-day itinerary preview</h2></div>
-            </div>
-            <ItineraryView result={result} />
-          </section>
         </main>
       )}
 
       {step === 'result' && result && (
         <main className="result-page">
           <ResultHeader result={result} />
+          {settings.preset === 'senior' && (
+            <div className="senior-result-actions">
+              <EmergencyInformation result={result} />
+            </div>
+          )}
 
           <nav className="result-tabs" aria-label="Trip details">
             {TABS.map(({ id, label, icon: Icon }) => (
@@ -343,7 +389,7 @@ export default function App() {
               <BudgetView
                 cost={result.cost}
                 budgetAgent={result.agent_outputs.budget}
-                onBudgetChange={setAdjustedBudget}
+                onBudgetChange={handleBudgetChange}
               />
             )}
             {tab === 'packing' && (
@@ -356,9 +402,12 @@ export default function App() {
                 tripId={result.trip_id}
               />
             )}
-            {tab === 'reasoning' && <ReasoningLog log={result.reasoning_log} />}
           </section>
         </main>
+      )}
+
+      {step === 'result' && result && settings.preset === 'senior' && (
+        <NextStepHelper result={result} />
       )}
 
       <footer className="site-footer">

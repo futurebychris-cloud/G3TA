@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { vi } from 'vitest'
 import { ACCESSIBILITY_STORAGE_KEY, AccessibilityProvider } from '../../accessibility/AccessibilityContext.jsx'
@@ -50,33 +50,37 @@ describe('voice input', () => {
 })
 
 describe('read aloud', () => {
-  it('shows a useful message when speech synthesis is unsupported', () => {
-    delete window.speechSynthesis
-    delete window.SpeechSynthesisUtterance
+  it('shows a useful message when Piper audio playback is unsupported', () => {
+    delete window.Audio
     renderSpeechButton()
-    expect(screen.getByRole('status')).toHaveTextContent('Read aloud is unavailable')
+    expect(screen.getByRole('status')).toHaveTextContent('Piper read aloud is unavailable')
   })
 
-  it('supports play, pause, resume, and stop through the shared controller', async () => {
+  it('requests Piper audio and supports play, pause, resume, and stop', async () => {
     const user = userEvent.setup()
-    const cancel = vi.fn()
-    const speak = vi.fn((utterance) => utterance.onstart?.())
     const pause = vi.fn()
-    const resume = vi.fn()
-    window.speechSynthesis = { cancel, speak, pause, resume }
-    window.SpeechSynthesisUtterance = class SpeechSynthesisUtterance {
-      constructor(text) { this.text = text }
-    }
+    const play = vi.fn().mockResolvedValue(undefined)
+    const audio = { play, pause, currentTime: 0, onended: null, onerror: null }
+    window.Audio = vi.fn(function Audio() { return audio })
+    window.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      blob: vi.fn().mockResolvedValue(new Blob(['wav'], { type: 'audio/wav' })),
+    })
+    window.URL.createObjectURL = vi.fn(() => 'blob:piper-test')
+    window.URL.revokeObjectURL = vi.fn()
     renderSpeechButton()
 
     await user.click(screen.getByRole('button', { name: 'Read flight result aloud' }))
-    expect(speak).toHaveBeenCalledOnce()
-    expect(speak.mock.calls[0][0].text).toContain('John F. Kennedy International Airport (JFK)')
+    await waitFor(() => expect(play).toHaveBeenCalledOnce())
+    const request = JSON.parse(window.fetch.mock.calls[0][1].body)
+    expect(request.text).toContain('John F. Kennedy International Airport (JFK)')
+    expect(request.speed).toBe(1)
     await user.click(screen.getByRole('button', { name: 'Pause reading flight result' }))
     expect(pause).toHaveBeenCalledOnce()
     await user.click(screen.getByRole('button', { name: 'Resume reading flight result' }))
-    expect(resume).toHaveBeenCalledOnce()
+    expect(play).toHaveBeenCalledTimes(2)
     await user.click(screen.getByRole('button', { name: 'Stop reading flight result' }))
-    expect(cancel).toHaveBeenCalled()
+    expect(pause).toHaveBeenCalledTimes(2)
+    expect(window.URL.revokeObjectURL).toHaveBeenCalledWith('blob:piper-test')
   })
 })

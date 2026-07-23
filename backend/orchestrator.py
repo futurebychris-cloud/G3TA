@@ -41,21 +41,84 @@ _AGENTS = {
     "planning": planning_agent.run,
 }
 
+
+_LIVE_SOURCE_MARKERS = (
+    "12306",
+    "amap",
+    "gaode",
+    "ctrip_live",
+    "hotelbeds",
+    "amadeus",
+    "open-meteo",
+    "open_meteo",
+    "openstreetmap",
+    "osm",
+    "playwright_scraped",
+)
+_ESTIMATE_SOURCE_MARKERS = (
+    "estimate",
+    "fallback",
+    "deepseek",
+    "llm",
+    "mock",
+    "snapshot",
+    "unavailable",
+    "unknown",
+    "web",
+)
+
+
+def summarize_data_provenance(outputs: dict) -> dict:
+    """Summarize provider labels without turning estimates into live claims."""
+
+    def collect_sources(value) -> set[str]:
+        found: set[str] = set()
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if key in {"source", "weather_source", "web_search_source"}:
+                    label = str(child or "").strip()
+                    if label:
+                        found.add(label)
+                else:
+                    found.update(collect_sources(child))
+        elif isinstance(value, list):
+            for child in value:
+                found.update(collect_sources(child))
+        return found
+
+    agents = {}
+    all_live: set[str] = set()
+    all_estimated: set[str] = set()
+    for agent, output in outputs.items():
+        sources = collect_sources(output)
+        live = sorted(
+            source for source in sources
+            if any(marker in source.casefold() for marker in _LIVE_SOURCE_MARKERS)
+            and not any(marker in source.casefold() for marker in _ESTIMATE_SOURCE_MARKERS)
+        )
+        estimated = sorted(source for source in sources if source not in live)
+        all_live.update(live)
+        all_estimated.update(estimated)
+        agents[agent] = {
+            "live": live,
+            "estimated_or_unverified": estimated,
+        }
+
+    mode = "mixed" if all_live and all_estimated else "live" if all_live else "estimated"
+    return {
+        "mode": mode,
+        "live_sources": sorted(all_live),
+        "estimated_or_unverified_sources": sorted(all_estimated),
+        "agents": agents,
+    }
+
 SYNTHESIS_PROMPT = (
     "You are the Orchestrator of a multi-agent trip planner. You are given the finalized "
-    "outputs of six specialist agents (transportation, housing, food per day, activities, "
-    "weather, pacing). Produce a coherent day-by-day itinerary for the EXACT destination supplied. "
-    "Use ONLY the supplied lodging, meals, transportation, and activities; never invent or import "
-    "places from another city/country. Never repeat an activity or venue while distinct supplied "
-    "choices exist. Include every requested date exactly once and no other dates. "
-    "Return ONLY a JSON object with keys: "
-    "summary (2-3 sentence overview of the trip), and "
-    "schedule (array, one object per day, each with: day (int, 1-based), date (YYYY-MM-DD), "
-    "title (short theme for the day), and items (array of {time, type, title, detail})). "
-    "type is one of: arrival, departure, lodging, meal, activity. Weave meals and activities "
-    "into a natural daily flow and respect the arrival/departure days."
-    " For activity, meal, and lodging items, copy the supplied name EXACTLY into title so "
-    "verification labels are preserved. Use at most one supplied activity per day."
+    "compact, verified facts. Write a concise overview for the EXACT destination supplied. "
+    "Do not add places, prices, weather, availability, or booking claims that are absent from "
+    "the input. Return ONLY JSON with keys: summary (one or two sentences) and tradeoff_note "
+    "(one short sentence explaining the main budget or pacing trade-off). Both strings must "
+    "explicitly name the supplied destination."
 )
 
 
@@ -88,9 +151,14 @@ def prepare_trip_input(trip_input: dict) -> dict:
     import hashlib
 
     prepared = {**trip_input}
+    request_id = str(prepared.get("request_id") or "").strip()
+    public_request = {
+        key: value for key, value in prepared.items()
+        if not str(key).startswith("_") and key != "trip_id"
+    }
     trip_id = prepared.get("trip_id") or hashlib.sha256(
-        f"{prepared['location']}{prepared['dates']['start']}{prepared.get('origin', '')}".encode()
-    ).hexdigest()[:12]
+        f"{request_id}:{json.dumps(public_request, ensure_ascii=False, sort_keys=True, default=str)}".encode()
+    ).hexdigest()[:16]
     prepared["trip_id"] = trip_id
     init_shared_db()
     save_trip(
@@ -142,6 +210,34 @@ def _selected_place_guard(
             "destination",
             route,
         )
+    if str(record.get("source", "")).casefold() in {
+        "gaode_poi",
+        "amap_poi",
+        "osm_fallback",
+        "openstreetmap",
+    }:
+        try:
+            latitude = float(record["lat"])
+            longitude = float(record["lng"])
+        except (KeyError, TypeError, ValueError):
+            latitude = longitude = None
+        if latitude is not None and longitude is not None:
+            from services.gaode_service import _haversine, geocode_city
+
+            destination_coords = geocode_city(destination)
+            if (
+                destination_coords
+                and _haversine(
+                    destination_coords[0],
+                    destination_coords[1],
+                    latitude,
+                    longitude,
+                ) > 200
+            ):
+                raise ValueError(
+                    f"{agent} Agent selected an out-of-city provider record at "
+                    f"{path} for the '{route}' route."
+                )
     if destination_allows_retired_tokyo_places(destination):
         return
     location_value = record.get("location")
@@ -285,12 +381,12 @@ def _validate_agent_geography(trip_input: dict, outputs: dict) -> None:
 
 
 def _reconcile_budget(trip_input: dict, outputs: dict, log: list) -> dict:
-    """Reconcile real agent costs into a unified budget breakdown.
+    """Reconcile agent-reported costs into a unified budget breakdown.
 
-    Key design decision (v2.1): The budget breakdown uses REAL costs from each
-    specialist agent (transport, housing, food, activity), NOT the budget agent's
-    theoretical allocations. The budget agent's pie_data is still used for the
-    ring chart, and its allocations serve as a reference for overflow detection.
+    The breakdown uses each specialist agent's labeled provider price or
+    estimate, not the budget agent's theoretical allocations. The budget
+    agent's pie_data is still used for the ring chart, and its allocations serve
+    as a reference for overflow detection.
 
     Returns: {currency, total, budget, within_budget, breakdown, pie_data,
               allocations, expense_items}
@@ -324,7 +420,7 @@ def _reconcile_budget(trip_input: dict, outputs: dict, log: list) -> dict:
             ),
         })
 
-    # ---- Step 1: Extract REAL costs from each agent ----
+    # ---- Step 1: Extract labeled provider prices and estimates ----
     # Transport (intercity flights/trains)
     transport_cost = float(transport_agent.get("cost", 0) or 0)
     transport_recommended = transport_agent.get("recommended", {})
@@ -363,8 +459,8 @@ def _reconcile_budget(trip_input: dict, outputs: dict, log: list) -> dict:
         if local_transport <= 0:
             local_transport = round(30.0 * num_days, 2)  # hard floor
 
-    # Housing — use the REAL scraped price; only guard against absurd scraping
-    # artifacts (>= 100k CNY/night) by swapping to the cheapest real-priced option.
+    # Housing — use a provider price when available; guard against absurd
+    # scraping artifacts (>= 100k CNY/night).
     housing_agent = outputs.get("housing", {})
     housing_cost = housing_agent.get("cost")
     h_rec = housing_agent.get("recommended") or {}
@@ -420,7 +516,7 @@ def _reconcile_budget(trip_input: dict, outputs: dict, log: list) -> dict:
     activity_agent_out = outputs.get("activity", {})
     activity_cost = float(activity_agent_out.get("cost", 0) or 0)
 
-    # Shopping — derived from Numbeo cost index (real data, not LLM)
+    # Shopping — derived from the labeled Numbeo/reference cost index
     shopping_cost = 0.0
     budget_cost_idx = outputs.get("budget", {}).get("cost_index", {})
     shopping_daily_idx = budget_cost_idx.get("daily_index", {}) if budget_cost_idx else {}
@@ -769,6 +865,8 @@ def _weather_detail(day: dict | None) -> str:
     label = (
         "seasonal estimate"
         if day.get("source") == "deepseek_seasonal_estimate"
+        else "prior-year climate proxy"
+        if day.get("source") == "open_meteo_climate_proxy"
         else "forecast"
     )
     return (
@@ -864,14 +962,28 @@ def _fallback_schedule(trip_input: dict, outputs: dict) -> dict:
     meals_by_day = {d["date"]: d for d in outputs["food"]["daily_meals"]}
     housing = outputs["housing"]["recommended"]
     transport = outputs["transportation"]["recommended"] or {}
+    transport_mode = str(
+        transport.get("mode") or transport.get("type") or "flight"
+    ).strip().lower()
+    carrier = transport.get("carrier") or {
+        "flight": "flight",
+        "train": "train",
+        "car": "car",
+        "driving": "car",
+    }.get(transport_mode, "transport")
+    departure_detail = {
+        "flight": "Head to the airport for your return flight.",
+        "train": "Head to the station for your return train.",
+        "car": "Begin the return drive.",
+        "driving": "Begin the return drive.",
+    }.get(transport_mode, "Begin your return journey.")
+    hotel_name = housing.get("name", "your hotel") if housing else "your hotel"
 
     schedule = []
     for i, date in enumerate(days):
         items = []
         if i == 0:
-            carrier = transport.get("carrier", "Flight")
             from_loc = transport.get("from", trip_input.get("origin", ""))
-            hotel_name = housing.get("name", "your hotel") if housing else "your hotel"
             items.append({"time": "Morning", "type": "arrival",
                           "title": f"Arrive via {carrier}",
                           "detail": f"{f'From {from_loc}. ' if from_loc else ''}"
@@ -895,7 +1007,7 @@ def _fallback_schedule(trip_input: dict, outputs: dict) -> dict:
         if i == len(days) - 1:
             items.append({"time": "Evening", "type": "departure",
                           "title": f"Depart via {carrier}",
-                          "detail": "Head to the airport for your return flight."})
+                          "detail": departure_detail})
         schedule.append({"day": i + 1, "date": date,
                          "title": act["name"] if act else "Explore", "items": items})
 
@@ -906,6 +1018,21 @@ def _fallback_schedule(trip_input: dict, outputs: dict) -> dict:
         ),
         "schedule": schedule,
     }
+
+
+def _safe_model_summary(destination: str, value) -> str | None:
+    """Accept only a short summary anchored to the requested destination."""
+    summary = str(value or "").strip()
+    if not summary or len(summary) > 500:
+        return None
+    if str(destination).strip().casefold() not in summary.casefold():
+        return None
+    if (
+        not destination_allows_retired_tokyo_places(destination)
+        and tokyo_endpoint_marker(summary)
+    ):
+        return None
+    return summary
 
 
 def _valid_synthesis(trip_input: dict, synth: dict | None, outputs: dict) -> bool:
@@ -997,30 +1124,63 @@ def reconcile_and_synthesize(trip_input: dict, outputs: dict) -> dict:
         if entry not in reasoning_log:
             reasoning_log.append(entry)
 
-    # One DeepSeek synthesis call for the day-by-day schedule (with deterministic fallback).
-    synth = None
+    # Build the schedule deterministically from guarded specialist records.
+    # DeepSeek adds only a compact overview/trade-off note, avoiding a slow,
+    # token-heavy rewrite that can accidentally alter verified place names.
+    synth = _fallback_schedule(trip_input, outputs)
+    synthesis_source = "deterministic_guarded"
     try:
         payload = {
             "destination": trip_input["location"],
-            "strict_destination_rule": (
-                f"Every place must be in {trip_input['location']} or a clearly identified day trip "
-                f"departing from {trip_input['location']}. Do not use any other destination's data."
-            ),
             "dates": trip_input["dates"],
-            "arrival": outputs["transportation"]["recommended"],
-            "lodging": outputs["housing"]["recommended"],
-            "daily_meals": outputs["food"]["daily_meals"],
-            "activities": outputs["activity"]["recommended"],
-            "daily_weather": outputs["planning"].get("daily_weather", []),
-            "pacing_notes": outputs["planning"]["pacing_notes"],
+            "transport": {
+                key: (outputs["transportation"].get("recommended") or {}).get(key)
+                for key in ("mode", "carrier", "duration", "price", "currency")
+            },
+            "lodging": (outputs["housing"].get("recommended") or {}).get("name"),
+            "activities": [
+                item.get("name")
+                for item in outputs["activity"].get("recommended", [])
+                if isinstance(item, dict) and item.get("name")
+            ],
+            "weather_summary": outputs["planning"].get("weather_summary"),
+            "pacing_notes": outputs["planning"].get("pacing_notes"),
+            "budget": {
+                "planned_total": cost.get("total"),
+                "traveler_budget": cost.get("budget"),
+                "currency": cost.get("currency"),
+                "within_budget": cost.get("within_budget"),
+            },
         }
-        synth = chat_json(SYNTHESIS_PROMPT, json.dumps(payload, ensure_ascii=False), temperature=0.5)
-        if not _valid_synthesis(trip_input, synth, outputs):
-            synth = None
+        model_note = chat_json(
+            SYNTHESIS_PROMPT,
+            json.dumps(payload, ensure_ascii=False),
+            temperature=0.3,
+        )
+        model_summary = _safe_model_summary(
+            trip_input["location"],
+            model_note.get("summary") if isinstance(model_note, dict) else None,
+        )
+        if model_summary:
+            synth["summary"] = model_summary
+            synthesis_source = "deepseek_assisted"
+        tradeoff_note = (
+            str(model_note.get("tradeoff_note") or "").strip()
+            if isinstance(model_note, dict)
+            else ""
+        )
+        safe_tradeoff_note = _safe_model_summary(
+            trip_input["location"],
+            tradeoff_note,
+        )
+        if safe_tradeoff_note:
+            synthesis_source = "deepseek_assisted"
+            reasoning_log.append({
+                "agent": "Orchestrator",
+                "note": safe_tradeoff_note,
+            })
     except Exception:
-        synth = None
-    if synth is None:
-        synth = _fallback_schedule(trip_input, outputs)
+        pass
     _apply_weather_activity_order(synth, trip_input, outputs)
 
     return {
@@ -1028,6 +1188,8 @@ def reconcile_and_synthesize(trip_input: dict, outputs: dict) -> dict:
         "dates": trip_input["dates"],
         "summary": synth.get("summary", ""),
         "schedule": synth["schedule"],
+        "synthesis_source": synthesis_source,
+        "schedule_source": "deterministic_guarded",
         "cost": cost,
         "map_points": _map_points(outputs, trip_input["location"]),
         "packing_list": outputs["planning"]["packing_list"],
@@ -1036,6 +1198,7 @@ def reconcile_and_synthesize(trip_input: dict, outputs: dict) -> dict:
         "weather_location": outputs["planning"].get("weather_location"),
         "reasoning_log": reasoning_log,
         "agent_outputs": outputs,
+        "data_provenance": summarize_data_provenance(outputs),
         "transport_scrape_status": outputs.get("transportation", {}).get("scrape_status", "ok"),
         "transport_errors": outputs.get("transportation", {}).get("errors", []),
         "verification_notice": (
@@ -1048,11 +1211,11 @@ def reconcile_and_synthesize(trip_input: dict, outputs: dict) -> dict:
 
 def plan(trip_input: dict) -> dict:
     """Run the six specialist agents in the spec-mandated dependency order,
-    injecting each agent's real outputs into a shared ``trip_input`` so
-    downstream agents consume genuine cross-agent data:
+    injecting each agent's labeled outputs into a shared ``trip_input`` so
+    downstream agents consume explicit cross-agent data:
 
-        1. Transportation  — ALWAYS first (real flight/train price)
-        2. Budget          — transport-first allocation grounded in real cost
+        1. Transportation  — first (provider price or labeled route estimate)
+        2. Budget          — transport-first allocation grounded in that cost
         3. Activity        — discovery + scheduling -> meal-slot handoff
            Housing         — independent, run in parallel with Activity
         4. Food            — consumes meal slots + budget caps

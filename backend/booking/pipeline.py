@@ -1,4 +1,4 @@
-"""Booking pipeline: wires Ctrip scraping -> filtering -> confirm/book -> store.
+"""Operator-only Ctrip payment-checkpoint pipeline.
 
 This is the layer the FastAPI endpoints call. It keeps the endpoint code thin and
 keeps all scraping/DB logic in booking/ctrip.py and booking/db.py.
@@ -8,7 +8,7 @@ Inputs follow the user's spec:
                    housing cap, in CNY for Ctrip)
   * location    -> HotelSearchRequest.location (from the Planning Agent)
   * preferences -> HotelSearchRequest.preferences / min_rating (Planning Agent)
-  * identity    -> BookingConfirmRequest.{id_number,name,phone} (from the DB)
+  * identity    -> BookingConfirmRequest.{id_number,name,phone} (one-time input)
   * payment     -> user picks wechat | alipay in the frontend; we stop at the
                    payment checkpoint because Ctrip can't be paid automatically.
 """
@@ -58,20 +58,23 @@ def search_and_filter(req: HotelSearchRequest) -> list[HotelResult]:
 
 
 # --------------------------------------------------------------------------- #
-# Step 3+4+5: confirm selection -> Playwright booking -> store confirmed route
+# Step 3+4+5: submit selection -> reach payment checkpoint -> store audit route
 # --------------------------------------------------------------------------- #
 def confirm_booking(req: BookingConfirmRequest) -> BookingResult:
-    # Resolve the traveler identity (lookup by id_number, else upsert).
-    user = db.get_user(req.id_number) if req.id_number else None
-    if user is None and (req.name and req.phone):
-        user = db.upsert_user(req.name, req.id_number, req.phone)
-    elif user is None:
-        # No stored identity and none supplied — still allow simulation, but flag it.
-        user = {"id": None, "name": req.name or "未知", "id_number": req.id_number,
-                "phone": req.phone or ""}
-
-    contact = {"name": user.get("name"), "id_number": user.get("id_number"),
-               "phone": user.get("phone")}
+    # Use identity only for this provider request. Do not persist passport/ID or
+    # phone data in the G3TA database.
+    contact = {
+        "name": req.name or "",
+        "id_number": req.id_number,
+        "phone": req.phone or "",
+    }
+    if not all(contact.values()):
+        return BookingResult(
+            status="failed",
+            order_no=None,
+            message="Name, ID/passport number, and phone are required for a provider booking attempt.",
+            route=None,
+        )
 
     # Step 4: drive Playwright to the Ctrip payment checkpoint.
     # In strict mode (default) a failed live booking raises in ctrip.book_hotel;
@@ -104,9 +107,9 @@ def confirm_booking(req: BookingConfirmRequest) -> BookingResult:
             route=None,
         )
 
-    # Step 5: persist the "confirmed route" (status reflects the payment checkpoint).
+    # Step 5: persist an audit route whose status reflects the payment checkpoint.
     route = db.save_route(
-        user_id=user.get("id"),
+        user_id=None,
         hotel_name=req.hotel.name,
         hotel_id=req.hotel.id,
         hotel_url=req.hotel.url,
@@ -121,7 +124,11 @@ def confirm_booking(req: BookingConfirmRequest) -> BookingResult:
         payment_method=req.payment_method,
         status=booking["status"],
         order_no=order_no,
-        raw=str(booking),
+        raw=str({
+            "status": booking.get("status"),
+            "order_no": booking.get("order_no"),
+            "provider": "ctrip",
+        }),
     )
 
     return BookingResult(
@@ -132,6 +139,11 @@ def confirm_booking(req: BookingConfirmRequest) -> BookingResult:
     )
 
 
-def mark_paid(route_id: int, order_no: str | None = None) -> dict | None:
-    """Called after the user has paid in their own WeChat/Alipay and marks it done."""
-    return db.update_route_status(route_id, "confirmed", order_no)
+def record_payment_report(route_id: int, order_no: str | None = None) -> dict | None:
+    """Record what the user reports without claiming provider verification.
+
+    Only a provider callback or a verified provider lookup may set a booking to
+    ``confirmed``. The current integration has neither, so this remains a
+    clearly labeled audit note.
+    """
+    return db.update_route_status(route_id, "payment_reported", order_no)

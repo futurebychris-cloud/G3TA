@@ -1,7 +1,6 @@
-"""Real budget data — PRIMARY: Numbeo cost-of-living, FALLBACK: geographic estimate.
+"""Budget references — primary Numbeo page data, then labeled static estimates.
 
-Replaces DeepSeek LLM estimates with real crowd-sourced cost data from Numbeo.
-Includes shopping budget as a new category.
+Includes shopping budget as an additional category.
 
 Usage:
     get_cost_index(destination, origin, dates, currency)
@@ -18,7 +17,7 @@ def get_cost_index(
     dates: dict | None = None,
     currency: str = "USD",
 ) -> dict:
-    """Get real cost index for destination from Numbeo (no LLM estimation).
+    """Get a Numbeo-derived or clearly labeled estimated destination cost index.
 
     Returns shopping budget as an additional daily category.
     """
@@ -26,7 +25,7 @@ def get_cost_index(
     start = dates.get("start", "")
     end = dates.get("end", "")
 
-    # PRIMARY: Numbeo real data
+    # Primary: current Numbeo page data; the service labels static fallbacks.
     result = numbeo_get_cost_index(destination, origin, dates, currency)
 
     # Ensure shopping is included in daily_index

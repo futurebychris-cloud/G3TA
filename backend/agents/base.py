@@ -1,7 +1,7 @@
 """Shared plumbing for the six specialist agents.
 
 Each agent follows the same shape:
-    shared trip input  ->  service call (real data)  ->  DeepSeek reasoning  ->  structured output
+    shared trip input  ->  provider/estimate service  ->  DeepSeek reasoning  ->  structured output
 
 `llm_reason` is the single reasoning call. It asks DeepSeek for a JSON object.
 If the model is unreachable or returns non-JSON (a transient hiccup), it returns
@@ -12,6 +12,7 @@ build is configured to require a real DeepSeek key (see PRD decision).
 import json
 
 from llm.deepseek_client import chat_json
+from plan_runtime import raise_if_cancelled
 
 
 def llm_reason(system_prompt: str, payload: dict, temperature: float = 0.4) -> dict | None:
@@ -24,6 +25,14 @@ def llm_reason(system_prompt: str, payload: dict, temperature: float = 0.4) -> d
     except Exception:
         # Network blip, rate limit, or non-JSON reply: let the agent fall back.
         return None
+
+
+def report_progress(trip_input: dict, detail: str) -> None:
+    """Publish an internal sub-stage when the streaming endpoint supplied a callback."""
+    raise_if_cancelled(trip_input)
+    callback = trip_input.get("_progress_callback")
+    if callable(callback):
+        callback(str(detail))
 
 
 def trip_days(trip_input: dict) -> list[str]:

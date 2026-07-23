@@ -4,17 +4,19 @@ Supports both SQLite (default) and PostgreSQL (when DATABASE_URL is set).
 
 Tables:
     shared_expenses     — Budget Agent: tracks all expenses across categories
-    shared_activities   — Activity Agent: confirmed activities with metadata
-    shared_meals        — Food Agent: confirmed restaurant/meal selections
-    shared_transport    — Transportation Agent: confirmed routes & tickets
+    shared_activities   — Activity Agent: proposed activities with review state
+    shared_meals        — Food Agent: proposed restaurant/meal selections
+    shared_transport    — Transportation Agent: proposed routes and booking state
     shared_checklist    — Planning Agent: packing/checklist items
     shared_preferences  — User preferences & travel history
     shared_trips        — Trip metadata
+    shared_provider_cache — Persisted Playwright/provider query results
 """
 from __future__ import annotations
 
 import os
 import json
+import time
 from datetime import datetime
 from contextlib import contextmanager
 
@@ -67,6 +69,7 @@ def init_shared_db():
         _init_postgres_tables()
     else:
         _init_sqlite_tables()
+    purge_expired_provider_cache()
 
 
 def _init_sqlite_tables():
@@ -104,7 +107,7 @@ def _init_sqlite_tables():
                 lat REAL,
                 lng REAL,
                 meal_slot TEXT DEFAULT '' CHECK(meal_slot IN ('breakfast','lunch','dinner','')),
-                status TEXT DEFAULT 'confirmed' CHECK(status IN ('pending','confirmed','cancelled')),
+                status TEXT DEFAULT 'pending' CHECK(status IN ('pending','confirmed','cancelled')),
                 created_at TEXT DEFAULT (datetime('now'))
             )
         """)
@@ -127,7 +130,7 @@ def _init_sqlite_tables():
                 order_number TEXT DEFAULT '',
                 lat REAL,
                 lng REAL,
-                status TEXT DEFAULT 'confirmed' CHECK(status IN ('pending','confirmed','ordered','cancelled')),
+                status TEXT DEFAULT 'pending' CHECK(status IN ('pending','confirmed','ordered','cancelled')),
                 created_at TEXT DEFAULT (datetime('now'))
             )
         """)
@@ -135,7 +138,7 @@ def _init_sqlite_tables():
             CREATE TABLE IF NOT EXISTS shared_transport (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 trip_id TEXT NOT NULL,
-                transport_type TEXT NOT NULL CHECK(transport_type IN ('flight','train','bus','taxi','subway','bike','walk','ferry')),
+                transport_type TEXT NOT NULL CHECK(transport_type IN ('flight','train','car','bus','taxi','subway','bike','walk','ferry')),
                 scope TEXT DEFAULT 'national' CHECK(scope IN ('national','international','local')),
                 from_location TEXT NOT NULL,
                 to_location TEXT NOT NULL,
@@ -189,6 +192,75 @@ def _init_sqlite_tables():
                 created_at TEXT DEFAULT (datetime('now'))
             )
         """)
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS shared_provider_cache (
+                namespace TEXT NOT NULL,
+                cache_key TEXT NOT NULL,
+                query_json TEXT NOT NULL,
+                source TEXT DEFAULT 'playwright',
+                payload_json TEXT NOT NULL,
+                record_count INTEGER DEFAULT 0,
+                fetched_at_epoch REAL NOT NULL,
+                expires_at_epoch REAL NOT NULL,
+                updated_at TEXT DEFAULT (datetime('now')),
+                PRIMARY KEY (namespace, cache_key)
+            )
+        """)
+        db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_provider_cache_expiry
+            ON shared_provider_cache (expires_at_epoch)
+        """)
+        _ensure_sqlite_transport_supports_car(db)
+
+
+def _ensure_sqlite_transport_supports_car(db) -> None:
+    """Migrate the legacy SQLite transport CHECK while preserving every row."""
+    row = db.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='shared_transport'"
+    ).fetchone()
+    table_sql = str(row["sql"] if row else "")
+    if "'car'" in table_sql:
+        return
+    legacy_name = "shared_transport_legacy_car_migration"
+    if db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+        (legacy_name,),
+    ).fetchone():
+        raise RuntimeError(
+            f"Cannot migrate shared_transport while {legacy_name} already exists."
+        )
+    db.execute(f"ALTER TABLE shared_transport RENAME TO {legacy_name}")
+    db.execute("""
+        CREATE TABLE shared_transport (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trip_id TEXT NOT NULL,
+            transport_type TEXT NOT NULL CHECK(transport_type IN ('flight','train','car','bus','taxi','subway','bike','walk','ferry')),
+            scope TEXT DEFAULT 'national' CHECK(scope IN ('national','international','local')),
+            from_location TEXT NOT NULL,
+            to_location TEXT NOT NULL,
+            departure_time TEXT DEFAULT '',
+            arrival_time TEXT DEFAULT '',
+            carrier TEXT DEFAULT '',
+            flight_number TEXT DEFAULT '',
+            train_number TEXT DEFAULT '',
+            price REAL DEFAULT 0,
+            currency TEXT DEFAULT 'CNY',
+            booking_status TEXT DEFAULT 'pending' CHECK(booking_status IN ('pending','booked','confirmed','cancelled')),
+            booking_ref TEXT DEFAULT '',
+            notes TEXT DEFAULT '',
+            created_at TEXT DEFAULT (datetime('now'))
+        )
+    """)
+    columns = (
+        "id, trip_id, transport_type, scope, from_location, to_location, "
+        "departure_time, arrival_time, carrier, flight_number, train_number, "
+        "price, currency, booking_status, booking_ref, notes, created_at"
+    )
+    db.execute(
+        f"INSERT INTO shared_transport ({columns}) "
+        f"SELECT {columns} FROM {legacy_name}"
+    )
+    db.execute(f"DROP TABLE {legacy_name}")
 
 
 def _init_postgres_tables():
@@ -240,7 +312,7 @@ def _init_postgres_tables():
                 lat DOUBLE PRECISION,
                 lng DOUBLE PRECISION,
                 meal_slot TEXT DEFAULT '' CHECK(meal_slot IN ('breakfast','lunch','dinner','')),
-                status TEXT DEFAULT 'confirmed' CHECK(status IN ('pending','confirmed','cancelled')),
+                status TEXT DEFAULT 'pending' CHECK(status IN ('pending','confirmed','cancelled')),
                 created_at TIMESTAMPTZ DEFAULT NOW()
             )
         """)
@@ -263,7 +335,7 @@ def _init_postgres_tables():
                 order_number TEXT DEFAULT '',
                 lat DOUBLE PRECISION,
                 lng DOUBLE PRECISION,
-                status TEXT DEFAULT 'confirmed' CHECK(status IN ('pending','confirmed','ordered','cancelled')),
+                status TEXT DEFAULT 'pending' CHECK(status IN ('pending','confirmed','ordered','cancelled')),
                 created_at TIMESTAMPTZ DEFAULT NOW()
             )
         """)
@@ -271,7 +343,7 @@ def _init_postgres_tables():
             CREATE TABLE IF NOT EXISTS shared_transport (
                 id SERIAL PRIMARY KEY,
                 trip_id TEXT NOT NULL,
-                transport_type TEXT NOT NULL CHECK(transport_type IN ('flight','train','bus','taxi','subway','bike','walk','ferry')),
+                transport_type TEXT NOT NULL CHECK(transport_type IN ('flight','train','car','bus','taxi','subway','bike','walk','ferry')),
                 scope TEXT DEFAULT 'national' CHECK(scope IN ('national','international','local')),
                 from_location TEXT NOT NULL,
                 to_location TEXT NOT NULL,
@@ -287,6 +359,15 @@ def _init_postgres_tables():
                 notes TEXT DEFAULT '',
                 created_at TIMESTAMPTZ DEFAULT NOW()
             )
+        """)
+        cur.execute("""
+            ALTER TABLE shared_transport
+            DROP CONSTRAINT IF EXISTS shared_transport_transport_type_check
+        """)
+        cur.execute("""
+            ALTER TABLE shared_transport
+            ADD CONSTRAINT shared_transport_transport_type_check
+            CHECK(transport_type IN ('flight','train','car','bus','taxi','subway','bike','walk','ferry'))
         """)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS shared_checklist (
@@ -311,6 +392,168 @@ def _init_postgres_tables():
                 created_at TIMESTAMPTZ DEFAULT NOW()
             )
         """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS shared_provider_cache (
+                namespace TEXT NOT NULL,
+                cache_key TEXT NOT NULL,
+                query_json TEXT NOT NULL,
+                source TEXT DEFAULT 'playwright',
+                payload_json TEXT NOT NULL,
+                record_count INTEGER DEFAULT 0,
+                fetched_at_epoch DOUBLE PRECISION NOT NULL,
+                expires_at_epoch DOUBLE PRECISION NOT NULL,
+                updated_at TIMESTAMPTZ DEFAULT NOW(),
+                PRIMARY KEY (namespace, cache_key)
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_provider_cache_expiry
+            ON shared_provider_cache (expires_at_epoch)
+        """)
+
+
+# ========================================================================== #
+# Persistent provider / Playwright cache helpers
+# ========================================================================== #
+def _record_count(payload) -> int:
+    if isinstance(payload, dict):
+        for key in ("results", "items", "records"):
+            records = payload.get(key)
+            if isinstance(records, (list, tuple, set)):
+                return len(records)
+        return len(payload)
+    if isinstance(payload, (list, tuple, set)):
+        return len(payload)
+    return 1 if payload is not None else 0
+
+
+def save_provider_cache(
+    namespace: str,
+    cache_key: str,
+    query_json: str,
+    payload,
+    *,
+    source: str = "playwright",
+    ttl_seconds: float = 600,
+) -> None:
+    """Upsert one JSON-serializable provider response."""
+    fetched_at = time.time()
+    expires_at = fetched_at + max(float(ttl_seconds), 1)
+    payload_json = json.dumps(payload, ensure_ascii=False, default=str)
+    values = (
+        namespace,
+        cache_key,
+        query_json,
+        source,
+        payload_json,
+        _record_count(payload),
+        fetched_at,
+        expires_at,
+    )
+    with _conn() as db:
+        if _USE_POSTGRES:
+            db.execute(
+                f"""
+                INSERT INTO shared_provider_cache (
+                    namespace, cache_key, query_json, source, payload_json,
+                    record_count, fetched_at_epoch, expires_at_epoch
+                ) VALUES (
+                    {_PLACEHOLDER},{_PLACEHOLDER},{_PLACEHOLDER},{_PLACEHOLDER},
+                    {_PLACEHOLDER},{_PLACEHOLDER},{_PLACEHOLDER},{_PLACEHOLDER}
+                )
+                ON CONFLICT (namespace, cache_key) DO UPDATE SET
+                    query_json=EXCLUDED.query_json,
+                    source=EXCLUDED.source,
+                    payload_json=EXCLUDED.payload_json,
+                    record_count=EXCLUDED.record_count,
+                    fetched_at_epoch=EXCLUDED.fetched_at_epoch,
+                    expires_at_epoch=EXCLUDED.expires_at_epoch,
+                    updated_at=NOW()
+                """,
+                values,
+            )
+        else:
+            db.execute(
+                f"""
+                INSERT INTO shared_provider_cache (
+                    namespace, cache_key, query_json, source, payload_json,
+                    record_count, fetched_at_epoch, expires_at_epoch
+                ) VALUES (
+                    {_PLACEHOLDER},{_PLACEHOLDER},{_PLACEHOLDER},{_PLACEHOLDER},
+                    {_PLACEHOLDER},{_PLACEHOLDER},{_PLACEHOLDER},{_PLACEHOLDER}
+                )
+                ON CONFLICT(namespace, cache_key) DO UPDATE SET
+                    query_json=excluded.query_json,
+                    source=excluded.source,
+                    payload_json=excluded.payload_json,
+                    record_count=excluded.record_count,
+                    fetched_at_epoch=excluded.fetched_at_epoch,
+                    expires_at_epoch=excluded.expires_at_epoch,
+                    updated_at=datetime('now')
+                """,
+                values,
+            )
+
+
+def get_provider_cache(namespace: str, cache_key: str):
+    """Return an unexpired persisted provider response, otherwise ``None``."""
+    with _conn() as db:
+        sql = (
+            f"SELECT payload_json FROM shared_provider_cache "
+            f"WHERE namespace={_PLACEHOLDER} AND cache_key={_PLACEHOLDER} "
+            f"AND expires_at_epoch>{_PLACEHOLDER}"
+        )
+        params = (namespace, cache_key, time.time())
+        if _USE_POSTGRES:
+            db.execute(sql, params)
+            row = db.fetchone()
+        else:
+            row = db.execute(sql, params).fetchone()
+    if not row:
+        return None
+    try:
+        return json.loads(row["payload_json"])
+    except (TypeError, json.JSONDecodeError):
+        return None
+
+
+def list_provider_cache(namespace: str | None = None, limit: int = 100) -> list[dict]:
+    """Return cache metadata without returning potentially large payload bodies."""
+    safe_limit = max(1, min(int(limit), 1000))
+    with _conn() as db:
+        if namespace:
+            sql = (
+                f"SELECT namespace, cache_key, query_json, source, record_count, "
+                f"fetched_at_epoch, expires_at_epoch, updated_at "
+                f"FROM shared_provider_cache WHERE namespace={_PLACEHOLDER} "
+                f"ORDER BY fetched_at_epoch DESC LIMIT {safe_limit}"
+            )
+            params = (namespace,)
+        else:
+            sql = (
+                "SELECT namespace, cache_key, query_json, source, record_count, "
+                "fetched_at_epoch, expires_at_epoch, updated_at "
+                f"FROM shared_provider_cache ORDER BY fetched_at_epoch DESC LIMIT {safe_limit}"
+            )
+            params = ()
+        rows = _execute_and_fetch(db, sql, params)
+    return [dict(row) for row in rows]
+
+
+def purge_expired_provider_cache() -> int:
+    """Delete expired provider rows and return the affected row count."""
+    with _conn() as db:
+        if _USE_POSTGRES:
+            db.execute(
+                f"DELETE FROM shared_provider_cache WHERE expires_at_epoch<={_PLACEHOLDER}",
+                (time.time(),),
+            )
+            return db.rowcount
+        cur = db.execute(
+            f"DELETE FROM shared_provider_cache WHERE expires_at_epoch<={_PLACEHOLDER}",
+            (time.time(),),
+        )
+        return cur.rowcount
 
 
 # ========================================================================== #
@@ -352,7 +595,7 @@ _NUMERIC_FIELDS = {
 }
 
 _DEFAULT_VALUES = {
-    "status": "confirmed",
+    "status": "pending",
     "booking_status": "pending",
     "scope": "national",
     "meal_slot": "",
@@ -362,9 +605,7 @@ _DEFAULT_VALUES = {
 
 
 def _sanitize_for_pg(table: str, vals: dict) -> dict:
-    """Convert empty strings to valid defaults for PG columns."""
-    if not _USE_POSTGRES:
-        return vals
+    """Convert omitted helper arguments to values accepted by either backend."""
     numeric_cols = _NUMERIC_FIELDS.get(table, set())
     result = {}
     for k, v in vals.items():
@@ -512,9 +753,24 @@ def get_checklist_by_trip(trip_id: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def mark_checklist_packed(item_id: int) -> None:
+def set_checklist_packed(item_id: int, trip_id: str, is_packed: bool) -> bool:
+    """Update one checklist row only when it belongs to the supplied trip."""
     with _conn() as db:
-        db.execute(f"UPDATE shared_checklist SET is_packed=1 WHERE id={_PLACEHOLDER}", (item_id,))
+        cur = db.execute(
+            f"UPDATE shared_checklist SET is_packed={_PLACEHOLDER} "
+            f"WHERE id={_PLACEHOLDER} AND trip_id={_PLACEHOLDER}",
+            (1 if is_packed else 0, item_id, trip_id),
+        )
+        return cur.rowcount > 0
+
+
+def mark_checklist_packed(item_id: int) -> None:
+    """Deprecated compatibility helper for trusted internal callers."""
+    with _conn() as db:
+        db.execute(
+            f"UPDATE shared_checklist SET is_packed=1 WHERE id={_PLACEHOLDER}",
+            (item_id,),
+        )
 
 
 # ========================================================================== #

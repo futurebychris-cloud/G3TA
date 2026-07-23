@@ -1,18 +1,14 @@
-"""Budget Agent v2 (Budget Architect) — Playwright-only real data.
-
-ZERO mock. ZERO urllib+regex web scraping. ALL web data comes from Playwright.
+"""Budget Agent v2 (Budget Architect) — provider-first, labeled fallback data.
 
 What we do:
-    1. LLM cost index via budget_service (DeepSeek estimates based on destination)
-    2. Playwright search on Numbeo / travel cost sites for real market data
-    3. User travel history from shared_db for personalized allocation refinement
-    4. LLM allocation (preference-weighted split of total budget)
-    5. Fallback: deterministic weighted allocation IF LLM is completely unavailable
-       (clearly labeled as "estimated", not scraped)
+    1. Numbeo-derived cost index with a clearly labeled reference-data fallback
+    2. Optional Playwright public-web search for supplementary market context
+    3. Recent prior budget allocations for optional personalization
+    4. Deterministic neural allocator for a preference-weighted split
+    5. A deterministic weighted fallback if the allocator is unavailable
 
-The REAL per-item costs come from the specialist agents (transport, housing,
-food, activity). This agent's job is budget ARCHITECTURE — how the total should
-be split — using the best available reference data.
+Per-item provider records and estimates come from the specialist agents. This
+agent's job is budget architecture; every result still requires verification.
 
 Output: {"daily_caps": {...}, "warnings": [...], "pie_data": [...],
          "allocations": {...}, "web_search_costs": {...}, "user_history": {...}}
@@ -21,12 +17,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import time
 
-from .base import llm_reason, trip_days
+from .base import report_progress, trip_days
 from services.budget_service import get_cost_index
 from services.neural_budget import neural_budget_allocation
+from services.runtime_cache import cached_call
 
 # --------------------------------------------------------------------------- #
 # Constants
@@ -211,6 +209,13 @@ def _playwright_web_search_costs(destination: str) -> dict:
     return costs
 
 
+def _public_web_search_enabled() -> bool:
+    """Keep the slow browser-only supplement opt-in for interactive plans."""
+    return os.getenv("BUDGET_PUBLIC_WEB_SEARCH_ENABLED", "0").strip().casefold() in {
+        "1", "true", "yes", "on",
+    }
+
+
 # --------------------------------------------------------------------------- #
 # Pie data builder
 # --------------------------------------------------------------------------- #
@@ -256,35 +261,51 @@ def _weighted_allocate(total: float, weights: dict, cost_index: dict,
 
 
 # --------------------------------------------------------------------------- #
-# User travel history — queries shared DB for past spending patterns
+# Prior plan history — queries shared DB for past budget allocations
 # --------------------------------------------------------------------------- #
 
-def _get_user_travel_history(num_trips: int = 5) -> dict:
-    """Query shared DB for user's past trip spending averages.
-    
+def _get_prior_budget_history(current_trip_id: str = "", num_trips: int = 5) -> dict:
+    """Return averages from recent, distinct prior budget plans.
+
+    ``shared_expenses`` currently stores proposed budget allocations, not
+    settled transactions.  Only the latest allocation for each category in
+    each prior trip is included, and the active trip is excluded.
+
     Returns: {avg_food: float, avg_housing: float, avg_transport: float,
               avg_activity: float, avg_total: float, num_trips_found: int}
     or empty dict if no history.
     """
     try:
         from booking.shared_db import _conn as _db_conn, _USE_POSTGRES, _PLACEHOLDER
+        safe_num_trips = max(1, min(int(num_trips), 50))
+        query = (
+            "SELECT latest.category, AVG(latest.value) AS avg_val, "
+            "COUNT(*) AS cnt, COUNT(DISTINCT latest.trip_id) AS trip_count "
+            "FROM shared_expenses AS latest "
+            "JOIN ("
+            "  SELECT trip_id, category, MAX(id) AS latest_id "
+            "  FROM shared_expenses "
+            "  WHERE subject_id LIKE 'budget_%' AND trip_id IN ("
+            "    SELECT trip_id FROM shared_expenses "
+            f"    WHERE subject_id LIKE 'budget_%' AND trip_id <> {_PLACEHOLDER} "
+            "    GROUP BY trip_id ORDER BY MAX(created_at) DESC "
+            f"    LIMIT {safe_num_trips}"
+            "  ) "
+            "  GROUP BY trip_id, category"
+            ") AS selected ON latest.id = selected.latest_id "
+            "GROUP BY latest.category ORDER BY cnt DESC"
+        )
         with _db_conn() as db:
             if _USE_POSTGRES:
-                db.execute(
-                    f"SELECT category, AVG(value) as avg_val, COUNT(*) as cnt "
-                    f"FROM shared_expenses GROUP BY category ORDER BY cnt DESC",
-                )
+                db.execute(query, (current_trip_id,))
                 rows = db.fetchall()
             else:
-                rows = db.execute(
-                    "SELECT category, AVG(value) as avg_val, COUNT(*) as cnt "
-                    "FROM shared_expenses GROUP BY category ORDER BY cnt DESC"
-                ).fetchall()
+                rows = db.execute(query, (current_trip_id,)).fetchall()
         
         if not rows:
             return {}
         
-        history = {}
+        history = {"history_kind": "prior_budget_allocations"}
         cat_map = {
             "dining": "food", "food": "food",
             "hotel": "housing", "housing": "housing",
@@ -305,14 +326,20 @@ def _get_user_travel_history(num_trips: int = 5) -> dict:
         
         if total_spent > 0:
             history["avg_total"] = round(total_spent, 2)
-            history["num_trips_found"] = max(int(r.get("cnt", 0) or 0) for r in rows) if rows else 0
+            history["num_trips_found"] = max(
+                int(d.get("trip_count", 0) or 0)
+                for d in (dict(row) if not isinstance(row, dict) else row for row in rows)
+            )
         
         if history:
-            print(f"[budget] user history found: {history.get('num_trips_found', 0)} past trips, "
-                  f"avg total {history.get('avg_total', 0):.0f}")
+            print(
+                f"[budget] prior allocation history found: "
+                f"{history.get('num_trips_found', 0)} past trips, "
+                f"average planned total {history.get('avg_total', 0):.0f}"
+            )
         return history
     except Exception as e:
-        print(f"[budget] user history query failed (non-fatal): {e}")
+        print(f"[budget] prior allocation history query failed (non-fatal): {e}")
         return {}
 
 
@@ -331,21 +358,50 @@ def run(trip_input: dict, overflow: float | None = None) -> dict:
     ).hexdigest()[:12])
     preferences = trip_input.get("preferences", {})
 
-    # Get cost index from LLM-based service (DeepSeek estimates)
-    index = get_cost_index(destination, trip_input.get("origin", ""),
-                           trip_input.get("dates", {}), currency)
+    report_progress(trip_input, "正在读取目的地生活成本指数")
+    index = cached_call(
+        "budget-cost-index",
+        (destination, trip_input.get("origin", ""), trip_input.get("dates", {}), currency),
+        lambda: get_cost_index(
+            destination,
+            trip_input.get("origin", ""),
+            trip_input.get("dates", {}),
+            currency,
+        ),
+        ttl_seconds=3600,
+    )
 
-    # Web search for real destination costs via Playwright
-    web_costs = _playwright_web_search_costs(destination)
-    web_source = "playwright_scraped" if web_costs else "unavailable"
+    # This browser search is supplementary and can take 10–30 seconds when a
+    # search engine rate-limits automation. The labeled Numbeo/reference index
+    # above is sufficient for allocation, so keep the browser pass opt-in.
+    web_costs = {}
+    web_source = None
+    if _public_web_search_enabled():
+        report_progress(trip_input, "正在补充公开旅行成本数据")
+        web_costs = cached_call(
+            "budget-web-costs",
+            destination,
+            lambda: _playwright_web_search_costs(destination),
+            ttl_seconds=3600,
+            persist=True,
+            source="playwright_public_cost_search",
+            snapshot=True,
+        )
+        web_source = (
+            "repository_snapshot"
+            if isinstance(web_costs, dict) and web_costs.get("__g3ta_snapshot__")
+            else "playwright_scraped" if web_costs
+            else "unavailable"
+        )
 
     # Build preference weights
     weights = dict(DEFAULT_WEIGHTS)
     if preferences.get("budget_priority"):
         weights = {**weights, **preferences.get("budget_priority", {})}
 
-    # ---- NEW: Query user travel history from shared DB ----
-    user_history = _get_user_travel_history()
+    # Use recent proposed allocations as a personalization signal.  These are
+    # planning records, not evidence of the user's actual spending.
+    user_history = _get_prior_budget_history(trip_id)
     history_available = bool(user_history and user_history.get("num_trips_found", 0) > 0)
 
     # ---- PRIMARY: Neural Network Budget Allocation ----
@@ -366,7 +422,7 @@ def run(trip_input: dict, overflow: float | None = None) -> dict:
         cost_index=index.get("daily_index", {}),
     )
 
-    # Blend neural network ratios with user history if available
+    # Blend neural network ratios with prior allocation history if available
     if history_available:
         history_ratios = {}
         total_history_avg = user_history.get("avg_total", 1)
@@ -376,7 +432,7 @@ def run(trip_input: dict, overflow: float | None = None) -> dict:
                 if hkey in user_history:
                     history_ratios[cat] = user_history[hkey] / total_history_avg
         if history_ratios:
-            # Blend: 70% neural + 30% user history
+            # Blend: 70% neural + 30% prior allocation history
             blend = {}
             all_cats = set(list(neural_result["ratios"].keys()) + list(history_ratios.keys()))
             for cat in all_cats:
@@ -389,77 +445,41 @@ def run(trip_input: dict, overflow: float | None = None) -> dict:
                 blend = {k: round(v / blend_sum, 4) for k, v in blend.items()}
             neural_result["ratios"] = blend
             neural_result["confidence"] = min(neural_result["confidence"] + 0.05, 1.0)
-            print(f"[budget] blended NN ratios with user history: {blend}")
+            print(f"[budget] blended NN ratios with prior allocations: {blend}")
 
     print(f"[budget] Neural network allocation: ratios={neural_result['ratios']}, "
           f"confidence={neural_result['confidence']}")
 
-    # LLM reasoning for smart refinement of neural allocation
-    payload = {
-        "total_budget": total, "currency": currency, "num_days": num_days,
-        "destination": destination,
-        "estimated_flight_cost": flight_ref,
-        "destination_daily_cost_index": index["daily_index"],
-        "web_scraped_costs": web_costs,
-        "web_data_source": web_source,
-        "cost_level": index.get("cost_level"),
-        "preference_weights": weights,
-        "all_preferences": preferences,
-        # Inject neural network results for LLM refinement
-        "neural_ratios": neural_result["ratios"],
-        "neural_daily_caps": neural_result["daily_caps"],
-        "neural_confidence": neural_result["confidence"],
-        # Inject user history for LLM awareness
-        "user_travel_history": user_history if history_available else None,
-        "instruction": (
-            "A neural network has pre-computed optimal budget ratios based on "
-            "real destination cost data. USE these ratios as your primary guidance. "
-            "Only adjust if user preferences strongly override or budget is too tight."
-            + (f" The user has {user_history.get('num_trips_found', 0)} past trips with "
-               f"average spending: food {user_history.get('avg_food', 0):.0f}, "
-               f"housing {user_history.get('avg_housing', 0):.0f}, "
-               f"transport {user_history.get('avg_transportation', 0):.0f}. "
-               f"Consider their spending habits when allocating."
-               if history_available else "")
-        ),
+    # The neural allocator already consumes real transport cost, destination
+    # index, preferences, and prior allocations. A second LLM pass added latency but
+    # did not add new data, so the interactive pipeline uses it directly.
+    report_progress(trip_input, "正在根据交通成本分配各项预算")
+    allocations = {
+        "transportation": flight_ref,
+        "housing": round(neural_result["daily_caps"].get("housing", 0) * num_days, 2),
+        "food": round(neural_result["daily_caps"].get("food", 0) * num_days, 2),
+        "activity": round(neural_result["daily_caps"].get("activity", 0) * num_days, 2),
+        "other": round((neural_result["daily_caps"].get("shopping", 0) + 5) * num_days, 2),
     }
+    daily_caps = {
+        "food": round(neural_result["daily_caps"].get("food", 0), 2),
+        "activity": round(neural_result["daily_caps"].get("activity", 0), 2),
+        "housing": round(neural_result["daily_caps"].get("housing", 0), 2),
+        "local_transport": round(neural_result["daily_caps"].get("local_transport", 18), 2),
+    }
+    warnings = []
+    if total < flight_ref * 1.5:
+        warnings.append(f"Budget may be tight: {total:.0f} {currency} for {num_days} days in {destination}.")
     if overflow:
-        payload["overflow_to_trim"] = overflow
-        payload["instruction"] += " Plan is OVER budget. Tighten daily caps to fit."
-
-    result = llm_reason(BUDGET_SYSTEM_PROMPT, payload)
-
-    # Build allocations — neural network first, LLM refinement second
-    if result and "allocations" in result:
-        allocations = result["allocations"]
-        daily_caps = result.get("daily_caps", {})
-        warnings = result.get("warnings", [])
-        reasoning = result.get("reasoning", "")
-        allocation_source = "neural_network_refined_by_llm"
-    else:
-        # Fallback to neural network directly
-        allocations = {
-            "transportation": flight_ref,
-            "housing": round(neural_result["daily_caps"].get("housing", 0) * num_days, 2),
-            "food": round(neural_result["daily_caps"].get("food", 0) * num_days, 2),
-            "activity": round(neural_result["daily_caps"].get("activity", 0) * num_days, 2),
-            "other": round((neural_result["daily_caps"].get("shopping", 0) + 5) * num_days, 2),
-        }
-        daily_caps = {
-            "food": round(neural_result["daily_caps"].get("food", 0), 2),
-            "activity": round(neural_result["daily_caps"].get("activity", 0), 2),
-            "housing": round(neural_result["daily_caps"].get("housing", 0), 2),
-            "local_transport": round(neural_result["daily_caps"].get("local_transport", 18), 2),
-        }
-        warnings = []
-        if total < flight_ref * 1.5:
-            warnings.append(f"Budget may be tight: {total:.0f} {currency} for {num_days} days in {destination}.")
-        reasoning = (
-            f"Neural network allocation ({neural_result['confidence']*100:.0f}% confidence) "
-            f"based on {destination} cost data. "
-            f"LLM refinement unavailable — using pure neural network ratios."
+        warnings.append(
+            f"Current combined plan exceeds the target by {overflow:.0f} {currency}; "
+            "the orchestrator will trim flexible categories."
         )
-        allocation_source = "neural_network_direct"
+    reasoning = (
+        f"Neural allocation ({neural_result['confidence']*100:.0f}% confidence) "
+        f"using the real transport cost and {destination} cost data."
+    )
+    allocation_source = "neural_network_direct"
 
     # Build pie chart data
     pie_data = _build_pie_data(allocations)
