@@ -191,6 +191,7 @@ export default function App() {
   const { settings } = useAccessibilitySettings()
   const [step, setStep] = useState('input')
   const [statuses, setStatuses] = useState({})
+  const [agentEvents, setAgentEvents] = useState([])
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
   const [tab, setTab] = useState('itinerary')
@@ -203,6 +204,8 @@ export default function App() {
   const [showAllTabs, setShowAllTabs] = useState(false)
   const accessibilityButtonRef = useRef(null)
   const requestControllerRef = useRef(null)
+  const resultTransitionTimerRef = useRef(null)
+  const requestVersionRef = useRef(0)
   const isSenior = settings.preset === 'senior'
   const visibleTabs = isSenior && !showAllTabs
     ? TABS.filter(({ id }) => ['itinerary', 'map', 'packing'].includes(id))
@@ -231,9 +234,21 @@ export default function App() {
     }
   }, [isSenior, showAllTabs, tab])
 
+  useEffect(() => () => {
+    requestVersionRef.current += 1
+    requestControllerRef.current?.abort()
+    if (resultTransitionTimerRef.current) window.clearTimeout(resultTransitionTimerRef.current)
+  }, [])
+
   async function handleSubmit(input) {
+    const requestId = ++requestVersionRef.current
+    if (resultTransitionTimerRef.current) {
+      window.clearTimeout(resultTransitionTimerRef.current)
+      resultTransitionTimerRef.current = null
+    }
     setError(null)
     setResult(null)
+    setAgentEvents([])
     setTripInput(input)
     setStatuses(Object.fromEntries(AGENTS.map((agent) => [agent, 'pending'])))
     setStep('progress')
@@ -251,29 +266,43 @@ export default function App() {
           preset: settings.preset,
         },
       }, (event) => {
+        if (requestId !== requestVersionRef.current || controller.signal.aborted) return
         if (event.type === 'agent_start') {
           setStatuses((current) => ({ ...current, [event.agent]: 'running' }))
+          setAgentEvents((current) => [...current, { agent: event.agent, type: 'start' }])
         } else if (event.type === 'agent_done') {
           setStatuses((current) => ({ ...current, [event.agent]: 'done' }))
+          setAgentEvents((current) => [...current, { agent: event.agent, type: 'done', output: event.output || null }])
         } else if (event.type === 'complete') {
           setResult(event.result)
-          setTab('itinerary')
-          setStep('result')
+          resultTransitionTimerRef.current = window.setTimeout(() => {
+            if (requestId !== requestVersionRef.current) return
+            setTab('itinerary')
+            setStep('result')
+            resultTransitionTimerRef.current = null
+          }, settings.reducedMotion ? 0 : 800)
         } else if (event.type === 'error') {
           setError(event.message)
         }
       }, { signal: controller.signal })
     } catch (requestError) {
-      if (requestError.name !== 'AbortError') setError(requestError.message)
+      if (requestId === requestVersionRef.current && requestError.name !== 'AbortError') setError(requestError.message)
     } finally {
       if (requestControllerRef.current === controller) requestControllerRef.current = null
     }
   }
 
   function completeReset() {
+    requestVersionRef.current += 1
     requestControllerRef.current?.abort()
     requestControllerRef.current = null
+    if (resultTransitionTimerRef.current) {
+      window.clearTimeout(resultTransitionTimerRef.current)
+      resultTransitionTimerRef.current = null
+    }
     setStep('input')
+    setStatuses({})
+    setAgentEvents([])
     setResult(null)
     setError(null)
     setTab('itinerary')
@@ -350,7 +379,7 @@ export default function App() {
 
       {step === 'progress' && (
         <main className="progress-page" id="main-content" tabIndex="-1">
-          <ProgressTracker agents={AGENTS} statuses={statuses} error={error} onRetry={requestReset} />
+          <ProgressTracker agents={AGENTS} statuses={statuses} events={agentEvents} trip={tripInput} error={error} onRetry={requestReset} />
         </main>
       )}
 
