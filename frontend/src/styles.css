@@ -565,17 +565,18 @@ button { -webkit-tap-highlight-color: transparent; }
 .date-pair { display: flex; align-items: center; gap: 7px; }
 .date-pair input { font-size: 0.82rem; }
 .date-pair span { color: var(--coral); }
-.money-input { display: flex; align-items: center; gap: 8px; }
+/* Stretch keeps the currency dropdown exactly the same height as the amount input. */
+.money-input { display: flex; align-items: stretch; gap: 8px; }
 .money-input .currency-select {
   flex: 0 0 auto;
   min-width: 74px;
-  padding: 6px 8px;
+  padding: 9px 10px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--white);
   color: var(--ink);
   font: inherit;
-  font-size: 0.85rem;
+  font-size: 0.95rem;
   font-weight: 750;
   cursor: pointer;
 }
