@@ -98,9 +98,26 @@ TRAIN_TYPES = {
     "L": "临客 (Temporary)",
 }
 
-# Price-per-km estimates by train type (CNY), used when 12306 doesn't return price
+# Price-per-km estimates by train type (CNY), used ONLY as last-resort fallback
 # G-train ≈ 0.46/km, D-train ≈ 0.31/km, K ≈ 0.15/km, etc.
 PRICE_PER_KM = {"G": 0.46, "D": 0.31, "C": 0.35, "Z": 0.20, "T": 0.18, "K": 0.15}
+
+# 12306 seat type codes → human-readable names
+SEAT_TYPE_MAP: dict[str, str] = {
+    "O": "二等座", "M": "一等座", "9": "商务座", "P": "特等座",
+    "6": "高级软卧", "4": "软卧", "3": "硬卧", "2": "软座", "1": "硬座",
+}
+
+# Seat type codes to query (by train type prefix)
+# G/D trains have second/first/business; K/T/Z trains have hard/soft sleepers
+SEAT_CODES_BY_TYPE: dict[str, list[str]] = {
+    "G": ["O", "M", "9"],  # 二等座, 一等座, 商务座
+    "D": ["O", "M", "9", "P"],
+    "C": ["O", "M", "P"],
+    "Z": ["4", "3", "2", "1"],  # 软卧, 硬卧, 软座, 硬座
+    "T": ["4", "3", "2", "1"],
+    "K": ["4", "3", "2", "1"],
+}
 
 # Approximate distances between major city pairs (km)
 _DISTANCES: dict[tuple[str, str], int] = {
@@ -126,6 +143,94 @@ def _station_distance(code_a: str, code_b: str) -> int:
     pair = (code_a, code_b)
     rev = (code_b, code_a)
     return _DISTANCES.get(pair) or _DISTANCES.get(rev) or 500
+
+
+def _query_ticket_price(
+    internal_train_no: str,
+    from_station_no: str,
+    to_station_no: str,
+    seat_types: list[str],
+    train_date: str,
+) -> dict[str, float]:
+    """Query REAL ticket prices from 12306's price API.
+
+    12306 has a separate public endpoint for querying ticket prices:
+        GET https://kyfw.12306.cn/otn/leftTicket/queryTicketPrice
+
+    This endpoint does NOT require login — it returns real-time prices
+    for any route within the 15-day booking window.
+
+    Args:
+        internal_train_no: Internal train number (field[2] from leftTicket query),
+                          NOT the display code like G102
+        from_station_no: Station sequence number (field[16] from query)
+        to_station_no: Station sequence number (field[17] from query)
+        seat_types: List of seat type codes, e.g. ["O", "M", "9"]
+        train_date: Date in YYYY-MM-DD format
+
+    Returns:
+        Dict mapping seat type codes to prices, e.g. {"O": 553.0, "M": 933.0, "9": 1874.0}
+    """
+    if not seat_types:
+        return {}
+
+    seat_str = ",".join(seat_types)
+    url = (
+        "https://kyfw.12306.cn/otn/leftTicket/queryTicketPrice?"
+        + urllib.parse.urlencode({
+            "train_no": internal_train_no,
+            "from_station_no": from_station_no,
+            "to_station_no": to_station_no,
+            "seat_types": seat_str,
+            "train_date": train_date,
+        })
+    )
+
+    try:
+        opener = _get_12306_opener()
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0",
+            "Referer": "https://kyfw.12306.cn/otn/leftTicket/init",
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "Cache-Control": "no-cache",
+            "X-Requested-With": "XMLHttpRequest",
+        })
+        with opener.open(req, timeout=10) as r:
+            raw = r.read()
+            data = json.loads(raw.decode("utf-8-sig") if raw.startswith(b'\xef\xbb\xbf') else raw.decode("utf-8"))
+
+        if not data.get("status") and data.get("httpstatus") != 200:
+            print(f"[12306] price API error: {data.get('messages', 'unknown')}")
+            return {}
+
+        price_data = data.get("data", {})
+        prices: dict[str, float] = {}
+
+        # Price data structure: { "O": "¥553.0", "M": "¥933.0", ... }
+        for seat_code, price_str in price_data.items():
+            if seat_code in SEAT_TYPE_MAP:
+                try:
+                    # Strip ¥ prefix and convert to float
+                    clean = str(price_str).replace("¥", "").replace(",", "").strip()
+                    if clean and clean != "--" and clean != "*":
+                        prices[seat_code] = float(clean)
+                except (ValueError, AttributeError):
+                    pass
+
+        if prices:
+            print(f"[12306] real prices for {internal_train_no}: "
+                  f"{', '.join(f'{SEAT_TYPE_MAP.get(k,k)}:¥{v:.0f}' for k,v in prices.items())}")
+        else:
+            print(f"[12306] no prices returned for {internal_train_no} (may be outside booking window)")
+
+        return prices
+
+    except urllib.error.HTTPError as e:
+        print(f"[12306] price query HTTP {e.code}: {e.reason}")
+        return {}
+    except Exception as e:
+        print(f"[12306] price query failed: {e}")
+        return {}
 
 
 # ---------------------------------------------------------------------------
@@ -311,29 +416,32 @@ def search_trains(origin: str, destination: str, date_str: str) -> list[dict]:
             return []
 
         trains: list[dict] = []
+        # Batch query REAL prices: first collect all trains, then query prices in batch
+        raw_trains: list[dict] = []
         for item in result:
             fields = item.split("|")
             if len(fields) < 30:
                 continue
 
             # Field reference (12306's documented format):
-            # 0: secretStr, 1: buttonText, 2: train_no (internal),
+            # 0: secretStr, 1: buttonText (预订),
+            # 2: train_no (internal hash — used for price query),
             # 3: station_train_code (e.g. "G102"),
             # 4: start_station_telecode, 5: end_station_telecode,
             # 6: from_station_telecode, 7: to_station_telecode,
             # 8: start_time, 9: arrive_time, 10: lishi (duration),
-            # 11: canWebBuy, 12: yp_info, 13: start_train_date,
-            # 14: train_seat_feature, 15: location_code,
-            # 16: from_station_no, 17: to_station_no,
-            # 18: is_support_card, ...
-            # Seats (remaining count or "有"/"无"):
+            # ...
+            # 16: from_station_no (used for price query),
+            # 17: to_station_no (used for price query),
+            # ...
+            # Seat availability (count or "有"/"无"):
             # 23: swz (商务座), 24: tz (特等座),
             # 25: zy (一等座), 26: ze (二等座),
             # 27: gr (高级软卧), 28: rw (软卧),
             # 29: yw (硬卧), 30: wz (无座),
-            # 31: qt (其他), ...
 
             train_code = fields[3]  # e.g. "G102"
+            internal_train_no = fields[2]  # internal hash for price API
             from_station_code = fields[6]
             to_station_code = fields[7]
             depart_time = fields[8]
@@ -341,28 +449,10 @@ def search_trains(origin: str, destination: str, date_str: str) -> list[dict]:
             duration = fields[10]
             start_station_code = fields[4]
             end_station_code = fields[5]
+            from_station_no = fields[16] if len(fields) > 16 else ""
+            to_station_no = fields[17] if len(fields) > 17 else ""
 
-            # Seat availability counts
-            ze_count = fields[30] if len(fields) > 30 else ""  # second class
-            zy_count = fields[31] if len(fields) > 31 else ""  # first class
-            swz_count = fields[32] if len(fields) > 32 else ""  # business
-
-            train_type_prefix = train_code[0] if train_code else "K"
-            train_type = TRAIN_TYPES.get(train_type_prefix, f"其他 ({train_type_prefix})")
-
-            # Estimate price based on distance and train type
-            dist = _station_distance(from_code, to_code)
-            price_km = PRICE_PER_KM.get(train_type_prefix, 0.15)
-            est_price_second = round(dist * price_km, 0)
-            est_price_first = round(est_price_second * 1.6, 0)  # first ≈ 1.6x second
-            est_price_business = round(est_price_second * 3.0, 0)  # business ≈ 3x
-
-            from_name = station_map.get(from_station_code, from_station_code)
-            to_name = station_map.get(to_station_code, to_station_code)
-            start_name = station_map.get(start_station_code, start_station_code)
-            end_name = station_map.get(end_station_code, end_station_code)
-
-            # Parse seat availability
+            # Seat availability counts (indices 23-30)
             def _parse_seats(val: str) -> int:
                 if val.isdigit() and int(val) > 0:
                     return int(val)
@@ -370,9 +460,25 @@ def search_trains(origin: str, destination: str, date_str: str) -> list[dict]:
                     return 99  # "available"
                 return 0
 
-            trains.append({
+            ze_count = fields[26] if len(fields) > 26 else ""  # 二等座 at index 26
+            zy_count = fields[25] if len(fields) > 25 else ""  # 一等座 at index 25
+            swz_count = fields[23] if len(fields) > 23 else ""  # 商务座 at index 23
+
+            train_type_prefix = train_code[0] if train_code else "K"
+            train_type = TRAIN_TYPES.get(train_type_prefix, f"其他 ({train_type_prefix})")
+
+            from_name = station_map.get(from_station_code, from_station_code)
+            to_name = station_map.get(to_station_code, to_station_code)
+            start_name = station_map.get(start_station_code, start_station_code)
+            end_name = station_map.get(end_station_code, end_station_code)
+
+            raw_trains.append({
                 "train_no": train_code,
+                "internal_train_no": internal_train_no,
+                "from_station_no": from_station_no,
+                "to_station_no": to_station_no,
                 "type": train_type,
+                "type_prefix": train_type_prefix,
                 "departure_time": depart_time,
                 "arrival_time": arrive_time,
                 "duration": duration,
@@ -380,17 +486,79 @@ def search_trains(origin: str, destination: str, date_str: str) -> list[dict]:
                 "to_station": to_name,
                 "start_station": start_name,
                 "end_station": end_name,
-                "price_second": est_price_second,
-                "price_first": est_price_first,
-                "price_business": est_price_business,
                 "seats_second": _parse_seats(ze_count),
                 "seats_first": _parse_seats(zy_count),
                 "seats_business": _parse_seats(swz_count),
                 "currency": "CNY",
-                "source": "12306_live",
                 "from": origin,
                 "to": destination,
             })
+
+        # ---- Query REAL prices from 12306 price API (one request per train) ----
+        real_price_count = 0
+        for rt in raw_trains:
+            seat_codes = SEAT_CODES_BY_TYPE.get(rt["type_prefix"], ["O", "M"])
+            real_prices = {}
+
+            if rt["internal_train_no"] and rt["from_station_no"] and rt["to_station_no"]:
+                real_prices = _query_ticket_price(
+                    rt["internal_train_no"],
+                    rt["from_station_no"],
+                    rt["to_station_no"],
+                    seat_codes,
+                    date_str,
+                )
+
+            price_source = "12306_real_price" if real_prices else "12306_estimated"
+
+            if real_prices:
+                real_price_count += 1
+                # Map seat codes to price fields
+                # O=二等座, M=一等座, 9=商务座, 4=软卧, 3=硬卧
+                price_second = real_prices.get("O", 0)
+                price_first = real_prices.get("M", 0)
+                price_business = real_prices.get("9", real_prices.get("P", 0))
+                # For non-HSR trains, use sleeper prices
+                if not price_second and "4" in real_prices:
+                    price_second = real_prices["4"]  # soft sleeper
+                    price_first = real_prices.get("3", price_second * 0.7)  # hard sleeper
+            else:
+                # Fallback: distance-based estimation (clearly marked)
+                dist = _station_distance(from_code, to_code)
+                price_km = PRICE_PER_KM.get(rt["type_prefix"], 0.15)
+                price_second = round(dist * price_km, 0)
+                price_first = round(price_second * 1.6, 0)
+                price_business = round(price_second * 3.0, 0)
+                print(f"[12306] using ESTIMATED prices for {rt['train_no']} "
+                      f"(distance={dist}km, rate={price_km}/km)")
+
+            trains.append({
+                "train_no": rt["train_no"],
+                "type": rt["type"],
+                "departure_time": rt["departure_time"],
+                "arrival_time": rt["arrival_time"],
+                "duration": rt["duration"],
+                "from_station": rt["from_station"],
+                "to_station": rt["to_station"],
+                "start_station": rt["start_station"],
+                "end_station": rt["end_station"],
+                "price_second": price_second,
+                "price_first": price_first,
+                "price_business": price_business,
+                "seats_second": rt["seats_second"],
+                "seats_first": rt["seats_first"],
+                "seats_business": rt["seats_business"],
+                "currency": "CNY",
+                "source": price_source,
+                "from": origin,
+                "to": destination,
+            })
+
+        if real_price_count:
+            print(f"[12306] GOT REAL PRICES for {real_price_count}/{len(trains)} trains")
+        elif trains:
+            print(f"[12306] NO real prices available (all {len(trains)} trains using estimates — "
+                  f"date may be outside 15-day booking window)")
 
         print(f"[12306] found {len(trains)} trains: "
               f"{', '.join(t['train_no'] for t in trains[:5])}"

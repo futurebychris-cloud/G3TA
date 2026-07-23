@@ -1699,3 +1699,109 @@ button { -webkit-tap-highlight-color: transparent; }
   .dw-low { font-size: .82rem; }
   .id-grid { grid-template-columns: 1fr; }
 }
+
+/* --- Review confirmation step --- */
+.review-confirm-banner {
+  background: linear-gradient(135deg, rgba(128, 202, 255, 0.08), rgba(185, 164, 255, 0.08));
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  margin: 0 auto 24px;
+  max-width: 900px;
+  padding: 24px 28px;
+}
+.review-confirm-content {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+.review-confirm-content h2 {
+  margin: 4px 0 6px;
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+.review-confirm-content p {
+  margin: 0;
+  font-size: .78rem;
+  color: var(--muted);
+  line-height: 1.55;
+  max-width: 520px;
+}
+.review-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-end;
+}
+.primary-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 22px;
+  background: var(--coral);
+  color: #fff;
+  border: none;
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: .82rem;
+  cursor: pointer;
+  transition: background .15s, transform .1s;
+}
+.primary-button:hover {
+  background: var(--coral-deep);
+  transform: translateY(-1px);
+}
+.primary-button:active { transform: translateY(0); }
+
+/* --- Interactive budget sliders --- */
+.budget-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--line);
+  cursor: pointer;
+  flex: 1;
+  min-width: 80px;
+}
+.budget-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--coral);
+  cursor: pointer;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgba(0,0,0,.15);
+}
+.budget-slider::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--coral);
+  cursor: pointer;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgba(0,0,0,.15);
+}
+
+/* --- Review summary at bottom --- */
+.review-summary {
+  opacity: .92;
+}
+.review-summary .event-list {
+  max-height: 500px;
+  overflow-y: auto;
+}
+
+@media (max-width: 768px) {
+  .review-confirm-content {
+    flex-direction: column;
+  }
+  .review-actions {
+    flex-direction: row;
+    align-items: center;
+  }
+}

@@ -39,7 +39,7 @@ from booking.schemas import (  # noqa: E402
     BookingConfirmRequest,
     BookingResult,
 )
-from booking.shared_db import init_shared_db  # noqa: E402
+from booking.shared_db import init_shared_db, get_checklist_by_trip, mark_checklist_packed  # noqa: E402
 from booking.auto_book import (  # noqa: E402
     auto_book_hotel, auto_book_flight, auto_book_train, auto_book_restaurant,
     store_credentials, get_stored_credentials, book_item,
@@ -47,8 +47,19 @@ from booking.auto_book import (  # noqa: E402
 )
 from services import hotels_provider  # noqa: E402
 
-db.init_db()  # create users + confirmed_routes tables on startup
-init_shared_db()  # create shared agent data tables
+# Gracefully handle missing PostgreSQL: booking pipeline needs it, but
+# the core planning agents + shared_db fall back to SQLite automatically.
+try:
+    db.init_db()  # create users + confirmed_routes tables (needs PostgreSQL)
+    print("[main] PostgreSQL booking DB initialized")
+except Exception as e:
+    print(f"[main] PostgreSQL not available, booking pipeline disabled: {e}")
+
+try:
+    init_shared_db()  # create shared agent data tables (SQLite fallback if no DATABASE_URL)
+    print("[main] Shared agent DB initialized")
+except Exception as e:
+    print(f"[main] Shared DB init failed: {e}")
 
 app = FastAPI(title="Multi-Agent AI Trip Planner", version="0.1.0")
 
@@ -162,6 +173,8 @@ def booking_search(req: HotelSearchRequest):
         yield _sse({"type": "booking_results", "hotels": results})
 
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+
 @app.post("/booking/confirm")
 def booking_confirm(req: BookingConfirmRequest) -> BookingResult:
     """Confirm a selected hotel: drive Playwright to Ctrip's payment checkpoint.
@@ -388,10 +401,86 @@ def book_flight_index(req: BookFlightByIndexRequest):
     )
 
 
+class FinalizeRequest(BaseModel):
+    trip: TripInput
+    adjusted_budget: dict | None = None
+
+
+class TogglePackedRequest(BaseModel):
+    is_packed: bool = True
+
+
+# --------------------------------------------------------------------------- #
+# Checklist API — read / update shared_checklist from the frontend
+# --------------------------------------------------------------------------- #
+
+@app.get("/api/checklist/{trip_id}")
+def get_checklist(trip_id: str):
+    """Return all checklist items for a trip with their is_packed status."""
+    try:
+        items = get_checklist_by_trip(trip_id)
+        return {"trip_id": trip_id, "items": items}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load checklist: {e}")
+
+
+@app.put("/api/checklist/{item_id}")
+def toggle_checklist_item(item_id: int, req: TogglePackedRequest):
+    """Set a checklist item's is_packed status (1 = packed, 0 = unpacked)."""
+    try:
+        from booking.shared_db import _conn, _USE_POSTGRES, _PLACEHOLDER
+        with _conn() as db:
+            db.execute(
+                f"UPDATE shared_checklist SET is_packed={_PLACEHOLDER} WHERE id={_PLACEHOLDER}",
+                (1 if req.is_packed else 0, item_id),
+            )
+        return {"id": item_id, "is_packed": req.is_packed}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update checklist item: {e}")
+
+
+@app.post("/plan/finalize")
+def plan_finalize(req: FinalizeRequest):
+    """Re-synthesize the trip plan with user-adjusted budget allocations.
+
+    Accepts the original trip input + optional adjusted budget breakdown,
+    re-runs orchestrator with the adjusted budget applied.
+    """
+    try:
+        trip_input = req.trip.model_dump()
+        if req.adjusted_budget:
+            # Inject adjusted budget as overrides
+            trip_input["_budget_override"] = req.adjusted_budget
+        return orchestrator.plan(trip_input)
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+@app.post("/api/hotel-amenities")
+def hotel_amenities(location: str, hotel_name: str = ""):
+    """Check hotel amenities (toothbrush, toothpaste, lotion etc.) via Ctrip scraping.
+
+    Returns a list of amenities found for the specified hotel/location.
+    Useful for knowing what toiletries to pack.
+    """
+    try:
+        from services.hotel_amenities_service import check_amenities
+        return check_amenities(location, hotel_name)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Amenities check failed: {e}")
+
+
 @app.post("/plan/stream")
 def plan_stream(trip: TripInput):
     """Run agents one at a time and stream progress so the UI can show a live checklist."""
+    import hashlib
     trip_input = trip.model_dump()
+    # Generate trip_id so agents can persist to shared_checklist and the
+    # frontend can later fetch packed/unpacked state.
+    trip_id = hashlib.sha256(
+        f"{trip_input['location']}{trip_input['dates']['start']}{trip_input.get('origin', '')}".encode()
+    ).hexdigest()[:12]
+    trip_input["trip_id"] = trip_id
 
     def generate():
         outputs = {}
@@ -418,6 +507,7 @@ def plan_stream(trip: TripInput):
 
             yield _sse({"type": "agent_start", "agent": "orchestrator"})
             result = orchestrator.reconcile_and_synthesize(trip_input, outputs)
+            result["trip_id"] = trip_id
             yield _sse({"type": "agent_done", "agent": "orchestrator"})
             yield _sse({"type": "complete", "result": result})
         except RuntimeError as e:
@@ -426,3 +516,103 @@ def plan_stream(trip: TripInput):
             yield _sse({"type": "error", "message": f"Unexpected error: {e}"})
 
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+# --------------------------------------------------------------------------- #
+# v2 Serial Pipeline Endpoints
+# --------------------------------------------------------------------------- #
+try:
+    import orchestrator_v2  # noqa: E402
+    _V2_AVAILABLE = True
+except ImportError:
+    _V2_AVAILABLE = False
+
+
+@app.post("/plan/v2")
+def plan_v2(trip: TripInput):
+    """Run v2 serial pipeline: Budget → Transport → Activity → Food+Housing → Planning → Synthesis.
+
+    Agents execute in dependency order with data handoffs between them
+    (activity meal slots → food agent, housing → planning).
+    """
+    if not _V2_AVAILABLE:
+        raise HTTPException(status_code=501, detail="v2 orchestrator not available")
+    try:
+        return orchestrator_v2.plan(trip.model_dump())
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+@app.post("/plan/stream/v2")
+def plan_stream_v2(trip: TripInput):
+    """Stream v2 serial pipeline progress as Server-Sent Events.
+
+    Emits: agent_start, agent_done, agent_note, complete, error.
+    """
+    if not _V2_AVAILABLE:
+        raise HTTPException(status_code=501, detail="v2 orchestrator not available")
+
+    import hashlib
+    trip_input = trip.model_dump()
+    trip_id = hashlib.sha256(
+        f"{trip_input['location']}{trip_input['dates']['start']}{trip_input.get('origin', '')}".encode()
+    ).hexdigest()[:12]
+    trip_input["trip_id"] = trip_id
+
+    def generate():
+        try:
+            yield _sse({"type": "agent_start", "agent": "budget"})
+            outputs = {"budget": orchestrator_v2._AGENTS.get("budget", lambda x: {})(trip_input)}
+            yield _sse({"type": "agent_done", "agent": "budget"})
+
+            gi = orchestrator_v2.with_budget_guidance(trip_input, outputs["budget"])
+
+            yield _sse({"type": "agent_start", "agent": "transportation"})
+            outputs["transportation"] = orchestrator_v2._AGENTS.get("transportation", lambda x: {})(gi)
+            yield _sse({"type": "agent_done", "agent": "transportation"})
+
+            yield _sse({"type": "agent_start", "agent": "activity"})
+            outputs["activity"] = orchestrator_v2._AGENTS.get("activity", lambda x: {})(gi)
+            yield _sse({"type": "agent_done", "agent": "activity"})
+
+            # Inject activity meal slots into food agent input
+            ams = {}
+            for a in outputs["activity"].get("recommended", []):
+                if a.get("meal_slot"):
+                    d = a.get("date", "")
+                    ams.setdefault(d, []).append({
+                        "activity_name": a["name"], "meal_slot": a["meal_slot"],
+                        "start_time": a.get("start_time", ""), "end_time": a.get("end_time", ""),
+                        "location": a.get("location", outputs["activity"].get("destination", "")),
+                    })
+            gi["_activity_meal_slots"] = ams
+
+            yield _sse({"type": "agent_start", "agent": "food"})
+            yield _sse({"type": "agent_start", "agent": "housing"})
+
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=2) as ex:
+                ff = ex.submit(orchestrator_v2._AGENTS.get("food", lambda x: {}), gi)
+                hf = ex.submit(orchestrator_v2._AGENTS.get("housing", lambda x: {}), gi)
+                outputs["food"] = ff.result()
+                outputs["housing"] = hf.result()
+            yield _sse({"type": "agent_done", "agent": "food"})
+            yield _sse({"type": "agent_done", "agent": "housing"})
+
+            yield _sse({"type": "agent_start", "agent": "planning"})
+            outputs["planning"] = orchestrator_v2._AGENTS.get("planning", lambda x: {})(gi)
+            yield _sse({"type": "agent_done", "agent": "planning"})
+
+            yield _sse({"type": "agent_start", "agent": "orchestrator"})
+            result = orchestrator_v2.reconcile_and_synthesize(trip_input, outputs)
+            result["trip_id"] = trip_id
+            result["pipeline_version"] = "v2_serial"
+            yield _sse({"type": "agent_done", "agent": "orchestrator"})
+            yield _sse({"type": "complete", "result": result})
+        except RuntimeError as e:
+            yield _sse({"type": "error", "message": str(e)})
+        except Exception as e:
+            yield _sse({"type": "error", "message": f"Unexpected error: {e}"})
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
