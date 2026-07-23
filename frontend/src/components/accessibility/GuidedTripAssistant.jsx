@@ -438,7 +438,7 @@ export default function GuidedTripAssistant({ open, onClose, onComplete, returnF
       } else {
         move(1, nextAnswers)
       }
-    }, 1000)
+    }, 3000)
   }
 
   const currentAnswer = answers[question.id] || ''
@@ -532,7 +532,7 @@ export default function GuidedTripAssistant({ open, onClose, onComplete, returnF
               key={language}
               label={question.label}
               readText={`${question.prompt} ${question.hint}`}
-              listenSeconds={6}
+              listenSeconds={3}
               language={language === 'zh' ? 'zh-CN' : 'en'}
               listenTrigger={autoListen}
               onSpeakStart={() => setAnswers((current) => ({ ...current, [question.id]: '' }))}

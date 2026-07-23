@@ -4,10 +4,10 @@ services:
     container_name: g3ta-whisper
     environment:
       ASR_ENGINE: faster_whisper
-      # "small" gives much more reliable non-English transcription/translation than
-      # "tiny" (needed for the "speak another language" auto-detect+translate mode);
-      # raise to "medium" for even better accuracy if the extra CPU/RAM is available.
-      ASR_MODEL: small
+      # "base" keeps voice answers responsive on CPU (~2s vs ~6s for "small"
+      # per clip in the Colima VM) while still auto-detecting major languages.
+      # Raise back to "small"/"medium" if running with real GPU/CPU headroom.
+      ASR_MODEL: base
     ports:
       - "9000:9000"
     volumes:
