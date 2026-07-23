@@ -622,7 +622,8 @@
 [data-accessibility-preset="senior"][data-larger-text="true"] { font-size: 145%; }
 [data-accessibility-preset="senior"] .hero {
   min-height: 0;
-  display: block;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, .85fr);
+  align-items: center;
 }
 [data-accessibility-preset="senior"] .hero::before,
 [data-accessibility-preset="senior"] .hero-proof,
