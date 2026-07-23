@@ -438,6 +438,17 @@ button { -webkit-tap-highlight-color: transparent; }
     radial-gradient(circle at 88% 85%, rgba(168, 85, 247, 0.07), transparent 32rem);
 }
 
+/* Architecture poster under the planner form. */
+.vibego-poster {
+  display: block;
+  width: min(980px, 100%);
+  height: auto;
+  margin: 52px auto 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+}
+
 /* Prominent accessibility task-bot entry — the same reserved voice orange as
    every listen/speak control, sized so people who need it can't miss it. */
 .taskbot-launch {

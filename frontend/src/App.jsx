@@ -26,6 +26,7 @@ import PackingList from './components/PackingList.jsx'
 import ReasoningLog from './components/ReasoningLog.jsx'
 import BookingPanel from './components/BookingPanel.jsx'
 import AgentsRush from './components/AgentsRush.jsx'
+import posterVibego from './assets/poster_vibego.png'
 import AccessibilityButton from './components/accessibility/AccessibilityButton.jsx'
 import AccessibilityPanel from './components/accessibility/AccessibilityPanel.jsx'
 import AccessibilityOnboarding from './components/accessibility/AccessibilityOnboarding.jsx'
@@ -157,6 +158,12 @@ function Landing({ onSubmit, intakeDraft, intakeNotice, onOpenTaskBot }) {
           <Mic size={20} aria-hidden="true" />
         </button>
         <InputForm onSubmit={onSubmit} intakeDraft={intakeDraft} intakeNotice={intakeNotice} />
+        <img
+          className="vibego-poster"
+          src={posterVibego}
+          loading="lazy"
+          alt="How VibeGo works: six specialist AI agents — discovery, research, itinerary, budget, logistics, and concierge — collaborate around a central AI to design your complete trip."
+        />
       </section>
 
       <section className="method-strip" aria-label="How it works">
