@@ -19,14 +19,21 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
+import threading
+import time
 import urllib.parse
 import urllib.request
 
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-GAODE_KEY = os.environ.get("GAODE_KEY", "").strip()
+GAODE_KEY = os.environ.get("GAODE_KEY", os.environ.get("AMAP_KEY", "")).strip()
 GAODE_BASE = "https://restapi.amap.com/v3"
+_GAODE_REQUEST_LOCK = threading.Lock()
+_GAODE_LAST_REQUEST_AT = 0.0
+_GAODE_MIN_INTERVAL_SECONDS = 0.4
+_GAODE_CITY_FILTERS: dict[str, str] = {}
 
 # ---------------------------------------------------------------------------
 # City coordinate cache (known Chinese cities)
@@ -57,21 +64,41 @@ _CITY_COORDS: dict[str, tuple[float, float]] = {
 }
 
 
+def _gaode_json(path: str, params: dict, timeout: int = 8) -> dict:
+    """Call a Gaode Web Service endpoint while respecting its per-key QPS limit."""
+    global _GAODE_LAST_REQUEST_AT
+
+    last_response = {}
+    for attempt in range(3):
+        with _GAODE_REQUEST_LOCK:
+            delay = _GAODE_MIN_INTERVAL_SECONDS - (time.monotonic() - _GAODE_LAST_REQUEST_AT)
+            if delay > 0:
+                time.sleep(delay)
+            url = f"{GAODE_BASE}{path}?" + urllib.parse.urlencode({
+                "key": GAODE_KEY,
+                "output": "JSON",
+                **params,
+            })
+            req = urllib.request.Request(url, headers={"User-Agent": "G3TA/1.0"})
+            _GAODE_LAST_REQUEST_AT = time.monotonic()
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                last_response = json.loads(response.read())
+
+        if last_response.get("status") == "1":
+            return last_response
+        if last_response.get("info") != "CUQPS_HAS_EXCEEDED_THE_LIMIT":
+            return last_response
+        time.sleep(0.5 * (attempt + 1))
+    return last_response
+
+
 def _geocode_single(address: str, city: str = "") -> tuple[float, float] | None:
     """Geocode a single address/POI name via Gaode API. Returns (lat, lng) or None."""
     if not GAODE_KEY:
         return None
     try:
         full_address = f"{city} {address}" if city else address
-        url = (
-            f"{GAODE_BASE}/geocode/geo?"
-            + urllib.parse.urlencode({
-                "key": GAODE_KEY, "address": full_address, "output": "JSON",
-            })
-        )
-        req = urllib.request.Request(url, headers={"User-Agent": "G3TA/1.0"})
-        with urllib.request.urlopen(req, timeout=8) as r:
-            data = json.loads(r.read())
+        data = _gaode_json("/geocode/geo", {"address": full_address})
         if data.get("status") == "1" and data.get("geocodes"):
             loc = data["geocodes"][0]["location"].split(",")
             return (float(loc[1]), float(loc[0]))
@@ -96,19 +123,15 @@ def geocode_city(city: str) -> tuple[float, float] | None:
     # Try Gaode geocoding API
     if GAODE_KEY:
         try:
-            url = (
-                f"{GAODE_BASE}/geocode/geo?"
-                + urllib.parse.urlencode({
-                    "key": GAODE_KEY, "address": city, "output": "JSON",
-                })
-            )
-            req = urllib.request.Request(url, headers={"User-Agent": "G3TA/1.0"})
-            with urllib.request.urlopen(req, timeout=8) as r:
-                data = json.loads(r.read())
+            data = _gaode_json("/geocode/geo", {"address": city})
             if data.get("status") == "1" and data.get("geocodes"):
-                loc = data["geocodes"][0]["location"].split(",")
+                geocode = data["geocodes"][0]
+                loc = geocode["location"].split(",")
                 coords = (float(loc[1]), float(loc[0]))
                 _CITY_COORDS[key] = coords
+                city_filter = geocode.get("adcode") or geocode.get("city") or geocode.get("province")
+                if city_filter:
+                    _GAODE_CITY_FILTERS[lk] = str(city_filter)
                 return coords
         except Exception as e:
             print(f"[gaode] geocoding failed: {e}")
@@ -135,18 +158,76 @@ def geocode_city(city: str) -> tuple[float, float] | None:
     return None
 
 
+def _gaode_city_filter(city: str) -> str:
+    """Resolve Chinese or English city input to an AMap adcode for city-limited POI search."""
+    key = city.strip().casefold()
+    if not key or not GAODE_KEY:
+        return city
+    if key in _GAODE_CITY_FILTERS:
+        return _GAODE_CITY_FILTERS[key]
+    try:
+        data = _gaode_json("/geocode/geo", {"address": city})
+        if data.get("status") == "1" and data.get("geocodes"):
+            geocode = data["geocodes"][0]
+            city_filter = geocode.get("adcode") or geocode.get("city") or geocode.get("province")
+            if city_filter:
+                _GAODE_CITY_FILTERS[key] = str(city_filter)
+                return str(city_filter)
+    except Exception as e:
+        print(f"[gaode] could not resolve city filter '{city}': {e}")
+    return city
+
+
+def _poi_keywords(name: str) -> str:
+    """Prefer the Chinese part of a bilingual POI name because AMap ranks it more precisely."""
+    chinese = "".join(re.findall(r"[\u3400-\u9fff]+", name))
+    return chinese or name.strip()
+
+
+def _geocode_poi_text(name: str, city: str = "", venue: str = "") -> tuple[float, float] | None:
+    """Resolve a named POI with AMap Place Text Search rather than address geocoding."""
+    if not GAODE_KEY or not name.strip():
+        return None
+    try:
+        keywords = _poi_keywords(name)
+        if venue:
+            keywords = f"{keywords} {venue}".strip()
+        params = {
+            "keywords": keywords,
+            "offset": 10,
+            "page": 1,
+            "extensions": "base",
+        }
+        if city:
+            params.update({"city": _gaode_city_filter(city), "citylimit": "true"})
+        data = _gaode_json("/place/text", params)
+        for poi in data.get("pois") or []:
+            location = str(poi.get("location") or "")
+            if "," not in location:
+                continue
+            lng, lat = location.split(",", 1)
+            return (float(lat), float(lng))
+    except Exception as e:
+        print(f"[gaode] POI search '{name}' failed: {e}")
+    return None
+
+
 def geocode_poi(name: str, city: str = "", venue: str = "") -> tuple[float, float] | None:
     """Geocode a point-of-interest (attraction, hotel, landmark) to coordinates.
 
     Tries multiple search strategies in order:
-    1. Full address: city + venue + name
-    2. City + name
-    3. Name only
-    4. City center fallback
+    1. City-limited AMap Place Text Search
+    2. Full address: city + venue + name
+    3. City + name
+    4. Name only
 
     Returns (lat, lng) or None.
     """
-    # Strategy 1: most specific
+    result = _geocode_poi_text(name, city, venue)
+    if result:
+        return result
+
+    # Address fallback for hotels and POIs that are not present in Place Text Search.
     if venue and city:
         result = _geocode_single(f"{venue} {name}", city)
         if result:
@@ -163,8 +244,7 @@ def geocode_poi(name: str, city: str = "", venue: str = "") -> tuple[float, floa
     if result:
         return result
 
-    # Strategy 4: city center
-    return geocode_city(city)
+    return None
 
 
 def geocode_activities(activities: list[dict], city: str) -> list[dict]:

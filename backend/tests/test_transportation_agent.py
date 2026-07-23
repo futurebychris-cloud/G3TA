@@ -60,13 +60,6 @@ OPTIONS = [
 
 class TransportationAgentTests(unittest.TestCase):
     def setUp(self):
-        live_patcher = patch.object(
-            transportation_agent,
-            "_scrape_ctrip_flights",
-            return_value=([], "live providers disabled in unit test"),
-        )
-        live_patcher.start()
-        self.addCleanup(live_patcher.stop)
         patcher = patch.object(transportation_agent, "get_flight_options", return_value=OPTIONS)
         self.get_options = patcher.start()
         self.addCleanup(patcher.stop)

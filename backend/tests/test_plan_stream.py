@@ -8,7 +8,7 @@ import main
 
 
 class PlanStreamTests(unittest.TestCase):
-    def test_budget_guidance_reaches_remaining_agents_before_completion(self):
+    def test_transport_quote_precedes_budget_guidance_and_completion(self):
         calls = []
 
         def run_agent(name, trip_input):
@@ -56,8 +56,8 @@ class PlanStreamTests(unittest.TestCase):
         ]
         self.assertFalse(any(payload.get("type") == "error" for payload in payloads))
         self.assertEqual(payloads[-1], {"type": "complete", "result": complete_result})
-        self.assertEqual(calls[0], ("budget", None))
-        self.assertTrue(all(caps == {"transportation": 1000} for _, caps in calls[1:]))
+        self.assertEqual(calls[:2], [("transportation", None), ("budget", None)])
+        self.assertTrue(all(caps == {"transportation": 1000} for _, caps in calls[2:]))
 
 
 if __name__ == "__main__":
