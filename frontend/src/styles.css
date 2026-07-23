@@ -663,13 +663,17 @@ button { -webkit-tap-highlight-color: transparent; }
 .va-btn svg { display: block; flex: 0 0 auto; }
 .va-btn:hover:not(:disabled) { background-position: 100% 50%; transform: translateY(-1px); box-shadow: 0 6px 16px rgba(124, 58, 237, .36); }
 .va-btn:disabled { cursor: not-allowed; opacity: .45; }
-.va-btn.listening {
+/* Sitewide "actively listening" state — a pink 5px translucent ring on any mic
+   button that is currently waiting for voice input. */
+.va-btn.listening,
+.voice-button.listening {
   background-position: 100% 50%;
-  box-shadow: 0 0 0 4px rgba(124, 58, 237, .3);
+  box-shadow: 0 0 0 5px rgba(239, 68, 68, .85);
   animation: voice-glow 1.2s ease-in-out infinite;
 }
-@keyframes voice-glow { 50% { box-shadow: 0 0 0 8px rgba(124, 58, 237, .12); } }
-[data-reduced-motion="true"] .va-btn.listening { animation: none; }
+@keyframes voice-glow { 50% { box-shadow: 0 0 0 9px rgba(239, 68, 68, .4); } }
+[data-reduced-motion="true"] .va-btn.listening,
+[data-reduced-motion="true"] .voice-button.listening { animation: none; }
 /* Nothing was understood — flash red briefly, no text, no layout shift. */
 .va-btn.error { background: #dc2626; box-shadow: 0 0 0 4px rgba(220, 38, 38, .3); }
 

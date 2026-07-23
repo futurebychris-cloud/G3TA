@@ -164,7 +164,7 @@ const UI_COPY = {
   en: {
     eyebrow: 'OPTIONAL DYSLEXIA & READING SUPPORT',
     title: 'Voice-guided Travel Assistant',
-    description: 'The agent will ask you some questions, one at a time, in order to plan your journey intelligently. You can hear each question and its options by clicking the speaker button. When you are ready to provide an answer, click the mic button and speak. Our agent is multilingual.',
+    description: 'Our agent is multilingual. Respond in your native language.',
     languageLabel: 'Voice language',
     close: 'Close voice-guided trip setup',
     question: 'Question',
@@ -187,6 +187,7 @@ const UI_COPY = {
     required: (label) => `Please answer ${label.toLowerCase()} before continuing. You can speak or type your answer.`,
     requiredShort: (label) => `Please answer ${label.toLowerCase()} before continuing.`,
     stillNeed: 'I still need this answer. ',
+    detectedLanguage: (name) => `Language detected: ${name}`,
     couldNotConfirm: (labels) => `I could not confirm ${labels.join(' and ')}.`,
     repair: 'Please answer this question again. You will stay in guided setup until the required details are complete.',
     retry: (message) => `${message} Your answers have not been lost. Choose Start planning again to retry.`,
@@ -194,7 +195,7 @@ const UI_COPY = {
   zh: {
     eyebrow: '可选的语音与阅读辅助',
     title: '语音引导旅行助手',
-    description: '助手会逐一提问，以便智能规划您的旅程。点击喇叭按钮可朗读问题和选项；准备好回答时，点击麦克风按钮说话。我们的助手支持多种语言。',
+    description: '我们的助手支持多种语言。您可以用母语回答。',
     languageLabel: '语音语言',
     close: '关闭语音引导式旅行设置',
     question: '问题',
@@ -217,6 +218,7 @@ const UI_COPY = {
     required: (label) => `请先回答“${label}”。您可以使用语音或文字输入。`,
     requiredShort: (label) => `请先回答“${label}”。`,
     stillNeed: '还需要您回答这个问题。',
+    detectedLanguage: (name) => `检测到的语言：${name}`,
     couldNotConfirm: (labels) => `无法确认以下信息：${labels.join('、')}。`,
     repair: '请再次回答这个问题。在必填信息完整之前，您会留在语音引导中。',
     retry: (message) => `${message} 您的回答仍然保留，请再次选择“开始规划”。`,
@@ -282,6 +284,23 @@ export default function GuidedTripAssistant({ open, onClose, onComplete, returnF
   }, [guidedSpeech.playText, language, question.prompt])
 
   const introducedRef = useRef(false)
+  const [autoListen, setAutoListen] = useState(0)
+  const [detectedLanguage, setDetectedLanguage] = useState('')
+  const prevSpeechStateRef = useRef('idle')
+
+  // travelvoice demo behavior: the moment the question finishes being read
+  // aloud, start listening automatically — fully hands-free question loop.
+  useEffect(() => {
+    const finishedSpeaking = prevSpeechStateRef.current === 'speaking' && guidedSpeech.state === 'idle'
+    prevSpeechStateRef.current = guidedSpeech.state
+    if (finishedSpeaking && open && status === 'answering' && !guidedSpeech.error) {
+      setAutoListen((count) => count + 1)
+    }
+  }, [guidedSpeech.error, guidedSpeech.state, open, status])
+
+  useEffect(() => {
+    setDetectedLanguage('')
+  }, [step, language])
 
   useEffect(() => {
     if (!open || status === 'loading') return undefined
@@ -386,7 +405,12 @@ export default function GuidedTripAssistant({ open, onClose, onComplete, returnF
   }
 
   function acceptVoiceAnswer(transcript, { isFinal = true } = {}) {
-    const nextAnswers = { ...answers, [question.id]: transcript }
+    // Never skip a question without a real answer: an empty/silent recording
+    // leaves the current question in place. Advancing happens only on a
+    // non-empty voice response here, or an explicit "Next question" click.
+    const spoken = String(transcript || '').trim()
+    if (!spoken) return
+    const nextAnswers = { ...answers, [question.id]: spoken }
     setAnswers(nextAnswers)
     setError('')
     if (!isFinal) return
@@ -492,9 +516,15 @@ export default function GuidedTripAssistant({ open, onClose, onComplete, returnF
               readText={`${question.prompt} ${question.hint}`}
               listenSeconds={6}
               language={language === 'zh' ? 'zh-CN' : 'en'}
+              listenTrigger={autoListen}
+              onSpeakStart={() => setAnswers((current) => ({ ...current, [question.id]: '' }))}
+              onDetectedLanguage={({ name }) => setDetectedLanguage(name)}
               onText={(transcript) => acceptVoiceAnswer(String(transcript).trim(), { isFinal: true })}
             />
           </div>
+          <p className="guided-detected-language" role="status" aria-live="polite">
+            {detectedLanguage ? copy.detectedLanguage(detectedLanguage) : ' '}
+          </p>
           <p id="guided-trip-error" className="guided-error" role="alert">{error}</p>
         </>
       </div>

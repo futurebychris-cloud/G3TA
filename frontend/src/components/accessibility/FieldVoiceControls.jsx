@@ -1,4 +1,4 @@
-import { useId, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { MdMic, MdVolumeUp } from 'react-icons/md'
 import useTextToSpeech from '../../hooks/useTextToSpeech.js'
 import useAutoSpeechRecognition from '../../hooks/useAutoSpeechRecognition.js'
@@ -53,6 +53,8 @@ export default function FieldVoiceControls({
   onMatch,
   onText,
   onSpeakStart,
+  onDetectedLanguage,
+  listenTrigger = 0,
   language = 'en',
   listenSeconds = 3,
 }) {
@@ -73,7 +75,8 @@ export default function FieldVoiceControls({
     uiLanguage: language,
     translate: true,
     maxListenMs: listenSeconds * 1000,
-    onTranscript: (transcript) => {
+    onTranscript: (transcript, meta = {}) => {
+      onDetectedLanguage?.({ code: meta.language || '', name: meta.languageName || '' })
       if (options && onMatch) {
         const matches = matchOptions(transcript, options)
         setAnnouncement(matches.length ? `Selected: ${matches.join(', ')}` : 'No option recognized.')
@@ -85,6 +88,22 @@ export default function FieldVoiceControls({
       }
     },
   })
+
+  // External auto-listen: after the question finishes being read aloud, the
+  // parent bumps `listenTrigger` and recording starts hands-free (travelvoice
+  // demo behavior). Manual mic clicks behave the same as always.
+  const lastTriggerRef = useRef(listenTrigger)
+  useEffect(() => {
+    if (listenTrigger === lastTriggerRef.current) return
+    lastTriggerRef.current = listenTrigger
+    if (recognition.supported && !recognition.isListening) {
+      // Hands-free start: unlike a manual mic press, never clears what the
+      // user may have typed (no onSpeakStart here).
+      setAnnouncement('')
+      recognition.start()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [listenTrigger])
 
   function handleListen() {
     const spoken = readText || (options

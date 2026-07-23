@@ -252,8 +252,8 @@
   transition: 160ms ease;
 }
 .voice-button:hover:not(:disabled) { background: var(--voice-deep); }
-.voice-button.listening { background: var(--voice-deep); box-shadow: 0 0 0 4px rgba(255, 138, 43, 0.28), 0 6px 16px rgba(230, 101, 10, 0.35); }
-.voice-button.listening::after { content: ""; position: absolute; inset: -5px; border: 2px solid var(--voice); border-radius: 50%; animation: voice-pulse 1.4s ease-out infinite; }
+/* Listening ring is defined once, sitewide, in styles.css (pink 5px). */
+.voice-button.listening { background: var(--voice-deep); }
 .voice-button:disabled { cursor: not-allowed; opacity: .5; }
 .voice-button.voice-button-wide {
   width: auto;
@@ -398,14 +398,14 @@
   outline: 3px solid var(--coral-deep);
   outline-offset: 2px;
 }
-.guided-trip-body { min-height: 0; overflow: auto; padding: 24px 30px 10px; }
-.guided-progress { margin-bottom: 24px; }
+.guided-trip-body { min-height: 0; overflow: auto; padding: 16px 30px 10px; }
+.guided-progress { margin-bottom: 14px; }
 .guided-progress > div { display: flex; justify-content: space-between; gap: 20px; margin-bottom: 8px; font-size: .78rem; }
 .guided-progress span { color: var(--muted); }
 .guided-progress progress { width: 100%; height: 10px; overflow: hidden; border: 0; border-radius: 99px; accent-color: var(--coral-deep); }
-.guided-question { position: relative; margin-bottom: 22px; padding: 22px; border: 2px solid var(--ink); border-radius: 16px; background: var(--paper); }
-.guided-question h3 { max-width: 610px; margin: 8px 0 8px; font-size: 1.45rem; line-height: 1.3; letter-spacing: -.025em; }
-.guided-question p { max-width: 570px; margin: 0; color: var(--muted); font-size: .88rem; line-height: 1.55; }
+.guided-question { position: relative; margin-bottom: 14px; padding: 13px 18px; border: 2px solid var(--ink); border-radius: 14px; background: var(--paper); }
+.guided-question h3 { max-width: 610px; margin: 4px 0 4px; font-size: 1.12rem; line-height: 1.3; letter-spacing: -.02em; }
+.guided-question p { max-width: 570px; margin: 0; color: var(--muted); font-size: .82rem; line-height: 1.5; }
 .replay-question { min-height: 42px; display: inline-flex; align-items: center; gap: 8px; margin-top: 16px; padding: 0 14px; border: 1px solid var(--ink); border-radius: 999px; background: var(--white); font-size: .76rem; font-weight: 800; cursor: pointer; }
 .guided-speech-status,
 .speech-playback-error {
@@ -462,6 +462,12 @@
 .guided-description-input input::placeholder { color: var(--muted); opacity: 1; }
 .guided-description-input .voice-button { width: 48px; height: 48px; }
 .guided-description-input .voice-button-wide { width: auto; height: 48px; }
+/* Short one-line intro in the assistant header. */
+#guided-trip-description { max-width: none; white-space: nowrap; }
+
+/* Reserved line under the answer row: shows which language was detected.
+   min-height keeps the layout stable before/after it appears. */
+.guided-detected-language { min-height: 1.4em; margin: 9px 0 0; color: var(--brand-purple); font-size: .85rem; font-weight: 700; }
 .guided-privacy { display: flex; gap: 9px; align-items: flex-start; margin: 13px 0 0; color: var(--muted); font-size: .78rem; line-height: 1.55; }
 .guided-privacy svg { flex: 0 0 auto; margin-top: 2px; }
 .guided-error { min-height: 1.5em; margin: 12px 0 0; color: #9d2a0d; font-size: .82rem; font-weight: 750; }
