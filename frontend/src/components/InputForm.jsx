@@ -55,9 +55,12 @@ function dateInputValue(date) {
 function parseSpokenDate(text) {
   const cleaned = String(text || '')
     .trim()
+    .replace(/^[\s,]*(?:from|starting|start|between|on)\b/i, '')
     .replace(/(\d+)(st|nd|rd|th)\b/gi, '$1')
-    .replace(/\bof\b/gi, ' ')
+    .replace(/\b(?:of|the)\b/gi, ' ')
+    .replace(/[.。,!?！？]+$/g, '')
     .replace(/\s+/g, ' ')
+    .trim()
   if (!cleaned) return null
   const hasYear = /\d{4}/.test(cleaned)
   const parsed = new Date(hasYear ? cleaned : `${cleaned}, ${new Date().getFullYear()}`)
@@ -65,10 +68,18 @@ function parseSpokenDate(text) {
 }
 
 function parseSpokenDateRange(transcript) {
-  const parts = String(transcript || '').split(/\s*(?:\bto\b|\buntil\b|\btill\b|\bthrough\b|–|—)\s*/i).filter(Boolean)
+  const parts = String(transcript || '')
+    .split(/\s*(?:\bto\b|\buntil\b|\btill\b|\bthrough\b|\band\b|–|—)\s*/i)
+    .filter(Boolean)
   if (parts.length < 2) return null
   const start = parseSpokenDate(parts[0])
-  const end = parseSpokenDate(parts[1])
+  let end = parseSpokenDate(parts[1])
+  // "August 23 to 27" — bare day number borrows the start's month/year.
+  const bareDay = parts[1].trim().replace(/[.。,!?！？]+$/g, '').match(/^(\d{1,2})$/)
+  if (start && !end && bareDay) {
+    end = new Date(start)
+    end.setDate(Number(bareDay[1]))
+  }
   if (!start || !end) return null
   return { start: dateInputValue(start), end: dateInputValue(end) }
 }

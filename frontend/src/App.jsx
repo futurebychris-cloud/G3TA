@@ -1,17 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ArrowLeft,
+  ArrowRight,
   BedDouble,
   BrainCircuit,
   CalendarDays,
   Check,
   CircleDollarSign,
-  Compass,
   ListChecks,
   Luggage,
   Map,
-  Mic,
-  Volume2,
   Route,
   ShieldAlert,
   Sparkles,
@@ -27,6 +25,7 @@ import ReasoningLog from './components/ReasoningLog.jsx'
 import BookingPanel from './components/BookingPanel.jsx'
 import AgentsRush from './components/AgentsRush.jsx'
 import posterVibego from './assets/poster_vibego.png'
+import logoVibego from './assets/logo_vibego.png'
 import AccessibilityButton from './components/accessibility/AccessibilityButton.jsx'
 import AccessibilityPanel from './components/accessibility/AccessibilityPanel.jsx'
 import AccessibilityOnboarding from './components/accessibility/AccessibilityOnboarding.jsx'
@@ -78,8 +77,7 @@ function tripInputFromGuidedDraft(draft) {
 function Brand() {
   return (
     <div className="brand" aria-label="vibego home">
-      <span className="brand-mark"><Compass size={24} strokeWidth={2.2} /></span>
-      <span className="brand-word">vibego</span>
+      <img className="brand-logo" src={logoVibego} alt="vibego" />
       <span className="brand-divider" />
       <span className="brand-sub">Journey intelligence</span>
     </div>
@@ -151,12 +149,11 @@ function Landing({ onSubmit, intakeDraft, intakeNotice, onOpenTaskBot }) {
           <p className="planner-hint-line">Type & click your responses or speak them in any language: VibeGo can understand any language.</p>
         </div>
         <button type="button" className="taskbot-launch" onClick={onOpenTaskBot}>
-          <span className="taskbot-launch-icon" aria-hidden="true"><Volume2 size={20} /></span>
           <span className="taskbot-launch-copy">
-            <strong>Struggle with forms? Let the task-bot fill this in with you.</strong>
-            <small>It asks each question out loud, listens to your answer in any language, and completes the form for you.</small>
+            <strong>Struggle with forms or small text? Let the agent do it for you.</strong>
+            <small>Built for dyslexia and low vision: the task-bot reads every question and option aloud, listens to your answers in any language, fills the whole application, and confirms simply.</small>
           </span>
-          <Mic size={20} aria-hidden="true" />
+          <ArrowRight size={22} aria-hidden="true" className="taskbot-launch-arrow" />
         </button>
         <InputForm onSubmit={onSubmit} intakeDraft={intakeDraft} intakeNotice={intakeNotice} />
         <img
