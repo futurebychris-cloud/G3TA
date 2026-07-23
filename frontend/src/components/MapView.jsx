@@ -50,18 +50,21 @@ const TYPE_META = {
   },
 }
 
-// Custom colored pin icons per type, built the same way the old Leaflet
-// divIcon markers were, just encoded as a data URI for google.maps.Icon.
-function markerIcon(type) {
+// Numbered teardrop pins, colored by type. The old 36px circle badges rendered
+// fine but were visually identical to Google's own POI badges, so trip stops
+// disappeared into the basemap clutter — a tall pin with the location-index
+// number is unmistakably ours.
+function markerIcon(type, number) {
   const meta = TYPE_META[type] || TYPE_META.activity
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 36 36">` +
-    `<circle cx="18" cy="18" r="16" fill="${meta.color}" stroke="white" stroke-width="2"/>` +
-    `<g transform="translate(6,6)" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${meta.path}</g>` +
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="44" height="58" viewBox="0 0 44 58">` +
+    `<path d="M22 1C10.4 1 1 10.4 1 22c0 15.7 21 35 21 35s21-19.3 21-35C43 10.4 33.6 1 22 1z" fill="${meta.color}" stroke="white" stroke-width="2.5"/>` +
+    `<circle cx="22" cy="21" r="13" fill="white"/>` +
+    `<text x="22" y="26.5" text-anchor="middle" font-family="Arial, sans-serif" font-size="15" font-weight="700" fill="#1a1a2e">${number}</text>` +
     `</svg>`
   return {
     url: `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`,
-    scaledSize: new window.google.maps.Size(36, 36),
-    anchor: new window.google.maps.Point(18, 18),
+    scaledSize: new window.google.maps.Size(44, 58),
+    anchor: new window.google.maps.Point(22, 56),
   }
 }
 
@@ -256,6 +259,10 @@ export default function MapView({ points = [], agentOutputs = null, result = nul
                   streetViewControl: false,
                   fullscreenControl: true,
                   gestureHandling: 'greedy',
+                  // Google's default POI badges look just like trip markers —
+                  // hide them so our numbered pins are the only points shown.
+                  clickableIcons: false,
+                  styles: [{ featureType: 'poi', elementType: 'labels', stylers: [{ visibility: 'off' }] }],
                 }}
               >
                 {/* Route polylines */}
@@ -280,7 +287,8 @@ export default function MapView({ points = [], agentOutputs = null, result = nul
                   <Marker
                     key={`${point.label}-${index}`}
                     position={{ lat: point.lat, lng: point.lng }}
-                    icon={markerIcon(point.type)}
+                    icon={markerIcon(point.type, index + 1)}
+                    zIndex={1000 + index}
                     onClick={() => setActivePoint(index)}
                   />
                 ))}
@@ -288,6 +296,7 @@ export default function MapView({ points = [], agentOutputs = null, result = nul
                 {activePlace && (
                   <InfoWindow
                     position={{ lat: activePlace.lat, lng: activePlace.lng }}
+                    options={{ pixelOffset: new window.google.maps.Size(0, -56) }}
                     onCloseClick={() => setActivePoint(null)}
                   >
                     <div style={{ minWidth: 160 }}>
@@ -345,7 +354,9 @@ export default function MapView({ points = [], agentOutputs = null, result = nul
               const prev = index > 0 ? placeEntries[index - 1]?.point : null
               return (
                 <li key={`${point.label}-list`}>
-                  <span className="place-number">{String(index + 1).padStart(2, '0')}</span>
+                  {/* Number by position in `points`, not list order, so the
+                      condensed senior list still matches the map pins. */}
+                  <span className="place-number">{String(points.indexOf(point) + 1).padStart(2, '0')}</span>
                   <span>
                     {recommendation && <span className="senior-choice-label">{recommendation}</span>}
                     <strong>{point.label}</strong>

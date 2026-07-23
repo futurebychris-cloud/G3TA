@@ -1,4 +1,4 @@
-import { Pause, Play, Square, Volume2 } from 'lucide-react'
+import { MdPause, MdPlayArrow, MdStop, MdVolumeUp } from 'react-icons/md'
 import { useAccessibilitySettings } from '../../accessibility/AccessibilityContext.jsx'
 import useTextToSpeech from '../../hooks/useTextToSpeech.js'
 
@@ -33,14 +33,14 @@ export default function ReadAloudButton({ id, text, label = 'this content' }) {
         aria-label={primaryLabel}
         title={primaryLabel}
       >
-        {speech.state === 'speaking' ? <Pause size={16} aria-hidden="true" />
-          : speech.state === 'paused' ? <Play size={16} aria-hidden="true" />
-            : <Volume2 size={16} aria-hidden="true" />}
+        {speech.state === 'speaking' ? <MdPause aria-hidden="true" />
+          : speech.state === 'paused' ? <MdPlayArrow aria-hidden="true" />
+            : <MdVolumeUp aria-hidden="true" />}
         <span>{speech.state === 'speaking' ? 'Pause' : speech.state === 'paused' ? 'Resume' : speech.state === 'loading' ? 'Preparing…' : 'Read aloud'}</span>
       </button>
       {speech.state !== 'idle' && (
         <button type="button" className="stop-reading-button" onClick={speech.stop} aria-label={`Stop reading ${label}`}>
-          <Square size={13} aria-hidden="true" /><span>Stop</span>
+          <MdStop aria-hidden="true" /><span>Stop</span>
         </button>
       )}
       <span className={speech.error ? 'speech-playback-error' : 'sr-only'} role="status" aria-live="polite">

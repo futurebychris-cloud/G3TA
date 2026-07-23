@@ -338,10 +338,16 @@
   background-size: 200% 100%;
   background-position: 0 50%;
   color: white;
+  /* react-icons glyphs size from font-size — 21px matches .va-btn so the
+     speaker inside the button reads at the same size sitewide. */
+  font-size: 21px;
+  line-height: 0;
   cursor: pointer;
   box-shadow: 0 4px 12px rgba(79, 70, 229, .28);
   transition: background-position 260ms ease, box-shadow 140ms ease, transform 140ms ease;
 }
+.read-aloud-button svg,
+.stop-reading-button svg { display: block; flex: 0 0 auto; }
 .read-aloud-button > span,
 .stop-reading-button > span { display: none; }
 .read-aloud-button:hover,
@@ -695,7 +701,8 @@
 .senior-action-button { background: var(--ink); color: white; }
 .show-more-sections { display: flex; margin: -12px auto 24px; }
 .show-more-results { width: 100%; margin-top: 18px; }
-.senior-choice-label { width: fit-content; margin-bottom: 2px; padding: 4px 7px; border: 1px solid var(--ink); border-radius: 99px; background: var(--lime); color: var(--ink) !important; font-weight: 850; text-transform: uppercase; letter-spacing: .05em; }
+/* Standard mini-heading (matches .section-index), not a button-like pill. */
+.senior-choice-label { display: block; width: fit-content; margin-bottom: 2px; padding: 0; border: 0; border-radius: 0; background: none; color: var(--brand-purple) !important; font-size: .7rem; font-weight: 850; text-transform: uppercase; letter-spacing: .14em; }
 
 [data-accessibility-preset="senior"] :where(button, .choice-chip, .packing-item) { min-height: 54px; }
 [data-accessibility-preset="senior"] :where(button, .choice-chip) { padding-left: 18px; padding-right: 18px; }
