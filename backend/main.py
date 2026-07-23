@@ -13,7 +13,7 @@ Run from the backend/ directory:
 """
 import json
 import time
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from uuid import uuid4
 from concurrent.futures import (
@@ -24,7 +24,7 @@ from concurrent.futures import (
 )
 
 from dotenv import find_dotenv, load_dotenv
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -46,10 +46,11 @@ from agents import AGENT_ORDER  # noqa: E402
 import orchestrator  # noqa: E402
 
 # Hotel comparison plus an operator-only Ctrip payment-checkpoint experiment.
-from booking import pipeline, db  # noqa: E402
+from booking import pipeline, db, ctrip  # noqa: E402
 from booking.schemas import (  # noqa: E402
     HotelSearchRequest,
     HotelResult,
+    HotelSelection,
     BookingConfirmRequest,
     BookingResult,
 )
@@ -98,6 +99,7 @@ app = FastAPI(title="Multi-Agent AI Trip Planner", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_allowed_origins(),
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -361,6 +363,10 @@ class AutoBookHotelRequest(BaseModel):
     price_total: float | None = None
     currency: str = "CNY"
     payment_method: str = "wechat"
+    # One-time traveler identity for the provider request (never persisted).
+    id_number: str = ""
+    name: str | None = None
+    phone: str | None = None
 
 
 class AutoBookFlightRequest(BaseModel):
@@ -429,11 +435,33 @@ def auto_hotel(
     req: AutoBookHotelRequest,
     _: None = Depends(require_booking_access),
 ):
-    """Legacy endpoint retained without pretending an order was placed."""
-    raise HTTPException(
-        status_code=501,
-        detail="Use /booking/confirm with one-time traveler details for a hotel payment-checkpoint attempt.",
+    """Auto-book a Ctrip hotel through the real payment checkpoint.
+
+    Drives a stealth browser with stored Ctrip cookies to the payment step and
+    returns a ``pending_payment`` report. This is honest automation: it leaves
+    the final payment confirmation to the human traveler and never claims an
+    order was placed when it was not.
+    """
+    confirm = BookingConfirmRequest(
+        id_number=req.id_number,
+        name=req.name,
+        phone=req.phone,
+        hotel=HotelSelection(
+            id=req.hotel_id,
+            name=req.hotel_name,
+            url=req.hotel_url,
+            room_type=req.room_type,
+            price_total=req.price_total,
+            currency=req.currency,
+        ),
+        check_in=req.check_in,
+        check_out=req.check_out,
+        rooms=req.rooms,
+        adults=req.adults,
+        children=req.children,
+        payment_method=req.payment_method,
     )
+    return pipeline.confirm_booking(confirm)
 
 
 @app.post("/booking/auto/flight")
@@ -485,6 +513,114 @@ def save_credentials(
             "Supply them only to an authenticated, one-time provider request."
         ),
     )
+
+
+# --------------------------------------------------------------------------- #
+# Result persistence (cookie-backed) — saved plans survive reloads
+# --------------------------------------------------------------------------- #
+
+RESULTS_DIR = Path(__file__).resolve().parent / "data" / "results"
+
+
+class SaveResultRequest(BaseModel):
+    result: dict
+    input: dict | None = None
+    trip_id: str | None = None
+
+
+@app.post("/api/results/save")
+async def save_result(payload: SaveResultRequest, response: Response):
+    """Persist a generated plan so it can be reopened from the landing page.
+
+    Returns a ``trip_id`` and sets a ``g3ta_trip_id`` cookie so the next visit
+    shows the previous plan unless the user regenerates a new one.
+    """
+    trip_id = payload.trip_id or uuid4().hex
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    path = RESULTS_DIR / f"{trip_id}.json"
+    data = {
+        "trip_id": trip_id,
+        "saved_at": datetime.now().isoformat(timespec="seconds"),
+        "input": payload.input,
+        "result": payload.result,
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    response.set_cookie(
+        key="g3ta_trip_id",
+        value=trip_id,
+        max_age=60 * 60 * 24 * 30,
+        httponly=False,
+        samesite="lax",
+    )
+    return {"trip_id": trip_id, "saved": True}
+
+
+@app.get("/api/results/load")
+async def load_result(trip_id: str = Query(...)):
+    """Load a previously saved plan by its trip_id."""
+    path = RESULTS_DIR / f"{trip_id}.json"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="No saved result for this trip_id.")
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+@app.get("/api/results/latest")
+async def latest_result():
+    """Return the most recently saved plan (for the landing page)."""
+    if not RESULTS_DIR.exists():
+        raise HTTPException(status_code=404, detail="No saved results yet.")
+    files = sorted(RESULTS_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if not files:
+        raise HTTPException(status_code=404, detail="No saved results yet.")
+    with open(files[0], encoding="utf-8") as f:
+        return json.load(f)
+
+
+# --------------------------------------------------------------------------- #
+# Ctrip cookies + real hotel images (Playwright scraping)
+# --------------------------------------------------------------------------- #
+
+class SaveCookiesRequest(BaseModel):
+    cookie_string: str = ""
+
+
+@app.post("/booking/cookies")
+def save_cookies(
+    payload: SaveCookiesRequest,
+    _: None = Depends(require_booking_access),
+):
+    """Persist Ctrip session cookies so auto-booking can reuse a login.
+
+    Paste the cookie header string copied from Ctrip DevTools
+    (Application → Cookies → copy as ``name=value;`` pairs).
+    """
+    if not payload.cookie_string.strip():
+        raise HTTPException(status_code=400, detail="cookie_string is required")
+    try:
+        summary = ctrip.save_ctrip_cookies(payload.cookie_string)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"status": "ok", **summary}
+
+
+class HotelImagesRequest(BaseModel):
+    url: str = ""
+    hotel_id: str = ""
+    max_images: int = 6
+
+
+@app.post("/booking/hotel-images")
+def hotel_images(payload: HotelImagesRequest):
+    """Scrape real hotel gallery image URLs from Ctrip (read-only)."""
+    url = payload.url
+    if not url and payload.hotel_id:
+        url = f"https://hotels.ctrip.com/hotels/{payload.hotel_id}.html"
+    if not url:
+        raise HTTPException(status_code=400, detail="url or hotel_id required")
+    images = ctrip.scrape_hotel_images(url, headless=True, max_images=payload.max_images)
+    return {"url": url, "images": images, "count": len(images)}
 
 
 # --------------------------------------------------------------------------- #

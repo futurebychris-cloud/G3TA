@@ -166,3 +166,77 @@ export async function toggleChecklistItem(itemId, tripId, isPacked) {
   if (!resp.ok) throw new Error(`Failed to update checklist item (${resp.status})`)
   return resp.json()
 }
+
+// --- Cookie-backed result persistence -------------------------------------- //
+
+export async function saveResult(result, input, tripId) {
+  const resp = await fetch(`${API_BASE}/api/results/save`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ result, input: input || undefined, trip_id: tripId || undefined }),
+  })
+  if (!resp.ok) {
+    const detail = await resp.text().catch(() => resp.statusText)
+    throw new Error(`Save result failed (${resp.status}): ${detail}`)
+  }
+  return resp.json()
+}
+
+export async function loadResult(tripId) {
+  const resp = await fetch(`${API_BASE}/api/results/load?trip_id=${encodeURIComponent(tripId)}`, {
+    credentials: 'include',
+  })
+  if (!resp.ok) throw new Error(`Load result failed (${resp.status})`)
+  return resp.json()
+}
+
+export async function loadLatestResult() {
+  const resp = await fetch(`${API_BASE}/api/results/latest`, { credentials: 'include' })
+  if (!resp.ok) throw new Error(`Load result failed (${resp.status})`)
+  return resp.json()
+}
+
+// --- Ctrip session cookies + real hotel images ----------------------------- //
+
+export async function saveCookies(cookieString) {
+  const resp = await fetch(`${API_BASE}/booking/cookies`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ cookie_string: cookieString }),
+  })
+  if (!resp.ok) {
+    const detail = await resp.json().catch(() => ({}))
+    throw new Error(detail.detail || `Save cookies failed (${resp.status})`)
+  }
+  return resp.json()
+}
+
+export async function fetchHotelImages({ url = '', hotel_id = '', max_images = 6 }) {
+  const resp = await fetch(`${API_BASE}/booking/hotel-images`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ url, hotel_id, max_images }),
+  })
+  if (!resp.ok) {
+    const detail = await resp.json().catch(() => ({}))
+    throw new Error(detail.detail || `Image scrape failed (${resp.status})`)
+  }
+  return resp.json()
+}
+
+export async function autoBookHotel(payload) {
+  const resp = await fetch(`${API_BASE}/booking/auto/hotel`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify(payload),
+  })
+  if (!resp.ok) {
+    const detail = await resp.json().catch(() => ({}))
+    throw new Error(detail.detail || `Auto-book failed (${resp.status})`)
+  }
+  return resp.json()
+}

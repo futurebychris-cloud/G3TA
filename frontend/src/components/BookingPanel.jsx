@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
-import { BedDouble, Check, ExternalLink, LoaderCircle, MapPin, RefreshCw, Search, ShieldAlert, Star, ImageOff, Info, Sparkles, Bath, Coffee, Wifi, Tv, Wind, Car, Dumbbell, Waves, UtensilsCrossed } from 'lucide-react'
-import { streamBookingSearch } from '../api.js'
+import { BedDouble, Check, ExternalLink, LoaderCircle, MapPin, RefreshCw, Search, ShieldAlert, Star, ImageOff, Info, Sparkles, Bath, Coffee, Wifi, Tv, Wind, Car, Dumbbell, Waves, UtensilsCrossed, KeyRound, Camera } from 'lucide-react'
+import { autoBookHotel, fetchHotelImages, saveCookies, streamBookingSearch } from '../api.js'
 
 const STAGES = [
   { key: 'search', label: 'Search', note: 'Querying the currently configured hotel sources', icon: Search },
@@ -65,6 +65,14 @@ export default function BookingPanel({ trip }) {
 
   const [selected, setSelected] = useState(null)
 
+  // Ctrip session cookies + real photo scraping + auto-booking (cookie-backed).
+  const [cookieString, setCookieString] = useState('')
+  const [cookieMsg, setCookieMsg] = useState('')
+  const [savingCookie, setSavingCookie] = useState(false)
+  const [imagesByHotel, setImagesByHotel] = useState({})
+  const [traveler, setTraveler] = useState({ name: '', id_number: '', phone: '' })
+  const [booking, setBooking] = useState({})
+
   async function runSearch() {
     setError(null)
     setHotels([])
@@ -104,6 +112,67 @@ export default function BookingPanel({ trip }) {
     }
   }
 
+  async function handleSaveCookies() {
+    if (!cookieString.trim()) {
+      setCookieMsg('Paste a cookie string first.')
+      return
+    }
+    setSavingCookie(true)
+    setCookieMsg('')
+    try {
+      const res = await saveCookies(cookieString)
+      setCookieMsg(`Saved ${res.saved} Ctrip cookie(s). Auto-booking can reuse this login.`)
+    } catch (e) {
+      setCookieMsg(`Could not save cookies: ${e.message}`)
+    } finally {
+      setSavingCookie(false)
+    }
+  }
+
+  async function loadImages(h) {
+    if (imagesByHotel[h.id]) return
+    setImagesByHotel((m) => ({ ...m, [h.id]: { loading: true, images: [] } }))
+    try {
+      const res = await fetchHotelImages({ hotel_id: h.id, url: h.url, max_images: 4 })
+      setImagesByHotel((m) => ({ ...m, [h.id]: { loading: false, images: res.images || [] } }))
+    } catch (e) {
+      setImagesByHotel((m) => ({ ...m, [h.id]: { loading: false, images: [], error: e.message } }))
+    }
+  }
+
+  async function startAutoBook(h) {
+    setBooking((b) => ({ ...b, [h.id]: { status: 'running' } }))
+    try {
+      const res = await autoBookHotel({
+        hotel_id: h.id,
+        hotel_name: h.name,
+        hotel_url: h.url || '',
+        check_in: trip.dates.start,
+        check_out: trip.dates.end,
+        rooms: Math.max(1, Math.ceil((trip.num_people || 1) / 2)),
+        adults: trip.num_people || 1,
+        children: 0,
+        price_total: h.total_cost ?? null,
+        currency: h.currency || 'CNY',
+        payment_method: 'wechat',
+        id_number: traveler.id_number,
+        name: traveler.name,
+        phone: traveler.phone,
+      })
+      setBooking((b) => ({
+        ...b,
+        [h.id]: {
+          status: res.status || 'pending_payment',
+          message: res.message,
+          link: res.order_link,
+          order_no: res.order_no,
+        },
+      }))
+    } catch (e) {
+      setBooking((b) => ({ ...b, [h.id]: { status: 'error', message: e.message } }))
+    }
+  }
+
   return (
     <div className="booking-panel">
       <div className="panel-heading">
@@ -116,6 +185,29 @@ export default function BookingPanel({ trip }) {
           availability can change; G3TA never marks a stay paid or confirmed without
           provider proof.
         </p>
+      </div>
+
+      <div className="ctrip-cookies">
+        <details>
+          <summary><KeyRound size={14} /> Ctrip session cookies (for auto-booking)</summary>
+          <p>
+            Paste the cookie string copied from Ctrip DevTools (Application → Cookies) so the
+            auto-book button can drive a logged-in session. Stored only on this server, never
+            shown back to you.
+          </p>
+          <textarea
+            value={cookieString}
+            onChange={(e) => setCookieString(e.target.value)}
+            placeholder="name=value; name2=value2; cticket=…"
+            rows={3}
+          />
+          <div className="ctrip-cookies-actions">
+            <button className="text-button" onClick={handleSaveCookies} disabled={savingCookie}>
+              {savingCookie ? 'Saving…' : 'Save cookies'}
+            </button>
+            {cookieMsg && <span className="cookie-msg">{cookieMsg}</span>}
+          </div>
+        </details>
       </div>
 
       <div className="booking-controls">
@@ -195,6 +287,26 @@ export default function BookingPanel({ trip }) {
                 <div className="hotel-image hotel-image-placeholder">
                   <ImageOff size={28} />
                 </div>
+              )}
+
+              <button
+                type="button"
+                className="photo-btn"
+                onClick={(e) => { e.stopPropagation(); loadImages(h) }}
+              >
+                <Camera size={13} /> Show real photos
+              </button>
+              {imagesByHotel[h.id]?.loading && <span className="photo-loading">Loading…</span>}
+              {imagesByHotel[h.id]?.images?.length > 0 && (
+                <div className="hotel-gallery">
+                  {imagesByHotel[h.id].images.map((src, i) => (
+                    <img key={i} src={src} alt={`${h.name} photo ${i + 1}`} loading="lazy"
+                      onError={(e) => { e.target.style.display = 'none' }} />
+                  ))}
+                </div>
+              )}
+              {imagesByHotel[h.id]?.error && (
+                <span className="photo-error">{imagesByHotel[h.id].error}</span>
               )}
 
               <div className="hotel-card-head">
@@ -330,6 +442,49 @@ export default function BookingPanel({ trip }) {
               <ShieldAlert size={15} /> This source did not provide a booking URL. Search the hotel name on your preferred provider.
             </p>
           )}
+
+          <details className="auto-book">
+            <summary><KeyRound size={14} /> Auto-book via Ctrip (drives to payment)</summary>
+            <p className="honest-note">
+              G3TA stops at the payment checkpoint — you confirm and pay. Requires saved Ctrip
+              cookies above and booking automation enabled on the server.
+            </p>
+            <div className="auto-book-fields">
+              <input
+                placeholder="Traveler name"
+                value={traveler.name}
+                onChange={(e) => setTraveler((t) => ({ ...t, name: e.target.value }))}
+              />
+              <input
+                placeholder="ID number"
+                value={traveler.id_number}
+                onChange={(e) => setTraveler((t) => ({ ...t, id_number: e.target.value }))}
+              />
+              <input
+                placeholder="Phone"
+                value={traveler.phone}
+                onChange={(e) => setTraveler((t) => ({ ...t, phone: e.target.value }))}
+              />
+            </div>
+            <button
+              className="confirm-btn auto-book-btn"
+              onClick={() => startAutoBook(selected)}
+              disabled={booking[selected.id]?.status === 'running'}
+            >
+              {booking[selected.id]?.status === 'running' ? 'Driving browser…' : 'Start auto-book'}
+            </button>
+            {booking[selected.id]?.message && (
+              <p className="auto-book-status">{booking[selected.id].message}</p>
+            )}
+            {booking[selected.id]?.order_no && (
+              <p className="auto-book-status">Order reference: {booking[selected.id].order_no}</p>
+            )}
+            {booking[selected.id]?.link && (
+              <a className="confirm-btn" href={booking[selected.id].link} target="_blank" rel="noopener noreferrer">
+                Open order / pay on provider <ExternalLink size={15} />
+              </a>
+            )}
+          </details>
         </div>
       )}
     </div>

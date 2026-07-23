@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 import secrets
 
-from fastapi import Header, HTTPException
+from fastapi import Header, HTTPException, Request
 
 
 TRUE_VALUES = {"1", "true", "yes", "on"}
@@ -46,10 +46,14 @@ def booking_automation_enabled() -> bool:
     return env_enabled("BOOKING_AUTOMATION_ENABLED")
 
 
-def require_booking_access(
-    x_g3ta_booking_token: str | None = Header(default=None),
-) -> None:
-    """Protect provider automation and traveler/booking records."""
+def require_booking_access(request: Request) -> None:
+    """Protect provider automation and traveler/booking records.
+
+    When ``BOOKING_AUTOMATION_ENABLED`` is on and a ``BOOKING_API_TOKEN`` is
+    configured, every call must present that token. When no token is configured
+    (local demo), access is allowed only from localhost so the UI auto-book
+    button works out of the box without exposing automation to the network.
+    """
     if not booking_automation_enabled():
         raise HTTPException(
             status_code=503,
@@ -59,13 +63,21 @@ def require_booking_access(
             ),
         )
     expected = os.getenv("BOOKING_API_TOKEN", "")
-    if not expected:
-        raise HTTPException(
-            status_code=503,
-            detail="BOOKING_API_TOKEN is required when booking automation is enabled.",
-        )
-    if not x_g3ta_booking_token or not secrets.compare_digest(
-        x_g3ta_booking_token,
-        expected,
-    ):
-        raise HTTPException(status_code=401, detail="Invalid booking access token.")
+    if expected:
+        token = None
+        if request is not None:
+            token = request.headers.get("x-g3ta-booking-token") or request.query_params.get("token")
+        if not token or not secrets.compare_digest(token, expected):
+            raise HTTPException(status_code=401, detail="Invalid booking access token.")
+        return
+    # No token configured: allow only trusted localhost clients (local demo).
+    client = request.client.host if request is not None and request.client else None
+    if client in ("127.0.0.1", "::1", "localhost"):
+        return
+    raise HTTPException(
+        status_code=401,
+        detail=(
+            "BOOKING_API_TOKEN is not configured and this request did not come from "
+            "localhost. Set BOOKING_API_TOKEN or run G3TA locally to use auto-booking."
+        ),
+    )

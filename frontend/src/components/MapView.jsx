@@ -124,6 +124,11 @@ function routeModeForScope(scope) {
   return scope === 'transportation' ? 'amap' : 'walking'
 }
 
+function formatCost(cost) {
+  if (!cost || Number.isNaN(cost)) return ''
+  return `¥${Math.round(cost)} est. cost`
+}
+
 function useSystemReducedMotion() {
   const [reducedMotion, setReducedMotion] = useState(() => (
     window.matchMedia?.('(prefers-reduced-motion: reduce)').matches || false
@@ -198,6 +203,7 @@ export default function MapView({ points = EMPTY_POINTS, result = null, agentOut
   const [mapMessage, setMapMessage] = useState('')
   const [routeMessage, setRouteMessage] = useState('')
   const [routeMetrics, setRouteMetrics] = useState(null)
+  const [routeSegmentDetails, setRouteSegmentDetails] = useState([])
   const [routeAnimationProgress, setRouteAnimationProgress] = useState(null)
   const containerRef = useRef(null)
   const mapRef = useRef(null)
@@ -311,16 +317,20 @@ export default function MapView({ points = EMPTY_POINTS, result = null, agentOut
       const segments = routeSegments(activeRoute.stops)
       const planned = await Promise.all(segments.map(async ({ from, to }) => {
         if (isTransportation && !isDrivingTransportation) {
-          return { path: [[from.lng, from.lat], [to.lng, to.lat]], distance: 0, duration: 0, failed: false }
+          return { path: [[from.lng, from.lat], [to.lng, to.lat]], distance: 0, duration: 0, cost: 0, failed: false }
         }
         try {
           const requestedMode = isDrivingTransportation ? 'driving' : routeMode
-          return { ...await searchAmapSegment(AMap, requestedMode, from, to), failed: false }
+          const seg = { ...await searchAmapSegment(AMap, requestedMode, from, to), failed: false }
+          // Honest cost estimate: taxi-style rate for driving, free for walking.
+          seg.cost = requestedMode === 'driving' ? (seg.distance / 1000) * 2.4 : 0
+          return seg
         } catch (error) {
           return {
             path: [],
             distance: 0,
             duration: 0,
+            cost: 0,
             failed: true,
             error: error.message,
           }
@@ -418,7 +428,9 @@ export default function MapView({ points = EMPTY_POINTS, result = null, agentOut
       const failedCount = planned.filter((segment) => segment.failed).length
       const distance = planned.reduce((sum, segment) => sum + segment.distance, 0)
       const duration = planned.reduce((sum, segment) => sum + segment.duration, 0)
-      setRouteMetrics({ distance, duration, failedCount, segments: planned.length })
+      const cost = planned.reduce((sum, segment) => sum + (segment.cost || 0), 0)
+      setRouteMetrics({ distance, duration, cost, failedCount, segments: planned.length })
+      setRouteSegmentDetails(planned)
       if (isTransportation) {
         setRouteMessage(isDrivingTransportation
           ? 'Live AMap driving route loaded between the transportation endpoints.'
@@ -456,6 +468,7 @@ export default function MapView({ points = EMPTY_POINTS, result = null, agentOut
 
   const formattedDistance = formatDistance(routeMetrics?.distance)
   const formattedDuration = formatDuration(routeMetrics?.duration)
+  const formattedCost = formatCost(routeMetrics?.cost)
   const mapStateLabel = mapState === 'ready'
     ? 'AMap live'
     : mapState === 'loading'
@@ -601,10 +614,11 @@ export default function MapView({ points = EMPTY_POINTS, result = null, agentOut
             <h3>{activeRoute.title}</h3>
             {activeRoute.date && <p>{activeRoute.date}</p>}
           </div>
-          {(formattedDistance || formattedDuration) && (
+          {(formattedDistance || formattedDuration || formattedCost) && (
             <div className="route-metrics">
               {formattedDistance && <span>{formattedDistance}</span>}
               {formattedDuration && <span>{formattedDuration}</span>}
+              {formattedCost && <span>{formattedCost}</span>}
             </div>
           )}
           <ol className="route-stops">
@@ -625,6 +639,16 @@ export default function MapView({ points = EMPTY_POINTS, result = null, agentOut
                   {stop.rating != null && <small>★ {stop.rating} rating</small>}
                   {stop.price != null && <small>¥{stop.price} avg</small>}
                   {stop.dish && <small>{stop.dish}</small>}
+                  {index > 0 && routeSegmentDetails[index - 1] && (
+                    <small className="route-segment-meta">
+                      {routeSegmentDetails[index - 1].duration
+                        ? `${formatDuration(routeSegmentDetails[index - 1].duration)} · `
+                        : ''}
+                      {routeSegmentDetails[index - 1].cost
+                        ? `¥${Math.round(routeSegmentDetails[index - 1].cost)} est.`
+                        : 'No fare'}
+                    </small>
+                  )}
                   <a
                     className="route-hint-btn"
                     href={index > 0

@@ -13,7 +13,8 @@ import {
   ShieldAlert,
   Sparkles,
 } from 'lucide-react'
-import { cancelPlan, finalizePlan, getHealth, streamPlan } from './api.js'
+import { cancelPlan, finalizePlan, getHealth, loadLatestResult, saveResult, streamPlan } from './api.js'
+import { getCookie, setCookie } from './utils/cookie.js'
 import { useAccessibilitySettings } from './accessibility/AccessibilityContext.jsx'
 import InputForm from './components/InputForm.jsx'
 import ProgressTracker from './components/ProgressTracker.jsx'
@@ -99,7 +100,7 @@ function AppHeader({ step, onReset, onAccessibility, accessibilityButtonRef }) {
   )
 }
 
-function Landing({ onSubmit }) {
+function Landing({ onSubmit, savedPlan, onViewSaved }) {
   return (
     <main className="landing">
       <section className="hero">
@@ -123,6 +124,24 @@ function Landing({ onSubmit }) {
           <OrbitGlobe />
         </div>
       </section>
+
+      {savedPlan?.result && (
+        <section className="saved-plan-callout" aria-label="Saved plan">
+          <div>
+            <span className="section-index">SAVED PLAN</span>
+            <h3>{savedPlan.result.destination || 'Your last plan'}</h3>
+            <p>
+              {savedPlan.saved_at ? `Saved ${savedPlan.saved_at}. ` : ''}
+              Reopen it without regenerating, or start a fresh journey below.
+            </p>
+          </div>
+          <div className="saved-plan-actions">
+            <button type="button" className="primary-button" onClick={onViewSaved}>
+              View previous plan
+            </button>
+          </div>
+        </section>
+      )}
 
       <section className="planner-wrap" id="plan">
         <div className="planner-heading">
@@ -206,6 +225,7 @@ export default function App() {
   const [error, setError] = useState(null)
   const [tab, setTab] = useState('itinerary')
   const [tripInput, setTripInput] = useState(null)
+  const [savedPlan, setSavedPlan] = useState(null)
   const [accessibilityOpen, setAccessibilityOpen] = useState(false)
   const [leaveDialogOpen, setLeaveDialogOpen] = useState(false)
   const accessibilityButtonRef = useRef(null)
@@ -219,6 +239,43 @@ export default function App() {
     }
     planControllerRef.current?.abort()
   }, [])
+
+  // Load the cookie-backed saved plan when returning to the landing screen so
+  // the user can reopen a previous result without regenerating it.
+  useEffect(() => {
+    if (step !== 'input' || savedPlan) return
+    const tripId = getCookie('g3ta_trip_id')
+    if (!tripId) return
+    loadLatestResult()
+      .then((data) => setSavedPlan(data))
+      .catch(() => {})
+  }, [step, savedPlan])
+
+  async function persistResult(planResult, input) {
+    try {
+      const data = await saveResult(planResult, input)
+      if (data?.trip_id) {
+        setCookie('g3ta_trip_id', data.trip_id)
+        setSavedPlan({
+          trip_id: data.trip_id,
+          saved_at: new Date().toISOString(),
+          input,
+          result: planResult,
+        })
+      }
+    } catch (err) {
+      // Persisting is best-effort; never block the result view.
+      console.warn('Could not persist result:', err)
+    }
+  }
+
+  function viewSavedPlan() {
+    if (!savedPlan?.result) return
+    setResult(savedPlan.result)
+    setTripInput(savedPlan.input || null)
+    setTab('itinerary')
+    setStep('result')
+  }
 
   function newRequestId() {
     return globalThis.crypto?.randomUUID?.()
@@ -259,6 +316,7 @@ export default function App() {
           setResult(event.result)
           setTab('itinerary')
           setStep('result')
+          void persistResult(event.result, preparedInput)
         } else if (event.type === 'error') {
           planControllerRef.current = null
           activeRequestIdRef.current = null
@@ -341,7 +399,7 @@ export default function App() {
         }}
       />
 
-      {step === 'input' && <Landing onSubmit={handleSubmit} />}
+      {step === 'input' && <Landing onSubmit={handleSubmit} savedPlan={savedPlan} onViewSaved={viewSavedPlan} />}
 
       {step === 'progress' && (
         <main className="progress-page">

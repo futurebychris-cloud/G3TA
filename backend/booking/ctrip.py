@@ -148,7 +148,7 @@ def _search_via_ctrip_api(city_id: int, check_in: str, check_out: str,
                 cookie_names = set()
                 for pair in ctrip_cookie.split(";"):
                     if "=" in pair:
-                        cookie_names.add(pair.split("=", 0)[0].strip() if False else pair.split("=")[0].strip())
+                        cookie_names.add(pair.split("=", 1)[0].strip())
                 auth_found = cookie_names & {"cticket", "ctoken", "eid", "UID", "LOGIN_TOKEN", "_login", "Uid"}
                 print(f"[ctrip] API: loaded {len(cookie_names)} cookie names from cookies.json "
                       f"(auth cookies present: {auth_found if auth_found else 'NONE — not authenticated'})")
@@ -236,6 +236,116 @@ def _mock_hotels(req: "object") -> list[dict]:
             "source": "mock",
         })
     return out
+
+
+def scrape_hotel_images(hotel_url: str, headless: bool = True, max_images: int = 6) -> list[str]:
+    """Scrape real hotel gallery image URLs from a Ctrip hotel detail page.
+
+    Uses the stealth Playwright browser with stored Ctrip cookies so the gallery
+    renders for a logged-in session. Returns absolute image URLs (empty on
+    failure). No prices or bookings are created.
+    """
+    if not hotel_url:
+        return []
+    images: list[str] = []
+    try:
+        with _stealth_browser(headless=headless) as pw:
+            pw.apply_cookies()
+            pw.goto(hotel_url, timeout=30000, wait_until="domcontentloaded")
+            pw.wait_for_timeout(2500)
+
+            for sel in (
+                "ul.album-list img",
+                ".album-list img",
+                ".hotel-pic-list img",
+                ".pic-list img",
+                "div[class*='album'] img",
+                "div[class*='gallery'] img",
+            ):
+                for el in pw.query_selector_all(sel):
+                    if len(images) >= max_images:
+                        break
+                    src = (
+                        el.get_attribute("src")
+                        or el.get_attribute("data-src")
+                        or el.get_attribute("data-original")
+                        or el.get_attribute("data-lazyload")
+                    )
+                    if src:
+                        images.append(_abs_url(src))
+                if images:
+                    break
+
+            # Fallback: any image that looks like a hotel photo.
+            if not images:
+                for el in pw.query_selector_all("img"):
+                    if len(images) >= max_images:
+                        break
+                    src = el.get_attribute("src") or el.get_attribute("data-src") or ""
+                    if src and any(k in src.lower() for k in ("hotel", "room", "pic", "img")):
+                        images.append(_abs_url(src))
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ctrip] scrape_hotel_images failed: {exc}")
+
+    # De-duplicate while preserving order.
+    seen = set()
+    unique = []
+    for u in images:
+        if u and u not in seen:
+            seen.add(u)
+            unique.append(u)
+    return unique[:max_images]
+
+
+def save_ctrip_cookies(cookie_input) -> dict:
+    """Persist Ctrip session cookies so auto-booking can reuse a login.
+
+    Accepts either a raw ``name=value; name2=value2`` header string (copied
+    from DevTools) or a list of ``{name, value, ...}`` dicts. Returns a summary.
+    """
+    cookies = _normalize_cookies(cookie_input)
+    if not cookies:
+        raise ValueError("No valid cookies found in the provided input.")
+    try:
+        with open(COOKIES_FILE, "w", encoding="utf-8") as f:
+            json.dump(cookies, f, ensure_ascii=False, indent=2)
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(f"Could not write cookies file: {exc}") from exc
+    return {"saved": len(cookies), "file": COOKIES_FILE}
+
+
+def _normalize_cookies(cookie_input) -> list[dict]:
+    """Convert a raw cookie header string or list of dicts into cookie dicts."""
+    if isinstance(cookie_input, list):
+        out = []
+        for c in cookie_input:
+            if isinstance(c, dict) and c.get("name"):
+                out.append({
+                    "name": c.get("name", ""),
+                    "value": c.get("value", ""),
+                    "domain": c.get("domain", ".ctrip.com"),
+                    "path": c.get("path", "/"),
+                })
+        return out
+    if isinstance(cookie_input, str):
+        text = cookie_input.strip()
+        if text.startswith("["):
+            try:
+                return _normalize_cookies(json.loads(text))
+            except Exception:  # noqa: BLE001
+                pass
+        cookies = []
+        for pair in text.split(";"):
+            if "=" in pair:
+                name, _, value = pair.partition("=")
+                cookies.append({
+                    "name": name.strip(),
+                    "value": value.strip(),
+                    "domain": ".ctrip.com",
+                    "path": "/",
+                })
+        return cookies
+    return []
 
 
 def search_hotels(req) -> list[dict]:
@@ -706,6 +816,20 @@ def _parse_ctrip_next_data(page) -> list[dict]:
     return out
 
 
+def _abs_url(url: str) -> str:
+    """Normalize a possibly protocol-relative or relative Ctrip image URL."""
+    if not url:
+        return ""
+    url = url.strip()
+    if url.startswith("//"):
+        return "https:" + url
+    if url.startswith("/"):
+        return "https://hotels.ctrip.com" + url
+    if url.startswith("http"):
+        return url
+    return "https://hotels.ctrip.com/" + url
+
+
 def _parse_ctrip_dom(page) -> list[dict]:
     """Extract REAL hotel data from the rendered Ctrip list DOM.
 
@@ -783,6 +907,19 @@ def _parse_ctrip_dom(page) -> list[dict]:
             room_el = c.query_selector(".room-name")
             room_name = room_el.inner_text().strip() if room_el else ""
 
+            # --- thumbnail image (real Ctrip photo, when present) ---
+            img_url = ""
+            img_el = c.query_selector("img")
+            if img_el:
+                img_url = (
+                    img_el.get_attribute("src")
+                    or img_el.get_attribute("data-src")
+                    or img_el.get_attribute("data-original")
+                    or img_el.get_attribute("data-lazyload")
+                    or ""
+                )
+                img_url = _abs_url(img_url)
+
             out.append({
                 "id": hid or f"ctrip_dom_{len(out)}",
                 "name": name,
@@ -792,6 +929,7 @@ def _parse_ctrip_dom(page) -> list[dict]:
                 "tags": [],
                 "url": url,
                 "room_name": room_name,
+                "images": [img_url] if img_url else [],
             })
         except Exception:
             continue
