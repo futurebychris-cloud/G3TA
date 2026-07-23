@@ -107,14 +107,14 @@ function Landing({ onSubmit, intakeDraft, intakeNotice }) {
     <main className="landing" id="main-content" tabIndex="-1">
       <section className="hero">
         <div className="hero-copy">
-          <div className="eyebrow"><Sparkles size={15} /> Multi-agent trip design</div>
+          <div className="eyebrow"><Sparkles size={15} /> Multi-agent AI trip design</div>
           <h1>
             The world is wide.
-            <span>Plan it beautifully.</span>
+            <span>Let go. We'll get you there.</span>
           </h1>
           <p className="hero-lede">
-            Tell us where you want to go. Six specialist agents research the details,
-            challenge the trade-offs, and shape one thoughtful itinerary around you.
+            Tell us where you're dreaming of. Six AI specialists debate the routes, prices,
+            and trade-offs behind the scenes — so you get one confident plan, not forty open tabs.
           </p>
           <div className="hero-proof">
             <div><strong>06</strong><span>Specialist agents</span></div>
@@ -141,22 +141,22 @@ function Landing({ onSubmit, intakeDraft, intakeNotice }) {
       <section className="method-strip" aria-label="How it works">
         <div className="method-intro">
           <span className="section-index">THE ENSEMBLE</span>
-          <h2>One journey.<br />Many points of view.</h2>
+          <h2>One journey.<br />Zero decision fatigue.</h2>
         </div>
         <div className="method-step">
           <span>01</span><BrainCircuit size={22} />
           <h3>Six minds explore</h3>
-          <p>Specialists independently handle routes, stays, food, experiences, pacing, and cost.</p>
+          <p>Six specialist AI agents work the details in parallel — routes, stays, food, experiences, pacing, cost — each one an expert in exactly one thing.</p>
         </div>
         <div className="method-step">
           <span>02</span><CircleDollarSign size={22} />
           <h3>Trade-offs get tested</h3>
-          <p>The orchestrator checks the whole plan against your budget and records every adjustment.</p>
+          <p>An orchestrator agent stress-tests the whole plan against your budget in real time, and writes down every trade-off it makes.</p>
         </div>
         <div className="method-step">
           <span>03</span><Check size={22} />
           <h3>You get one clear plan</h3>
-          <p>A coherent day-by-day itinerary, with every useful detail in one calm workspace.</p>
+          <p>No compromise between six spreadsheets — just one confident, ready-to-go itinerary.</p>
         </div>
       </section>
     </main>
@@ -190,7 +190,7 @@ function ResultHeader({ result }) {
           <span className="section-index">CURATED FOR YOU</span>
           <h1>{result.destination}</h1>
         </div>
-        <div className="trip-stamp" aria-hidden="true"><span>G3</span><small>PLANNED<br />WITH AI</small></div>
+        <div className="trip-stamp" aria-hidden="true"><span>VG</span><small>PLANNED<br />WITH AI</small></div>
       </div>
       <div className="result-heading-actions">
         <ReadAloudButton id="trip-summary" text={spokenSummary} label={`trip summary for ${result.destination}`} />
