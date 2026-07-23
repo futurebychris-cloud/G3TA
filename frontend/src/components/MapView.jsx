@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { BedDouble, Camera, MapPin, Navigation, PlaneLanding, UtensilsCrossed } from 'lucide-react'
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
+import { useAccessibilitySettings } from '../accessibility/AccessibilityContext.jsx'
 
 // Fix default marker icon issue with bundlers
 delete L.Icon.Default.prototype._getIconUrl
@@ -59,6 +60,38 @@ const TYPE_META = {
   restaurant: { color: '#f5a623', label: 'Dining', icon: UtensilsCrossed },
 }
 
+function seniorRecommendations(points, agentOutputs) {
+  if (!points?.length) return []
+  const choices = []
+  const add = (point, recommendation) => {
+    if (point && !choices.some(({ point: current }) => current === point)) {
+      choices.push({ point, recommendation })
+    }
+  }
+  const hotelPoint = points.find(({ type }) => type === 'housing')
+  add(hotelPoint || points[0], 'Top Recommendation')
+
+  const activities = agentOutputs?.activity?.recommended || []
+  const findActivityPoint = (activity) => points.find((point) => point.label === activity?.name)
+  const byValue = [...activities].sort((a, b) => (
+    Number(a.price ?? a.ticket_price ?? Infinity) - Number(b.price ?? b.ticket_price ?? Infinity)
+  ))
+  add(findActivityPoint(byValue[0]), 'Best Value')
+
+  if (hotelPoint) {
+    const closest = points
+      .filter(({ type }) => type === 'activity')
+      .map((point) => ({ point, distance: Math.hypot(point.lat - hotelPoint.lat, point.lng - hotelPoint.lng) }))
+      .sort((a, b) => a.distance - b.distance)
+      .find(({ point }) => !choices.some(({ point: current }) => current === point))
+    add(closest?.point, 'Closest')
+  }
+  points.forEach((point) => {
+    if (choices.length < 3) add(point, 'Recommended')
+  })
+  return choices
+}
+
 function createRouteUrl(pointA, pointB) {
   const lat1 = pointA.lat, lng1 = pointA.lng
   const lat2 = pointB.lat, lng2 = pointB.lng
@@ -80,10 +113,21 @@ function FitBounds({ points }) {
   return null
 }
 
-export default function MapView({ points }) {
+export default function MapView({ points = [], agentOutputs = null, result = null }) {
+  points = points || []
+  const { settings } = useAccessibilitySettings()
   const [selectedRoute, setSelectedRoute] = useState(null)
   const [realRoutes, setRealRoutes] = useState({})  // { "0-1": [[lat,lng],...] }
-  const [routeLoading, setRouteLoading] = useState(false)
+  const [showAllPlaces, setShowAllPlaces] = useState(false)
+  const isSenior = settings.preset === 'senior'
+  const resolvedAgentOutputs = result?.agent_outputs || agentOutputs || {}
+  const seniorChoices = useMemo(
+    () => seniorRecommendations(points, resolvedAgentOutputs),
+    [points, resolvedAgentOutputs],
+  )
+  const placeEntries = isSenior && !showAllPlaces
+    ? seniorChoices
+    : points.map((point) => ({ point, recommendation: null }))
 
   // Fetch real route path from Gaode API for a segment
   const fetchRoute = useCallback(async (fromIdx, toIdx) => {
@@ -94,7 +138,6 @@ export default function MapView({ points }) {
     const to = points[toIdx]
     if (!from || !to) return
 
-    setRouteLoading(true)
     try {
       const apiBase = import.meta.env.VITE_API_BASE || 'http://localhost:8000'
       const res = await fetch(`${apiBase}/route/path?` + new URLSearchParams({
@@ -112,8 +155,6 @@ export default function MapView({ points }) {
       }
     } catch (e) {
       console.warn('[MapView] route fetch failed:', e)
-    } finally {
-      setRouteLoading(false)
     }
   }, [points, realRoutes])
 
@@ -130,18 +171,6 @@ export default function MapView({ points }) {
       }
     }
   }, [points, fetchRoute])
-
-  if (!points || points.length === 0) {
-    return (
-      <div className="places-view">
-        <div className="panel-heading">
-          <div><span className="section-index">YOUR PLACES</span><h2>Real maps, real locations.<br />Not an illustration.</h2></div>
-          <p>高德地图瓦片 · 所有坐标来自 Agent 实时数据</p>
-        </div>
-        <div className="empty-state"><MapPin size={28} /><h3>No map points yet</h3><p>Locations will appear here when they are available.</p></div>
-      </div>
-    )
-  }
 
   // Build route segments — use real Gaode paths when available, else straight lines
   const routeSegments = useMemo(() => {
@@ -171,12 +200,11 @@ export default function MapView({ points }) {
   }, [points, realRoutes])
 
   const center = useMemo(() => {
+    if (!points.length) return [0, 0]
     const lats = points.map(p => p.lat)
     const lngs = points.map(p => p.lng)
     return [(Math.min(...lats) + Math.max(...lats)) / 2, (Math.min(...lngs) + Math.max(...lngs)) / 2]
   }, [points])
-
-  const routeColors = ['#ff6b4a', '#4BC0C0', '#80caff', '#f5a623', '#ccf06c', '#b9a4ff', '#ffca6b']
 
   // Count point types for legend
   const typeCounts = useMemo(() => {
@@ -184,6 +212,20 @@ export default function MapView({ points }) {
     points.forEach(p => { counts[p.type] = (counts[p.type] || 0) + 1 })
     return counts
   }, [points])
+
+  if (!points.length) {
+    return (
+      <div className="places-view">
+        <div className="panel-heading">
+          <div><span className="section-index">YOUR PLACES</span><h2>Real maps, real locations.<br />Not an illustration.</h2></div>
+          <p>高德地图瓦片 · 所有坐标来自 Agent 实时数据</p>
+        </div>
+        <div className="empty-state"><MapPin size={28} /><h3>No map points yet</h3><p>Locations will appear here when they are available.</p></div>
+      </div>
+    )
+  }
+
+  const routeColors = ['#ff6b4a', '#4BC0C0', '#80caff', '#f5a623', '#ccf06c', '#b9a4ff', '#ffca6b']
 
   return (
       <div className="places-view">
@@ -312,15 +354,20 @@ export default function MapView({ points }) {
           </div>
 
           <ol>
-            {points.map((point, index) => {
+            {placeEntries.map(({ point, recommendation }, index) => {
               const meta = TYPE_META[point.type] || TYPE_META.activity
-              const prev = index > 0 ? points[index - 1] : null
-              const routeKey = prev ? `${index - 1}-${index}` : null
+              const prev = index > 0 ? placeEntries[index - 1]?.point : null
+              const fromIndex = prev ? points.indexOf(prev) : -1
+              const toIndex = points.indexOf(point)
+              const routeKey = fromIndex >= 0 && toIndex === fromIndex + 1
+                ? `${fromIndex}-${toIndex}`
+                : null
               const hasRealRoute = routeKey && realRoutes[routeKey]
               return (
                 <li key={`${point.label}-list`}>
                   <span className="place-number">{String(index + 1).padStart(2, '0')}</span>
                   <span>
+                    {recommendation && <span className="senior-choice-label">{recommendation}</span>}
                     <strong>{point.label}</strong>
                     <small>
                       {meta.label}
@@ -345,6 +392,16 @@ export default function MapView({ points }) {
               )
             })}
           </ol>
+          {isSenior && points.length > 3 && (
+            <button
+              className="show-more-results"
+              type="button"
+              aria-expanded={showAllPlaces}
+              onClick={() => setShowAllPlaces((current) => !current)}
+            >
+              {showAllPlaces ? 'Show fewer places' : `Show all ${points.length} places`}
+            </button>
+          )}
           <div className="map-disclaimer">
             <p>
               {Object.keys(realRoutes).length > 0

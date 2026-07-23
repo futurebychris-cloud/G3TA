@@ -352,9 +352,6 @@ def auto_book_flight(
         page.goto(url, timeout=30000, wait_until="domcontentloaded")
         time.sleep(3)
 
-        # Click on the matching flight and proceed to booking form
-        order_no = f"FLT-{int(time.time())}"
-
         # Fill traveler identity from DB credentials
         if creds:
             for field, value in [
@@ -403,18 +400,19 @@ def auto_book_flight(
                 flight_number=selected.get("flight_number", ""),
                 price=selected["price"],
                 currency="CNY",
-                booking_status="pending_payment",
-                booking_ref=order_no,
+                booking_status="pending",
+                booking_ref="",
             )
         except Exception as e:
             print(f"[auto_book] DB save failed (non-fatal): {e}")
 
         return {
-            "status": "pending_payment",
-            "order_no": order_no,
+            "status": "manual_required",
+            "order_no": None,
             "message": (
                 f"Flight {selected['flight_number']} ({origin}→{destination}) "
-                f"booked. Price: {selected['price']} CNY. Complete payment in your app."
+                f"was selected at {selected['price']} CNY. Confirm the passenger details, "
+                "final provider price, and payment in Ctrip; no booking is recorded as confirmed yet."
             ),
             "provider": "ctrip",
             "type": "flight",
@@ -613,7 +611,6 @@ def auto_book_train(
         hsr = [t for t in trains if t.get("type") == "HSR"]
         selected = hsr[0] if hsr else trains[0]
 
-    order_no = f"TRAIN-{int(time.time())}"
     price = (
         selected.get("price_first_class", 0)
         if seat_class == "first"
@@ -633,18 +630,19 @@ def auto_book_train(
             train_number=selected.get("train_number", ""),
             price=price,
             currency="CNY",
-            booking_status="pending_payment",
-            booking_ref=order_no,
+            booking_status="pending",
+            booking_ref="",
         )
     except Exception as e:
         print(f"[auto_book] DB save failed: {e}")
 
     return {
-        "status": "pending_payment",
-        "order_no": order_no,
+        "status": "manual_required",
+        "order_no": None,
         "message": (
             f"Train {selected['train_number']} ({origin_station}→{dest_station}) "
-            f"selected. Complete payment + identity verification on 12306 App."
+            "was selected. Complete identity verification and purchase in the 12306 app; "
+            "this selection is not a confirmed ticket."
         ),
         "provider": "12306",
         "type": "train",
@@ -715,29 +713,13 @@ def auto_book_restaurant(
         except Exception:
             pass
 
-        order_no = f"REST-{int(time.time())}"
-
-        # Store in shared_meals DB
-        try:
-            from booking.shared_db import save_meal
-            save_meal(
-                trip_id=trip_id,
-                date=date,
-                meal_slot="dinner",
-                restaurant_name=restaurant_name,
-                is_ordered=1,
-                order_number=order_no,
-                status="ordered",
-            )
-        except Exception as e:
-            print(f"[auto_book] DB save failed: {e}")
-
         return {
-            "status": "ordered",
-            "order_no": order_no,
+            "status": "manual_required",
+            "order_no": None,
             "message": (
-                f"Restaurant '{restaurant_name}' reservation for {date} at {time_slot} "
-                f"({party_size} guests). Confirm on 美团/大众点评 App."
+                f"Restaurant '{restaurant_name}' was prepared for {date} at {time_slot} "
+                f"({party_size} guests). Confirm it in the 美团/大众点评 app; "
+                "no reservation has been recorded as ordered."
             ),
             "provider": "meituan",
             "type": "restaurant",

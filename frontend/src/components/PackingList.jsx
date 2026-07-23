@@ -86,6 +86,11 @@ export default function PackingList({ items, weather, pacing, dailyWeather, heal
   }, [items, dbItemMap])
 
   const hasDailyWeather = dailyWeather && dailyWeather.length > 0
+  const weatherSourceLabel = hasDailyWeather && dailyWeather.every((day) => day.source === 'open_meteo_forecast')
+    ? 'Open-Meteo forecast'
+    : hasDailyWeather && dailyWeather.some((day) => day.source === 'open_meteo_forecast')
+      ? 'Forecast + seasonal estimates'
+      : 'Seasonal estimates — verify'
 
   return (
     <div className="packing-view">
@@ -115,7 +120,7 @@ export default function PackingList({ items, weather, pacing, dailyWeather, heal
               <h3>What to expect each day</h3>
             </div>
             <span className="weather-source">
-              <CloudSun size={14} /> Open-Meteo (real forecast)
+              <CloudSun size={14} /> {weatherSourceLabel}
             </span>
           </div>
           <div className="daily-weather-grid">

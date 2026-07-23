@@ -117,7 +117,9 @@ export default function AgentTown({ agents, statuses, events = [], trip = null, 
   const visibleAgents = agents.filter((agent) => TOWN_META[agent])
   const knownEvents = events.filter((event) => TOWN_META[event?.agent])
   const latestEvent = knownEvents[knownEvents.length - 1]
-  const statusFor = (agent) => paused && statuses[agent] === 'running' ? 'paused' : (statuses[agent] || 'pending')
+  const statusFor = (agent) => (
+    paused && statuses[agent] === 'running' ? 'paused' : (statuses[agent] || 'pending')
+  )
   const doneCount = visibleAgents.filter((agent) => statusFor(agent) === 'done').length
   const runningCount = visibleAgents.filter((agent) => statusFor(agent) === 'running').length
   const channelEvents = knownEvents.slice(-3)
@@ -129,12 +131,10 @@ export default function AgentTown({ agents, statuses, events = [], trip = null, 
       <div className="town-scene-head">
         <div>
           <span className="section-index">AGENT TOWN · LIVE</span>
-          <h1>The crew is building<br /><em>your journey.</em></h1>
+          <h2>The crew is building<br /><em>your journey.</em></h2>
         </div>
-        <div className="town-mission-chip">
-          <span>{origin}</span>
-          <b>→</b>
-          <span>{destination}</span>
+        <div className="town-mission-chip" aria-label={`Planning from ${origin} to ${destination}`}>
+          <span>{origin}</span><b aria-hidden="true">→</b><span>{destination}</span>
         </div>
       </div>
 
@@ -157,11 +157,10 @@ export default function AgentTown({ agents, statuses, events = [], trip = null, 
         <svg className="town-network" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
           {visibleAgents.filter((agent) => agent !== 'orchestrator').map((agent) => {
             const meta = TOWN_META[agent]
-            const status = statusFor(agent)
             return (
               <line
                 key={agent}
-                className={`town-network-line town-network-line--${status}`}
+                className={`town-network-line town-network-line--${statusFor(agent)}`}
                 x1={meta.x}
                 y1={meta.y}
                 x2={TOWN_META.orchestrator.x}
@@ -194,7 +193,7 @@ export default function AgentTown({ agents, statuses, events = [], trip = null, 
           return (
             <div
               key={agent}
-              className={`town-resident town-resident--${status}${isLatest ? ' is-latest' : ''}`}
+              className={`town-resident town-resident--${agent} town-resident--${status}${isLatest ? ' is-latest' : ''}`}
               style={{
                 '--town-x': meta.x,
                 '--town-y': meta.y,
