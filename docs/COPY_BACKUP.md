@@ -20,7 +20,7 @@ Official slogan now in use: `You find the vibe.` / `The Agents plan the journey.
 
 - Intermediate lede (replaced): `Tell us where you're dreaming of. Six AI specialists debate the routes, prices, and trade-offs behind the scenes — so you get one confident plan, not forty open tabs.`
 - Intermediate lede (replaced): `VibeGo doesn't answer one question — it completes an entire travel-planning task from start to finish through a structured, multi-agent workflow.`
-- Lede now in use: `Powered by a structured, multi-agent workflow, VibeGo orchestrates specialized AI agents that collaborate across every dimension of travel planning to deliver one seamless journey.`
+- Lede now in use: `Powered by a structured, multi-agent workflow, VibeGo deploys specialized AI agents that collaborate across every dimension of travel planning to deliver one seamless journey.`
 
 ## Planner heading
 
