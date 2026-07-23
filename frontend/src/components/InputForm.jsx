@@ -329,7 +329,6 @@ export default function InputForm({ onSubmit, intakeDraft, intakeNotice }) {
               <input name="start-date" aria-label="Start date" type="date" value={form.start} onChange={set('start')} required />
               <small>Arrival</small>
             </span>
-            <span className="date-arrow" aria-hidden="true">→</span>
             <span className="date-col">
               <input name="end-date" aria-label="End date" type="date" value={form.end} onChange={set('end')} required />
               <small>Departure</small>

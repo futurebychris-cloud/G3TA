@@ -63,7 +63,7 @@ button { -webkit-tap-highlight-color: transparent; }
 
 .site-header {
   width: min(1440px, calc(100% - 56px));
-  height: 92px;
+  height: 102px;
   margin: 0 auto;
   display: flex;
   align-items: center;
@@ -83,7 +83,7 @@ button { -webkit-tap-highlight-color: transparent; }
 .brand { display: flex; align-items: center; gap: 12px; }
 /* Image logo — transparent-background retina asset (processed from logo.png). */
 .brand-logo {
-  height: 48px;
+  height: 56px;
   width: auto;
   display: block;
   transition: filter 320ms ease, transform 320ms ease;
@@ -584,7 +584,6 @@ button { -webkit-tap-highlight-color: transparent; }
 /* Equal-width columns keep the arrow perfectly centered between the dates. */
 .date-col { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
 .date-col small { color: #9aa2a7; font-size: 0.78rem; }
-.date-arrow { flex: 0 0 auto; align-self: flex-start; margin-top: 2px; color: var(--coral); }
 /* Stretch keeps the currency dropdown exactly the same height as the amount input. */
 .money-input { display: flex; align-items: stretch; gap: 8px; }
 .money-input .currency-select {
@@ -637,13 +636,13 @@ button { -webkit-tap-highlight-color: transparent; }
    selects the matching choices. Quiet, uniform buttons that sit together right
    after the field label; the mic glows while recording — no status text, no
    layout shift. */
-.field-voice-controls { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; flex: 0 0 auto; }
+.field-voice-controls { display: inline-flex; align-items: center; gap: 6px; margin-left: 10px; flex: 0 0 auto; }
 /* Voice assist buttons (va-btn) — fresh style built around react-icons Material
    glyphs (MdVolumeUp / MdMic), which are filled and drawn dead-center on
    Google's 24px grid, so no optical nudges are needed. The icon is sized by
    font-size (react-icons renders at 1em) and centered with flex. */
 .va-btn {
-  width: 36px;
+  width: 46px;
   height: 36px;
   display: inline-flex;
   align-items: center;
