@@ -579,9 +579,12 @@ button { -webkit-tap-highlight-color: transparent; }
 .field input::placeholder { color: #a1a8ab; }
 .field small { color: #9aa2a7; font-size: 0.8rem; }
 .route-arrow { width: 34px; height: 34px; display: grid; place-items: center; align-self: center; justify-self: center; color: var(--coral); background: rgba(255, 104, 71, 0.1); border-radius: 50%; }
-.date-pair { display: flex; align-items: center; gap: 7px; }
+.date-pair { display: flex; align-items: flex-start; gap: 7px; }
 .date-pair input { font-size: 0.82rem; }
-.date-pair span { color: var(--coral); }
+/* Equal-width columns keep the arrow perfectly centered between the dates. */
+.date-col { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.date-col small { color: #9aa2a7; font-size: 0.78rem; }
+.date-arrow { flex: 0 0 auto; align-self: flex-start; margin-top: 8px; color: var(--coral); }
 /* Stretch keeps the currency dropdown exactly the same height as the amount input. */
 .money-input { display: flex; align-items: stretch; gap: 8px; }
 .money-input .currency-select {

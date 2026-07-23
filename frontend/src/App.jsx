@@ -146,7 +146,6 @@ function Landing({ onSubmit, intakeDraft, intakeNotice, onOpenTaskBot }) {
             <span className="section-index">01 / START</span>
             <h2>Where to next?</h2>
           </div>
-          <p className="planner-hint-line">Type & click your responses or speak them in any language: VibeGo can understand any language.</p>
         </div>
         <button type="button" className="taskbot-launch" onClick={onOpenTaskBot}>
           <span className="taskbot-launch-copy">
