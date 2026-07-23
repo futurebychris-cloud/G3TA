@@ -25,7 +25,6 @@ import BudgetView from './components/BudgetView.jsx'
 import PackingList from './components/PackingList.jsx'
 import ReasoningLog from './components/ReasoningLog.jsx'
 import BookingPanel from './components/BookingPanel.jsx'
-import OrbitGlobe from './components/OrbitGlobe.jsx'
 import AgentsRush from './components/AgentsRush.jsx'
 import AccessibilityButton from './components/accessibility/AccessibilityButton.jsx'
 import AccessibilityPanel from './components/accessibility/AccessibilityPanel.jsx'
@@ -126,7 +125,8 @@ function Landing({ onSubmit, intakeDraft, intakeNotice, onOpenTaskBot }) {
           </div>
         </div>
         <div className="hero-visual">
-          <OrbitGlobe />
+          {/* OrbitGlobe retired from the hero (component kept in the repo) —
+              the rushing agents are the hero graphic now. */}
           <AgentsRush />
           <div className="hero-taskcard" aria-hidden="true">
             <div className="hero-taskcard-head"><Sparkles size={14} /> Task-bot at work</div>

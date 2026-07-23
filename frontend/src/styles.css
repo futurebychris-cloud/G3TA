@@ -242,13 +242,15 @@ button { -webkit-tap-highlight-color: transparent; }
 .hero-proof strong { font-size: 1.3rem; letter-spacing: -0.04em; }
 .hero-proof span { color: var(--muted); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; }
 .hero-visual { min-width: 0; display: grid; place-items: center; position: relative; z-index: 1; }
-/* Decorative rushing-agents strip — three AI agents sprinting with suitcases,
-   below the globe. Gentle bob animation, off under reduced motion. */
+/* Rushing-agents hero graphic — three AI agents sprinting with suitcases.
+   The primary hero art (the globe is retired). Normal flow, so it can never
+   be clipped or covered at any viewport size. */
 .agents-rush {
-  position: absolute;
-  right: 6px;
-  bottom: -48px;
-  width: min(400px, 72%);
+  position: relative;
+  z-index: 2;
+  width: min(560px, 96%);
+  justify-self: center;
+  margin: 0 auto;
   pointer-events: none;
 }
 .agents-rush svg { width: 100%; height: auto; display: block; }
@@ -261,16 +263,17 @@ button { -webkit-tap-highlight-color: transparent; }
 /* Decorative "task-bot at work" card — fills the space beside the slogan and
    shows the taskbot story at a glance. Purely presentational (aria-hidden). */
 .hero-taskcard {
-  position: absolute;
-  left: -8px;
-  bottom: -26px;
+  position: relative;
+  z-index: 3;
   min-width: 235px;
+  margin: 22px auto 0;
   padding: 16px 20px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--white);
   box-shadow: 0 22px 50px rgba(10, 32, 52, 0.16);
   transform: rotate(-2deg);
+  justify-self: center;
 }
 .hero-taskcard-head {
   display: flex;
@@ -1180,6 +1183,9 @@ button { -webkit-tap-highlight-color: transparent; }
 @media (max-width: 1100px) {
   .hero { grid-template-columns: 1.08fr .92fr; min-height: 610px; }
   .hero h1 { font-size: clamp(3.8rem, 7vw, 5.6rem); }
+  /* Not enough width for the task card to float over the agents — stack them. */
+  .hero-taskcard { position: static; margin: 16px auto 0; transform: rotate(-1deg); }
+  .agents-rush { width: min(400px, 94%); }
   .core-fields { grid-template-columns: 1fr 32px 1fr 1.35fr; padding: 0 24px; }
   .budget-field { grid-column: 1 / -1; border-top: 1px solid var(--line); border-right: 0; padding: 18px 0; }
   .budget-field .money-input { max-width: 230px; }

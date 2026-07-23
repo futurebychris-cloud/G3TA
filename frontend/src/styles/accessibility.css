@@ -625,9 +625,12 @@
   display: block;
 }
 [data-accessibility-preset="senior"] .hero::before,
-[data-accessibility-preset="senior"] .hero-visual,
 [data-accessibility-preset="senior"] .hero-proof,
 [data-accessibility-preset="senior"] .method-strip { display: none; }
+/* Keep the hero illustration in Senior Mode (it's a single calm image; its
+   animation is already disabled by reduced motion), just smaller. */
+[data-accessibility-preset="senior"] .hero-visual { margin-top: 10px; }
+[data-accessibility-preset="senior"] .agents-rush { width: min(430px, 90%); }
 [data-accessibility-preset="senior"] .hero-copy { max-width: 980px; padding: 58px 0 48px; }
 [data-accessibility-preset="senior"] .hero h1 {
   max-width: 940px;
