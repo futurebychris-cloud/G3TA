@@ -8,7 +8,8 @@ Upgraded from LLM-only estimates to real Playwright scraping:
 
 Output: {"recommended": [...], "cost": number, "reasoning": str}
 
-The agent writes confirmed activities to shared_db.shared_activities.
+The agent writes proposed activities with ``pending`` status to
+shared_db.shared_activities.
 """
 from __future__ import annotations
 
@@ -21,8 +22,9 @@ import time
 from datetime import datetime
 from typing import Any
 
-from .base import llm_reason, trip_days
+from .base import report_progress, trip_days
 from .known_attractions import _known_attractions
+from services.runtime_cache import cached_call
 
 # ---- LLM system prompts ----
 
@@ -37,6 +39,13 @@ DISCOVERY_PROMPT = (
     "  recommended_ids (array of selected activity ids, one per day), "
     "  and reasoning (one sentence)."
 )
+
+
+def _public_discovery_enabled() -> bool:
+    """Keep slow, fragile browser discovery opt-in for interactive planning."""
+    return os.getenv("ACTIVITY_PUBLIC_WEB_SEARCH_ENABLED", "0").strip().casefold() in {
+        "1", "true", "yes", "on",
+    }
 
 TIME_SCHEDULING_PROMPT = (
     "You are a time scheduler for trip activities. Given activities with opening hours "
@@ -355,10 +364,17 @@ def run(trip_input: dict) -> dict:
 
     # ---- Mode A: Must-go sites ----
     if must_go_sites:
+        report_progress(trip_input, "正在整理必去景点与每日时段")
         for site in must_go_sites:
             site_name = site if isinstance(site, str) else site.get("name", "")
-            print(f"[activity_agent] scraping ticket info for: {site_name}")
-            ticket_info = _scrape_ticket_price(site_name, destination)
+            # Ticket detail scraping is intentionally deferred until the user
+            # opens a booking/detail flow. It used to launch one browser for
+            # every must-go site during initial planning.
+            ticket_info = {
+                "price": 0,
+                "opening_hours": "",
+                "description": "Ticket price and opening hours require verification.",
+            }
             # Classify type FIRST so crowd_density_service gets attraction_type
             act_type = _classify_activity_type(site_name, ticket_info.get("description", ""), activity_styles)
             time_info = _determine_best_time(
@@ -400,39 +416,58 @@ def run(trip_input: dict) -> dict:
 
     # ---- Mode B: Discovery (no must-go sites) ----
     if not activities:
-        # Try Ctrip first
-        scraped = _search_ctrip_attractions(destination)
-        if not scraped:
-            scraped = _search_web_attractions(destination, activity_styles)
+        scraped = []
+        if _public_discovery_enabled():
+            report_progress(trip_input, "正在查找目的地热门体验")
 
-        # Use LLM to select best matches
+            def _discover():
+                found = _search_ctrip_attractions(destination)
+                return found or _search_web_attractions(destination, activity_styles)
+
+            scraped = cached_call(
+                "activity-discovery",
+                (destination, tuple(activity_styles)),
+                _discover,
+                ttl_seconds=1800,
+                persist=True,
+                source="ctrip_playwright_attractions",
+                snapshot=True,
+            )
+        else:
+            report_progress(trip_input, "正在整理目的地体验资料")
+
+        # Rank structured provider results directly. Cross-domain narrative
+        # reasoning remains the final orchestrator's responsibility.
         if scraped:
             for i, s in enumerate(scraped):
                 s["id"] = f"act_{trip_id}_{i}"
                 s["type"] = _classify_activity_type(s["name"], "", activity_styles)
 
-            result = llm_reason(DISCOVERY_PROMPT, {
-                "destination": destination,
-                "activity_styles": activity_styles,
-                "num_days": target,
-                "total_budget": trip_input.get("budget", {}),
-                "daily_activity_budget": trip_input.get("_budget_caps", {}).get("activity"),
-                "all_preferences": preferences,
-                "options": scraped,
-            })
-
-            selected_ids = (result or {}).get("recommended_ids", [])
-            if not selected_ids:
-                # Fallback: top rated
-                by_rating = sorted(scraped, key=lambda s: s.get("rating", 0), reverse=True)
-                selected_ids = [s["id"] for s in by_rating[:target]]
+            report_progress(trip_input, "正在按评分、偏好和预算筛选体验")
+            by_rating = sorted(
+                scraped,
+                key=lambda s: (
+                    str(s.get("type", "")).casefold() in {
+                        str(style).casefold() for style in activity_styles
+                    },
+                    float(s.get("rating", 0) or 0),
+                    -float(s.get("price", 0) or 0),
+                ),
+                reverse=True,
+            )
+            selected_ids = [s["id"] for s in by_rating[:target]]
 
             by_id = {s["id"]: s for s in scraped}
             for aid in selected_ids:
                 if aid in by_id and len(activities) < target:
                     s = by_id[aid]
-                    # Get real ticket price
-                    ticket_info = _scrape_ticket_price(s["name"], destination)
+                    # Use list-page facts for the first result. Detailed ticket
+                    # scraping is deferred to explicit booking/detail actions.
+                    ticket_info = {
+                        "price": s.get("price", 0),
+                        "opening_hours": s.get("opening_hours", ""),
+                        "description": s.get("description", ""),
+                    }
                     time_info = _determine_best_time(
                         ticket_info.get("opening_hours", ""), activity_styles, destination,
                         s.get("type", "default")
@@ -457,43 +492,32 @@ def run(trip_input: dict) -> dict:
                     activity["meal_slot"] = _classify_meal_slot(activity["start_time"], activity["end_time"])
                     activities.append(activity)
 
-        # LLM fallback with KNOWN real attraction names (never placeholder names)
+        # Deterministic fallback with known real names where available.
         if not activities:
             known = _known_attractions(destination, target, activity_styles)
             if known:
                 activities = known
                 print(f"[activity_agent] using known attractions DB: {len(activities)} items for {destination}")
             else:
-                # Absolute last resort: LLM must generate names (city not in our DB)
-                from .base import llm_reason as _lr
-                fallback = _lr(DISCOVERY_PROMPT, {
-                    "destination": destination,
-                    "activity_styles": activity_styles,
-                    "num_days": target,
-                    "total_budget": trip_input.get("budget", {}),
-                    "all_preferences": preferences,
-                    "options": [{"id": f"fb_{i}", "name": f"{destination} attraction {i+1}", "price": 50 + i*20,
-                                 "rating": 4.0 + (i*0.2), "type": "culture", "source": "llm"}
-                                for i in range(10)],
-                })
-                selected = (fallback or {}).get("recommended_ids", [f"fb_{i}" for i in range(target)])
-                for i, aid in enumerate(selected[:target]):
+                # Unknown cities keep honest, destination-labelled placeholders
+                # rather than spending another model request on unverifiable facts.
+                for i in range(target):
                     activities.append({
-                        "id": aid,
-                        "name": f"{destination} Attraction {i+1}",
+                        "id": f"fb_{i}",
+                        "name": f"{destination} local experience {i+1} (verify)",
                         "location": destination,
-                        "description": f"Popular attraction in {destination}",
+                        "description": f"Verify a suitable local experience in {destination}.",
                         "type": "culture",
                         "start_time": "09:00",
                         "end_time": "12:00",
-                        "ticket_price": 50,
-                        "total_price": 50 * num_people,
-                        "opening_hours": "09:00-17:00",
+                        "ticket_price": 0,
+                        "total_price": 0,
+                        "opening_hours": "",
                         "best_visit_time": "09:00-11:00",
                         "population_level": "medium",
                         "rating": 4.0,
                         "meal_slot": "lunch",
-                        "source": "llm",
+                        "source": "deterministic_fallback",
                     })
 
     # ---- Store to shared database ----
@@ -515,7 +539,7 @@ def run(trip_input: dict) -> dict:
                 best_visit_time=act.get("best_visit_time", ""),
                 population_level=act.get("population_level", ""),
                 meal_slot=act.get("meal_slot", ""),
-                status="confirmed",
+                status="pending",
             )
         print(f"[activity_agent] saved {len(activities)} activities to shared DB")
     except Exception as e:
@@ -542,7 +566,7 @@ def run(trip_input: dict) -> dict:
         "recommended": activities,
         "cost": round(total_cost, 2),
         "reasoning": f"Selected {len(activities)} activities in {destination} using "
-                     f"{'Ctrip real data' if any(a.get('source') == 'ctrip' for a in activities) else 'web search + LLM'}.",
+                     f"{'Ctrip public listings' if any(a.get('source') == 'ctrip' for a in activities) else 'provider search + labeled estimates'}.",
         "meal_slot_handoff": meal_slot_handoff,
         "destination": destination,
         "verification_required": True,

@@ -7,7 +7,7 @@ export default function ReadAloudButton({ id, text, label = 'this content' }) {
   const speech = useTextToSpeech(id, text)
   if (!settings.readAloud) return null
   if (!speech.supported) {
-    return <span className="speech-unavailable" role="status">Read aloud is unavailable in this browser.</span>
+    return <span className="speech-unavailable" role="status">Piper read aloud is unavailable in this browser.</span>
   }
 
   const primaryAction = speech.state === 'speaking' ? speech.pause : speech.state === 'paused' ? speech.resume : speech.play
@@ -15,7 +15,9 @@ export default function ReadAloudButton({ id, text, label = 'this content' }) {
     ? `Pause reading ${label}`
     : speech.state === 'paused'
       ? `Resume reading ${label}`
-      : `Read ${label} aloud`
+      : speech.state === 'loading'
+        ? `Preparing ${label} with Piper`
+        : `Read ${label} aloud`
 
   return (
     <span className="read-aloud-controls">
@@ -23,13 +25,14 @@ export default function ReadAloudButton({ id, text, label = 'this content' }) {
         type="button"
         className={speech.state !== 'idle' ? 'read-aloud-button active' : 'read-aloud-button'}
         onClick={primaryAction}
+        disabled={speech.state === 'loading'}
         aria-label={primaryLabel}
         title={primaryLabel}
       >
         {speech.state === 'speaking' ? <Pause size={16} aria-hidden="true" />
           : speech.state === 'paused' ? <Play size={16} aria-hidden="true" />
             : <Volume2 size={16} aria-hidden="true" />}
-        <span>{speech.state === 'speaking' ? 'Pause' : speech.state === 'paused' ? 'Resume' : 'Read aloud'}</span>
+        <span>{speech.state === 'speaking' ? 'Pause' : speech.state === 'paused' ? 'Resume' : speech.state === 'loading' ? 'Preparing…' : 'Read aloud'}</span>
       </button>
       {speech.state !== 'idle' && (
         <button type="button" className="stop-reading-button" onClick={speech.stop} aria-label={`Stop reading ${label}`}>
@@ -37,7 +40,13 @@ export default function ReadAloudButton({ id, text, label = 'this content' }) {
         </button>
       )}
       <span className="sr-only" role="status" aria-live="polite">
-        {speech.state === 'speaking' ? `Reading ${label}` : speech.state === 'paused' ? `Reading ${label} paused` : ''}
+        {speech.error || (speech.state === 'loading'
+          ? `Preparing ${label} with Piper`
+          : speech.state === 'speaking'
+            ? `Reading ${label}`
+            : speech.state === 'paused'
+              ? `Reading ${label} paused`
+              : '')}
       </span>
     </span>
   )

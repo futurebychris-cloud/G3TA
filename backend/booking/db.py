@@ -1,11 +1,9 @@
-"""PostgreSQL store for the Ctrip hotel booking pipeline.
+"""Legacy PostgreSQL audit store for the operator-only Ctrip experiment.
 
 Two tables:
-  * users            — traveler identity (name, ID number, phone). The ID/phone the
-                       pipeline needs to auto-fill the Ctrip booking form.
-  * confirmed_routes — a "confirmed route": a hotel booking the pipeline has driven
-                       to the payment step (status pending_payment) and that the user
-                       has paid + marked confirmed. This is the durable audit record.
+  * users            — legacy traveler records; the public app no longer writes them.
+  * confirmed_routes — payment-checkpoint audit rows. The table name is retained
+                       for schema compatibility and does not imply confirmation.
 
 Uses psycopg2 connection pool (thread-safe); no module-level lock needed.
 """
@@ -77,6 +75,18 @@ def get_user(id_number: str) -> dict | None:
         cur.execute(
             "SELECT id, name, id_number, phone, created_at FROM users WHERE id_number = %s",
             (id_number,),
+        )
+        row = cur.fetchone()
+    return _serialize_row(row, _COLS_USER) if row else None
+
+
+def get_user_by_id(user_id: int) -> dict | None:
+    """Return exactly one traveler selected by the authenticated caller."""
+    init_db()
+    with get_cursor() as cur:
+        cur.execute(
+            "SELECT id, name, id_number, phone, created_at FROM users WHERE id = %s",
+            (user_id,),
         )
         row = cur.fetchone()
     return _serialize_row(row, _COLS_USER) if row else None

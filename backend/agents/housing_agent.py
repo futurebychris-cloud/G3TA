@@ -1,7 +1,8 @@
 """Housing Agent.
 
 Responsibility (PRD §7): recommend lodging within budget, near the planned activity zone.
-Data source: destination-aware AI lodging estimates.
+Data source: configured hotel providers, then an authenticated local Ctrip
+listing session. No lodging price is invented when providers are unavailable.
 Output shape: {"options": [...], "recommended": {...}, "cost": number} (+ reasoning, nights).
 
 Note: this agent recommends its *preferred* lodging. Whole-trip budget reconciliation
@@ -10,15 +11,15 @@ Note: this agent recommends its *preferred* lodging. Whole-trip budget reconcili
 """
 from services.hotels_provider import resolve_hotels
 
-from .base import llm_reason, trip_days
+from .base import report_progress, trip_days
 
 SYSTEM_PROMPT = (
     "You are the Housing Agent in a multi-agent trip planner. From the given lodging options, "
-    "pick the best single place to stay for the whole trip, weighing rating, REAL price per "
-    "night (already scraped live from 携程/Ctrip), area convenience, and how it matches the "
+    "pick the best single place to stay for the whole trip, weighing rating, provider price per "
+    "night, area convenience, source confidence, and how it matches the "
     "traveler's activity style. "
     "Every option is for the exact supplied destination; never choose or mention another city. "
-    "The prices are REAL scraped values — use them as-is, do not adjust or estimate. "
+    "Use provider prices as-is and never invent availability. "
     "Return ONLY a JSON object with keys: recommended_id (the id of your pick) and reasoning "
     "(one sentence)."
 )
@@ -33,6 +34,7 @@ def run(trip_input: dict) -> dict:
         nightly_cap = max(float(raw_nightly_cap), 0) if raw_nightly_cap is not None else None
     except (TypeError, ValueError):
         nightly_cap = None
+    report_progress(trip_input, "正在查询住宿价格与位置")
     raw_options = resolve_hotels(
         trip_input["location"],
         trip_input["dates"],
@@ -42,8 +44,8 @@ def run(trip_input: dict) -> dict:
         budget=trip_input.get("budget", {}),
     )
 
-    # REAL prices only — NEVER fabricate an estimated price.
-    # A price counts as real when it is a positive number below an absurd-cap sanity
+    # Provider prices only — never fabricate an estimated price.
+    # A price counts as usable when it is a positive number below an absurd-cap sanity
     # bound (anything >= 100k CNY/night is treated as a scraping artifact / no price).
     _MAX_REALISTIC = 100000
     _city = trip_input["location"]
@@ -72,30 +74,18 @@ def run(trip_input: dict) -> dict:
 
     options = real_options
 
-    payload = {
-        "destination": trip_input["location"],
-        "nights": nights,
-        "total_budget": trip_input["budget"],
-        "preferences": trip_input.get("preferences", {}),
-        "time_constraints": trip_input.get("time_constraints", ""),
-        "options": options,
-    }
-    result = llm_reason(SYSTEM_PROMPT, payload)
+    report_progress(trip_input, "正在按价格、评分和预算筛选住宿")
 
-    recommended = None
-    reasoning = None
-    if result and result.get("recommended_id"):
-        recommended = next((o for o in options if o["id"] == result["recommended_id"]), None)
-        reasoning = result.get("reasoning")
-    if recommended is None:
-        # Fallback: best rating-for-price across REAL-priced options only.
-        def _score(o):
-            price = o.get("price_per_night") or 0
-            rating = o.get("rating") or 0
-            return rating / max(price, 1)
+    # Selection is deterministic because all relevant facts are already
+    # structured. The final orchestrator still explains cross-domain trade-offs.
+    def _score(o):
+        price = o.get("price_per_night") or 0
+        rating = o.get("rating") or 0
+        within_cap = nightly_cap is None or price <= nightly_cap
+        return (1 if within_cap else 0, rating / max(price, 1), rating)
 
-        recommended = max(options, key=_score)
-        reasoning = "Best rating-for-price selected (LLM reasoning unavailable)."
+    recommended = max(options, key=_score)
+    reasoning = "Best provider-priced rating-for-price option within the housing cap."
 
     price = recommended.get("price_per_night")
     cost = (price * nights) if price is not None else None

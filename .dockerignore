@@ -1,0 +1,14 @@
+.git
+.github
+.env
+.env.local
+*.env.local
+**/__pycache__
+**/.pytest_cache
+backend/.venv
+frontend/node_modules
+frontend/dist
+backend/booking/*.db
+backend/booking/*.sqlite*
+*.log
+.DS_Store

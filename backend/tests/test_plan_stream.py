@@ -55,6 +55,10 @@ class PlanStreamTests(unittest.TestCase):
             if line.startswith("data: ")
         ]
         self.assertFalse(any(payload.get("type") == "error" for payload in payloads))
+        progress = [payload for payload in payloads if payload.get("type") == "agent_progress"]
+        self.assertTrue(progress)
+        self.assertTrue(all("detail" in payload for payload in progress))
+        self.assertTrue(all("elapsed_seconds" in payload for payload in progress))
         self.assertEqual(payloads[-1], {"type": "complete", "result": complete_result})
         self.assertEqual(calls[:2], [("transportation", None), ("budget", None)])
         self.assertTrue(all(caps == {"transportation": 1000} for _, caps in calls[2:]))

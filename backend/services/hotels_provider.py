@@ -1,18 +1,17 @@
 """Hotel data resolver — single entry point for the Housing Agent and the booking UI.
 
-Resolution order (all REAL data, never hardcoded):
-    1. PRIMARY  — the multi-provider real hotel API system (Hotelbeds / Amadeus /
+Resolution order:
+    1. PRIMARY  — the configured hotel API system (Hotelbeds / Amadeus /
                   RapidAPI / Tongcheng / eLong), whichever has credentials set.
-    2. FALLBACK — the Playwright Ctrip (携程) pipeline: search_hotels scrapes Ctrip
-                  live and pipeline.search_and_filter applies the budget/preference
-                  filters. This is the user-specified fallback.
-    3. EMERGENCY — OpenStreetMap Overpass real lodging POIs (no auth, no price).
-                  Used only when both the API and Ctrip are unreachable, so the UI
-                  always shows genuine hotels instead of an error.
+    2. FALLBACK — the Playwright Ctrip (携程) pipeline when an authenticated local
+                  session exists: search_hotels reads listings and
+                  pipeline.search_and_filter applies budget/preference filters.
+    3. EMERGENCY — OpenStreetMap Overpass lodging POIs (no auth, no live price),
+                  used only by the explicit comparison UI. Planning skips this
+                  slow source because it cannot contribute a verified rate.
 
 Every tier tags its results with `source` so the UI can show where data came from.
-The strict no-mock contract is preserved: a missing tier raises and the next tier
-is tried; only Overpass (real data) ends the chain.
+Offline demo records, when explicitly enabled, are tagged as mock data.
 
 After search, Ctrip results are enriched with detail data (images, description,
 lat/lng, room types, amenities) via the ctrip_detail scraper.
@@ -24,6 +23,7 @@ from booking.pipeline import search_and_filter, filter_results
 from booking.schemas import HotelSearchRequest
 from booking import ctrip, osm
 from booking.ctrip_detail import enrich_hotels_batch
+from services.runtime_cache import cached_call
 
 
 def _normalize_api(opts: list[dict]) -> list[dict]:
@@ -36,6 +36,38 @@ def _normalize_api(opts: list[dict]) -> list[dict]:
 
 
 def resolve_hotels(
+    location: str,
+    dates: dict,
+    max_price_per_night: float | None = None,
+    min_rating: float | None = None,
+    preferences: list[str] | None = None,
+    budget: dict | None = None,
+) -> list[dict]:
+    return cached_call(
+        "hotel-planning-search",
+        (
+            location,
+            dates,
+            max_price_per_night,
+            min_rating,
+            tuple(preferences or []),
+        ),
+        lambda: _resolve_hotels_uncached(
+            location,
+            dates,
+            max_price_per_night,
+            min_rating,
+            preferences,
+            budget,
+        ),
+        ttl_seconds=900,
+        persist=True,
+        source="hotel_provider_or_ctrip_playwright",
+        snapshot=True,
+    )
+
+
+def _resolve_hotels_uncached(
     location: str,
     dates: dict,
     max_price_per_night: float | None = None,
@@ -63,21 +95,17 @@ def resolve_hotels(
         )
         results = [h.model_dump() for h in search_and_filter(req)]
 
-        # Enrich with detail data
-        try:
-            check_in = dates.get("start", "")
-            check_out = dates.get("end", "")
-            nights = _nights_between(check_in, check_out)
-            results = enrich_hotels_batch(results, check_in, check_out, nights, max_enrich=3)
-        except Exception as exc:
-            print(f"[provider] detail enrichment failed (non-fatal): {exc}")
-
+        # Keep the planning path fast: detail pages, galleries, rooms and
+        # amenities are loaded only from the explicit booking/search flow.
         return results
     except Exception as exc:
         print(f"[provider] Ctrip Playwright fallback failed ({exc}); -> OpenStreetMap.")
 
-    # 3) EMERGENCY: real OpenStreetMap lodging (no price, clearly labeled).
-    return osm.search_osm_hotels(location, max_price_per_night, min_rating, preferences)
+    # OpenStreetMap has no rate or availability. The planning agent only accepts
+    # priced lodging, so querying several Overpass endpoints here would add a
+    # long delay without changing its result. The explicit stay-comparison flow
+    # below still uses OSM as a place-record fallback.
+    return []
 
 
 def _nights_between(start: str, end: str) -> int:
@@ -98,10 +126,10 @@ def raw_search(
     min_rating: float | None = None,
     preferences: list[str] | None = None,
 ) -> tuple[list[dict], str]:
-    """Return (raw_hotels, source_tag) from the first reachable real source.
+    """Return (raw_hotels, source_tag) from the first reachable source.
 
     Used by the streaming booking endpoint so it can emit a 'search' stage before
-    the 'filtering' stage. Raises only if every real source is unreachable.
+    the 'filtering' stage.
 
     For Ctrip results, hotel detail data (images, description, lat/lng, rooms,
     amenities) is enriched via the ctrip_detail scraper.
@@ -136,7 +164,12 @@ def raw_search(
         except Exception as exc:
             print(f"[provider] detail enrichment failed (non-fatal): {exc}")
 
-        return hotels, "ctrip"
+        source = (
+            "mock"
+            if hotels and all(hotel.get("source") == "mock" for hotel in hotels)
+            else "ctrip"
+        )
+        return hotels, source
     except Exception as exc:
         print(f"[provider] Ctrip Playwright failed ({exc}); -> OpenStreetMap.")
 

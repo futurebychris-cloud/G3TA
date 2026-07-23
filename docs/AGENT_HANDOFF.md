@@ -4,11 +4,11 @@ This document is the source of truth for what each agent consumes and produces.
 Read it before extending an agent or wiring a new data source. A teammate's own
 AI coding agent should be able to work from this file alone.
 
-Every agent exposes `run(trip_input: dict) -> dict` in `backend/agents/<name>_agent.py`.
-Every agent reads its data through a destination-aware function in `backend/services/`.
-Until real provider APIs are connected, those services generate DeepSeek estimates
-and mark them `verification_required`. The Orchestrator is the only component that
-sees all six outputs together and enforces destination isolation.
+Every agent exposes `run(trip_input: dict) -> dict`; `backend/agents/__init__.py`
+selects the current v2 implementation where present. Provider adapters live in
+`backend/services/`. Directly queried records, estimates, mocks, and optional
+repository snapshots retain distinct source labels. The Orchestrator is the only
+component that sees all six outputs together and enforces destination isolation.
 
 ---
 
@@ -23,13 +23,20 @@ sees all six outputs together and enforces destination isolation.
   "preferences": {
     "bites": ["Thai", "American"],
     "transportation_type": ["flight"],
-    "activity_style": ["cultural", "adventure"]
+    "activity_style": ["cultural", "adventure"],
+    "taste": ["spicy"],
+    "food_budget": 400,
+    "budget_priority": { "housing": 0.35, "food": 0.2 }
   },
   "accessibility": {
     "easy_reading": false,
     "preset": "standard"
   },
-  "time_constraints": "fixed dates"
+  "time_constraints": "fixed dates",
+  "must_go_sites": ["The Bund"],
+  "num_people": 2,
+  "is_group": true,
+  "request_id": "a-unique-client-generated-id"
 }
 ```
 
@@ -80,17 +87,20 @@ formatting guidance to Planning and Orchestrator prompts without changing struct
   "coverage": {
     "requested_modes": ["flight"], "available_modes": ["flight"], "note": null
   },
+  "booking_result": {
+    "status": "comparison_only",
+    "message": "Verify the current fare and complete purchase with the provider."
+  },
   "destination": "Shanghai",
   "verification_required": true
 }
 ```
 
-`route_points` and `route_summary` are additive map metadata. Existing real flight
-providers may omit airport coordinates; the agent then returns an empty
+`route_points` and `route_summary` are additive map metadata. Existing providers
+may omit airport coordinates; the agent then returns an empty
 `route_points` array while preserving the original output contract. The current
-AI-backed service can return estimated terminal coordinates, validates their ranges,
-requires exact origin/destination echoes plus an AMap-compatible coordinate-system label,
-and marks every option as requiring verification. It is not live schedule or inventory data.
+fallback is explicitly estimated and may omit terminal coordinates. Planning is
+always read-only: the transportation agent never starts an order.
 
 ## 3. Housing Agent — `housing_agent.run(trip_input)`
 
@@ -157,9 +167,9 @@ not covered by the live response is returned in the same daily shape with
 
 ## Orchestrator — `orchestrator.plan(trip_input)`
 
-Runs all six agents, reconciles the combined cost against the budget (re-queries
-the Budget Agent and downgrades lodging on overflow), then makes one DeepSeek call
-to synthesize the schedule. Final itinerary object:
+Runs Transportation first, then Budget, Activity and Housing in parallel, Food,
+Planning, and finally synthesis. It reconciles the combined cost against the
+budget and records any lodging substitution. Final itinerary object:
 
 ```json
 {
@@ -179,6 +189,11 @@ to synthesize the schedule. Final itinerary object:
   "weather_source": "open_meteo_forecast",
   "weather_location": {…},
   "reasoning_log": [ { "agent": "Housing", "note": "…" }, { "agent": "Orchestrator", "note": "…downgrade trade-off…" } ],
+  "data_provenance": {
+    "mode": "mixed",
+    "live_sources": ["open-meteo"],
+    "estimated_or_unverified_sources": ["deepseek_estimate"]
+  },
   "agent_outputs": { "budget": {…}, "transportation": {…}, "housing": {…}, "food": {…}, "activity": {…}, "planning": {…} }
 }
 ```

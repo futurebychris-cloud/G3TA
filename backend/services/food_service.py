@@ -1,8 +1,8 @@
-"""Real restaurant data for food options.
+"""Provider restaurant records plus labeled dining estimates.
 
-Replaces DeepSeek LLM estimates with real restaurant data from:
-1. Amap POI search (Chinese cities) — real restaurant names, locations, ratings
-2. Numbeo meal price data — real per-meal cost estimates
+Uses:
+1. Amap POI search (Chinese cities) — restaurant names, locations, ratings
+2. Numbeo-derived meal-price references
 3. Cuisine mapping for international destinations
 
 Usage:
@@ -10,15 +10,6 @@ Usage:
     → [{id, name, cuisine, price, meal_type, area, rating, tags}, ...]
 """
 from __future__ import annotations
-
-import hashlib
-import json
-import math
-import re
-import time
-import urllib.parse
-import urllib.request
-from typing import Any
 
 from ._ai import (
     ESTIMATE_NOTE,
@@ -93,70 +84,25 @@ def _search_amap_restaurants(
     Uses Amap POI search API (free tier, 5000 queries/day).
     Returns real restaurant names, locations, and ratings.
     """
-    import os
-    amap_key = os.getenv("AMAP_KEY", os.getenv("GAODE_KEY", ""))
-    if not amap_key:
-        return []
-
     try:
-        # First geocode the city to get center coordinates
-        from services.gaode_service import geocode_city
-        coords = geocode_city(destination)
-        if not coords:
-            return []
-
-        # Amap POI search — restaurants
-        poi_type = _CUISINE_AMAP_TYPES.get(
-            cuisine_type.lower(), "餐厅"
+        # Use the shared AMap resolver so city adcode resolution, city limiting,
+        # rate limiting, and out-of-city validation have one implementation.
+        from services.gaode_service import search_restaurants
+        rows = search_restaurants(
+            destination,
+            cuisine=_CUISINE_AMAP_TYPES.get(cuisine_type.lower(), "餐厅"),
+            max_results=count,
         )
-        # Safe URL construction: Amap rejects non-ASCII in the raw URL, so the
-        # entire query string is UTF-8 encoded (quote already does this, but we
-        # guard against any stray unicode by encoding/decoding first).
-        safe_destination = destination.encode("utf-8", "ignore").decode("utf-8")
-        safe_poi = poi_type.encode("utf-8", "ignore").decode("utf-8")
-        url = (
-            f"https://restapi.amap.com/v3/place/text"
-            f"?key={amap_key}"
-            f"&keywords={urllib.parse.quote(safe_poi)}"
-            f"&city={urllib.parse.quote(safe_destination)}"
-            f"&types=餐饮服务"
-            f"&offset={min(count, 25)}"
-            f"&page=1"
-            f"&extensions=all"
-        )
-        req = urllib.request.Request(url, headers={
-            "User-Agent": "G3TA-TripPlanner/1.0",
-        })
-        with urllib.request.urlopen(req, timeout=10) as r:
-            data = json.loads(r.read().decode("utf-8"))
-
-        pois = data.get("pois", [])
         results = []
-        for poi in pois[:count]:
-            name = poi.get("name", "")
-            address = poi.get("address", "")
-            rating_str = poi.get("biz_ext", {}).get("rating", "0")
-            try:
-                rating_val = float(rating_str)
-            except (ValueError, TypeError):
-                rating_val = 0
-
-            location = poi.get("location", "")
-            lat, lng = None, None
-            if location and "," in location:
-                try:
-                    parts = location.split(",")
-                    lng, lat = float(parts[0]), float(parts[1])
-                except (ValueError, IndexError):
-                    pass
-
+        for row in rows[:count]:
             results.append({
-                "name": name,
-                "area": address or destination,
-                "rating": min(rating_val, 5.0),
-                "lat": lat,
-                "lng": lng,
-                "source": "amap_poi",
+                "name": row.get("name", ""),
+                "area": row.get("address") or destination,
+                "rating": min(float(row.get("rating", 0) or 0), 5.0),
+                "lat": row.get("lat"),
+                "lng": row.get("lng"),
+                "source": row.get("source", "gaode_poi"),
+                "provider_city": row.get("provider_city", destination),
             })
         return results
     except Exception as e:
@@ -247,10 +193,12 @@ def get_food_options(
     preferences: dict | None = None,
     time_constraints: str = "",
     daily_budget: float | None = None,
+    *,
+    use_ai: bool = True,
 ) -> list[dict]:
-    """Get real restaurant options for a destination.
+    """Get provider-backed or clearly labeled restaurant options.
 
-    PRIMARY: Amap POI search (real restaurants with names, ratings, locations)
+    PRIMARY: Amap POI search (restaurant names, ratings, locations)
     SECONDARY: Destination-aware DeepSeek estimates for missing meal slots
     FALLBACK: Descriptive options with Numbeo prices + '(verify)' suffix
     """
@@ -295,9 +243,9 @@ def get_food_options(
                 "lat": rr.get("lat"),
                 "lng": rr.get("lng"),
                 "tags": [cuisine],
-                "source": "amap_poi",
+                "source": rr.get("source", "gaode_poi"),
             }, destination)
-            option["source"] = "amap_poi"
+            option["source"] = rr.get("source", "gaode_poi")
             seen.add(name.casefold())
             options.append(option)
             if len(options) >= count:
@@ -308,7 +256,7 @@ def get_food_options(
     # Fill missing choices with destination-aware estimates. This is deliberately
     # field-aware: a local restaurant brand may contain "Tokyo", while a Tokyo
     # area is invalid for a different requested destination.
-    if len(options) < count:
+    if use_ai and len(options) < count:
         result = generate_json(SYSTEM_PROMPT, {
             "destination": destination,
             "selected_cuisines_in_priority_order": cuisines,

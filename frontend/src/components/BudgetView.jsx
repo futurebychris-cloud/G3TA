@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react'
-import { AlertTriangle, Check, CircleDollarSign, Gauge, TrendingUp, Receipt, Sliders, RotateCcw } from 'lucide-react'
+import { AlertTriangle, Check, CircleDollarSign, Gauge, TrendingUp, Sliders, RotateCcw } from 'lucide-react'
 
 const LABELS = {
   transportation: 'Getting there',
@@ -23,7 +23,7 @@ function colorForKey(key) {
 }
 
 export default function BudgetView({ cost, budgetAgent, onBudgetChange }) {
-  const { breakdown, total, budget, currency, within_budget: withinBudget, expense_items: expenseItems } = cost
+  const { breakdown, total, budget, currency, within_budget: withinBudget } = cost
   const entries = Object.entries(breakdown).filter(([, v]) => v > 0)
   const maximum = Math.max(...Object.values(breakdown).filter(v => v > 0), 1)
 
@@ -163,35 +163,6 @@ export default function BudgetView({ cost, budgetAgent, onBudgetChange }) {
           })}
         </div>
       </div>
-
-      {/* Expense line items — real itemized costs from each agent */}
-      {expenseItems && expenseItems.length > 0 && (
-        <div className="budget-overview" style={{ marginTop: 0 }}>
-          <div className="budget-breakdown" style={{ width: '100%' }}>
-            <div className="budget-breakdown-head">
-              <h3><Receipt size={16} style={{ display: 'inline', marginRight: 6, verticalAlign: -2 }} />Expense details</h3>
-            </div>
-            {expenseItems.map((item, idx) => (
-              <div className="budget-line" key={idx}>
-                <span className="budget-swatch" style={{ background: colorForKey(item.category) }} />
-                <span className="budget-line-label">
-                  <strong>{item.label}</strong>
-                  <small>{item.detail}</small>
-                </span>
-                <strong className="budget-amount" style={{ marginLeft: 'auto' }}>
-                  {item.currency} {item.amount.toLocaleString()}
-                </strong>
-              </div>
-            ))}
-            <div className="budget-line" style={{ borderTop: '1px solid #e5e7eb', paddingTop: 10, marginTop: 4 }}>
-              <span className="budget-line-label"><strong>Total</strong></span>
-              <strong className="budget-amount" style={{ marginLeft: 'auto' }}>
-                {currency} {activeTotal.toLocaleString()}
-              </strong>
-            </div>
-          </div>
-        </div>
-      )}
 
       <div className="budget-detail-grid">
         {budgetAgent?.daily_caps && (

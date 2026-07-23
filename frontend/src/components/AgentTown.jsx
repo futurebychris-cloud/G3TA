@@ -74,6 +74,10 @@ function eventMessage(event) {
   const meta = TOWN_META[event?.agent]
   if (!meta) return ''
   if (event.type === 'start') return meta.running
+  if (event.type === 'progress') {
+    const elapsed = Number.isFinite(event.elapsed_seconds) ? ` · ${event.elapsed_seconds}s` : ''
+    return truncate(`${event.detail || meta.running}${elapsed}`)
+  }
 
   const output = event.output || {}
   const reasoning = output.reasoning || output.pacing_notes

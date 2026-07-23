@@ -11,6 +11,18 @@ def _output(destination="美国", **extra):
 
 
 class OrchestratorGeographyTests(unittest.TestCase):
+    def test_model_summary_must_name_the_requested_destination(self):
+        self.assertIsNone(
+            orchestrator._safe_model_summary("Shanghai", "A relaxed Tokyo weekend.")
+        )
+        self.assertEqual(
+            orchestrator._safe_model_summary(
+                "Shanghai",
+                "A balanced five-day Shanghai trip with a flexible pace.",
+            ),
+            "A balanced five-day Shanghai trip with a flexible pace.",
+        )
+
     def test_allows_tokyo_text_in_reasoning_connection_and_local_venue_name(self):
         outputs = {
             "transportation": _output(

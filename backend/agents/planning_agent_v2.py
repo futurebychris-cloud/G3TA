@@ -1,7 +1,7 @@
 """Planning Agent v2 (Journey Editor).
 
 Upgraded from LLM-only estimates:
-1. Open-Meteo weather API (free, no key) for real forecast data
+1. Open-Meteo forecast data, or a clearly labeled prior-year climate proxy
 2. Enriched packing checklist with 5 categories (clothing/items/supportive/legal/devices)
 3. Clothing recommendations by temperature range
 4. Health advisory (sickness risks, pests, altitude)
@@ -15,11 +15,12 @@ Output: {"packing_list": [category items], "weather_summary": str, "pacing_notes
          "hotel_amenities": {...}, "shopping_budget": float, "activity_gear_items": [...]}
 """
 from __future__ import annotations
-import hashlib, json, re, urllib.request
+import hashlib, json, os, re, urllib.request
 from llm.easy_reading import easy_reading_enabled, with_easy_reading
 from services.weather_service import get_weather
+from services.runtime_cache import cached_call
 
-from .base import llm_reason, trip_days
+from .base import llm_reason, report_progress, trip_days
 
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 
@@ -67,6 +68,13 @@ PACKING_CHECKLIST_PROMPT = (
 )
 
 
+def _llm_packing_enabled() -> bool:
+    """The deterministic checklist is complete; make the extra LLM pass opt-in."""
+    return os.getenv("PLANNING_LLM_PACKING_ENABLED", "0").strip().casefold() in {
+        "1", "true", "yes", "on",
+    }
+
+
 def _geocode_city(city: str) -> tuple[float, float]:
     """Get lat/lng for a city. Uses city coords lookup + Open-Meteo geocoding fallback."""
     key = city.lower().strip()
@@ -87,10 +95,15 @@ def _geocode_city(city: str) -> tuple[float, float]:
 
 
 def _fetch_open_meteo_weather(lat: float, lng: float, start: str, end: str) -> dict:
-    """Fetch real weather forecast from Open-Meteo (free, no API key).
-    If dates are too far in the future (>14 days) or past, uses past-year climate normals
-    from the historical archive API instead."""
+    """Fetch Open-Meteo weather without presenting archive data as a forecast.
+
+    Dates outside the forecast window use the same calendar period from the
+    previous year as an approximate climate proxy. Returned rows always retain
+    the user's requested dates so weather-aware itinerary matching still works.
+    """
     from datetime import date as _date, timedelta as _td
+    requested_start = start
+    requested_end = end
     try:
         start_date = _date.fromisoformat(start)
         end_date = _date.fromisoformat(end)
@@ -106,9 +119,15 @@ def _fetch_open_meteo_weather(lat: float, lng: float, start: str, end: str) -> d
     use_historical = days_ahead_end > 14 or days_ahead_start < -5
     if use_historical:
         try:
-            # Shift dates back one year for climate proxy (archive API has full history)
-            start = str(_date(start_date.year - 1, start_date.month, start_date.day))
-            end_adj = str(_date(end_date.year - 1, end_date.month, end_date.day))
+            def previous_year(value: _date) -> _date:
+                try:
+                    return value.replace(year=value.year - 1)
+                except ValueError:
+                    return value.replace(year=value.year - 1, day=28)
+
+            # Shift dates back one year for a comparison-period proxy.
+            start = previous_year(start_date).isoformat()
+            end_adj = previous_year(end_date).isoformat()
         except Exception:
             end_adj = end
         print(f"[planning] dates out of forecast window (end {days_ahead_end}d ahead), using climate proxy {start}–{end_adj}")
@@ -137,6 +156,16 @@ def _fetch_open_meteo_weather(lat: float, lng: float, start: str, end: str) -> d
 
         daily_data = data.get("daily", {})
         daily = []
+        requested_dates = []
+        try:
+            cursor = _date.fromisoformat(requested_start)
+            requested_last = _date.fromisoformat(requested_end)
+            while cursor <= requested_last:
+                requested_dates.append(cursor.isoformat())
+                cursor += _td(days=1)
+        except Exception:
+            requested_dates = []
+        row_source = "open_meteo_climate_proxy" if use_historical else "open_meteo_forecast"
         for i in range(len(daily_data.get("time", []))):
             code = daily_data.get("weather_code", [0]*10)[i] if i < len(daily_data.get("weather_code", [])) else 0
 
@@ -150,24 +179,41 @@ def _fetch_open_meteo_weather(lat: float, lng: float, start: str, end: str) -> d
                 rain_chance = 0.6 if (isinstance(precip, (int, float)) and precip > 1.0) else 0.15
 
             daily.append({
-                "date": daily_data["time"][i],
+                "date": (
+                    requested_dates[i]
+                    if use_historical and i < len(requested_dates)
+                    else daily_data["time"][i]
+                ),
                 "high_c": daily_data.get("temperature_2m_max", [20])[i] if i < len(daily_data.get("temperature_2m_max", [])) else 20,
                 "low_c": daily_data.get("temperature_2m_min", [10])[i] if i < len(daily_data.get("temperature_2m_min", [])) else 10,
                 "rain_chance": rain_chance,
                 "precipitation_mm": daily_data.get("precipitation_sum", [0])[i] if i < len(daily_data.get("precipitation_sum", [])) else 0,
                 "weather_code": code,
                 "condition": _weather_code_to_text(code),
-                "source": "open-meteo",
+                "source": row_source,
             })
 
         highs = [d["high_c"] for d in daily]
         lows = [d["low_c"] for d in daily]
         rain_days = sum(1 for d in daily if d["rain_chance"] > 0.5)
-        summary = (
-            f"Open-Meteo real forecast: {min(lows) if lows else '?'}°C – {max(highs) if highs else '?'}°C, "
-            f"{rain_days} rainy day(s) expected. "
-        )
-        return {"summary": summary, "daily": daily, "source": "open-meteo", "verification_required": True}
+        if use_historical:
+            summary = (
+                f"Open-Meteo prior-year climate proxy for {requested_start}–{requested_end}: "
+                f"{min(lows) if lows else '?'}°C – {max(highs) if highs else '?'}°C, "
+                f"{rain_days} rainy day(s) in the comparison period. "
+                "This is not a forecast; verify closer to departure."
+            )
+        else:
+            summary = (
+                f"Open-Meteo forecast: {min(lows) if lows else '?'}°C – "
+                f"{max(highs) if highs else '?'}°C, {rain_days} rainy day(s) expected."
+            )
+        return {
+            "summary": summary,
+            "daily": daily,
+            "source": row_source,
+            "verification_required": use_historical,
+        }
     except Exception as e:
         print(f"[planning] Open-Meteo fetch failed: {e}")
         return None
@@ -412,19 +458,33 @@ def run(trip_input: dict) -> dict:
     # Prefer the detailed Open-Meteo path used by the v2 packing logic, then
     # fall back to the normalized weather service when geocoding or the live
     # forecast is unavailable.
+    report_progress(trip_input, "正在读取目的地天气")
     try:
-        lat, lng = _geocode_city(destination)
-        weather = _fetch_open_meteo_weather(
-            lat,
-            lng,
-            trip_input["dates"]["start"],
-            trip_input["dates"]["end"],
+        def _load_detailed_weather():
+            lat, lng = _geocode_city(destination)
+            return _fetch_open_meteo_weather(
+                lat,
+                lng,
+                trip_input["dates"]["start"],
+                trip_input["dates"]["end"],
+            )
+
+        weather = cached_call(
+            "planning-weather-detailed",
+            (destination, trip_input["dates"]),
+            _load_detailed_weather,
+            ttl_seconds=1800,
         )
     except Exception as exc:
         print(f"[planning] detailed weather unavailable, using normalized fallback: {exc}")
         weather = None
     if not weather:
-        weather = get_weather(destination, trip_input["dates"])
+        weather = cached_call(
+            "planning-weather-normalized",
+            (destination, trip_input["dates"]),
+            lambda: get_weather(destination, trip_input["dates"]),
+            ttl_seconds=1800,
+        )
 
     # ---- NEW: Read activity agent outputs for gear recommendations ----
     activity_outputs = trip_input.get("_activity_outputs", [])
@@ -441,7 +501,10 @@ def run(trip_input: dict) -> dict:
     if activity_outputs:
         print(f"[planning] received {len(activity_outputs)} activity outputs for gear recommendations")
 
-    # ---- NEW: Hotel amenities check ----
+    # ---- Hotel amenities defaults ----
+    # Hotel-specific scraping is deferred until the user opens its detail or
+    # booking flow. Initial planning only needs conservative market defaults.
+    report_progress(trip_input, "正在生成住宿用品与装备建议")
     hotel_amenities = None
     hotel_name = trip_input.get("_hotel_name", "")
     if not hotel_name:
@@ -449,22 +512,17 @@ def run(trip_input: dict) -> dict:
         housing_data = trip_input.get("_housing_data", {})
         hotel_name = housing_data.get("name", "")
     
-    if hotel_name:
-        try:
-            from services.hotel_amenities_service import check_amenities
-            hotel_amenities = check_amenities(destination, hotel_name)
-            print(f"[planning] hotel amenities check: {hotel_amenities.get('source', 'unknown')}, "
-                  f"missing: {hotel_amenities.get('missing_items', [])}")
-        except Exception as e:
-            print(f"[planning] hotel amenities check failed (non-fatal): {e}")
-    else:
-        # Fallback: market defaults only
-        try:
-            from services.hotel_amenities_service import check_amenities
-            hotel_amenities = check_amenities(destination)
-            print(f"[planning] hotel amenities (market defaults): {hotel_amenities.get('packing_note', '')}")
-        except Exception as e:
-            print(f"[planning] amenities defaults failed: {e}")
+    try:
+        from services.hotel_amenities_service import check_amenities
+        hotel_amenities = cached_call(
+            "planning-amenities-defaults",
+            destination,
+            lambda: check_amenities(destination),
+            ttl_seconds=86400,
+        )
+        print(f"[planning] hotel amenities (market defaults): {hotel_amenities.get('packing_note', '')}")
+    except Exception as e:
+        print(f"[planning] amenities defaults failed: {e}")
 
     # ---- NEW: Shopping budget from budget leftover ----
     shopping_budget = 0.0
@@ -489,18 +547,23 @@ def run(trip_input: dict) -> dict:
         print(f"[planning] shopping budget: {shopping_budget} {currency}")
 
     # ---- Build enriched packing checklist ----
-    # Get LLM-generated packing list as baseline
-    llm_result = llm_reason(with_easy_reading(
-        PACKING_CHECKLIST_PROMPT,
-        easy_reading_enabled(trip_input),
-    ), {
-        "destination": destination,
-        "dates": trip_input["dates"],
-        "num_days": len(days),
-        "weather": weather,
-        "activity_styles": activity_styles,
-        "all_preferences": preferences,
-    })
+    # Weather, activity, document and device rules already produce a complete
+    # deterministic checklist. The additional model pass is optional because a
+    # slow response must not hold the whole interactive plan open.
+    report_progress(trip_input, "正在根据天气与活动生成行李清单")
+    llm_result = None
+    if _llm_packing_enabled():
+        llm_result = llm_reason(with_easy_reading(
+            PACKING_CHECKLIST_PROMPT,
+            easy_reading_enabled(trip_input),
+        ), {
+            "destination": destination,
+            "dates": trip_input["dates"],
+            "num_days": len(days),
+            "weather": weather,
+            "activity_styles": activity_styles,
+            "all_preferences": preferences,
+        })
 
     # Build structured checklist
     weather_daily = weather.get("daily", [])

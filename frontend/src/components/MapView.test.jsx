@@ -178,7 +178,7 @@ describe('MapView AMap defaults', () => {
     expect(secondPolyline.path).toEqual(secondPath)
     expect(secondPolyline.path.at(-1)).toEqual([121.475, 31.228])
     expect(searchAmapSegmentMock.mock.calls.every((call) => call[1] === 'walking')).toBe(true)
-    expect(animateMock.mock.calls[0][2].duration).toBe(7.5)
+    expect(animateMock.mock.calls[0][2].duration).toBe(18.5)
     expect(screen.queryByRole('button', { name: 'Line preview' })).not.toBeInTheDocument()
   })
 

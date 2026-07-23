@@ -362,6 +362,40 @@ def _osrm_route(origin_coords: tuple[float, float],
     return None
 
 
+def get_intercity_driving(origin: str, destination: str) -> dict | None:
+    """Return a city-to-city road route and clearly labeled cost estimate."""
+    origin_coords = geocode_city(origin)
+    destination_coords = geocode_city(destination)
+    if not origin_coords or not destination_coords:
+        return None
+
+    route = _gaode_driving(origin_coords, destination_coords)
+    coordinate_system = "GCJ-02"
+    if not route:
+        route = _osrm_route(origin_coords, destination_coords, "driving")
+        coordinate_system = "WGS84"
+    if not route:
+        return None
+
+    distance_km = float(route.get("distance_km", 0) or 0)
+    toll = float(route.get("toll", 0) or 0)
+    # Fuel/energy plus toll estimate for one-way private-car travel. This is
+    # planning guidance, not a provider quote or a rental-car price.
+    estimated_cost_cny = round(max(distance_km * 0.65 + toll, 0), 2)
+    return {
+        **route,
+        "origin": origin,
+        "destination": destination,
+        "origin_lat": origin_coords[0],
+        "origin_lng": origin_coords[1],
+        "destination_lat": destination_coords[0],
+        "destination_lng": destination_coords[1],
+        "coordinate_system": coordinate_system,
+        "estimated_cost_cny": estimated_cost_cny,
+        "cost_basis": "one-way fuel/energy and toll estimate; excludes rental and parking",
+    }
+
+
 # ---------------------------------------------------------------------------
 # Local Transport Estimation
 # ---------------------------------------------------------------------------
@@ -493,24 +527,16 @@ def search_restaurants(
     try:
         search_keywords = keywords or cuisine or f"{city} 美食"
         types_code = "050000|060000"  # 餐饮 + 购物(含美食广场)
-
-        url = (
-            f"{GAODE_BASE}/place/text?"
-            + urllib.parse.urlencode({
-                "key": GAODE_KEY,
-                "keywords": search_keywords,
-                "types": types_code,
-                "city": city,
-                "citylimit": "true",
-                "offset": min(max_results, 25),
-                "page": 1,
-                "extensions": "all",
-                "output": "JSON",
-            })
-        )
-        req = urllib.request.Request(url, headers={"User-Agent": "G3TA/1.0"})
-        with urllib.request.urlopen(req, timeout=10) as r:
-            data = json.loads(r.read())
+        city_filter = _gaode_city_filter(city)
+        data = _gaode_json("/place/text", {
+            "keywords": search_keywords,
+            "types": types_code,
+            "city": city_filter,
+            "citylimit": "true",
+            "offset": min(max_results, 25),
+            "page": 1,
+            "extensions": "all",
+        }, timeout=10)
 
         if data.get("status") != "1":
             print(f"[gaode] POI search failed: {data.get('info', 'unknown')}")
@@ -524,6 +550,12 @@ def search_restaurants(
         for poi in pois:
             name = poi.get("name", "")
             if not name:
+                continue
+            if not _poi_matches_city_filter(poi, city_filter):
+                print(
+                    f"[gaode] skipped out-of-city restaurant '{name}' "
+                    f"({poi.get('adcode', 'unknown')} != {city_filter})"
+                )
                 continue
 
             # Gaode POI fields
@@ -577,6 +609,8 @@ def search_restaurants(
                 "photos": photos,
                 "source": "gaode_poi",
                 "city": city,
+                "provider_city": poi.get("cityname") or poi.get("pname") or city,
+                "adcode": poi.get("adcode", ""),
             })
 
         # Sort by rating descending
@@ -603,6 +637,21 @@ def _cost_to_price_level(avg_cost: float) -> int:
     if avg_cost < 250:
         return 3
     return 4
+
+
+def _poi_matches_city_filter(poi: dict, city_filter: str) -> bool:
+    """Reject a POI whose AMap adcode belongs to another requested city."""
+    expected = str(city_filter or "")
+    actual = str(poi.get("adcode") or "")
+    if not (expected.isdigit() and actual.isdigit()):
+        return True
+    if len(expected) != 6 or len(actual) != 6:
+        return actual == expected
+    if expected.endswith("0000"):
+        return actual[:2] == expected[:2]
+    if expected.endswith("00"):
+        return actual[:4] == expected[:4]
+    return actual == expected
 
 
 def _classify_cuisine_from_typecode(typecode: str, default_cuisine: str) -> str:
@@ -694,23 +743,16 @@ def search_attraction_pois(
 
     try:
         search_keywords = keywords or f"{city} 景点"
-        url = (
-            f"{GAODE_BASE}/place/text?"
-            + urllib.parse.urlencode({
-                "key": GAODE_KEY,
-                "keywords": search_keywords,
-                "types": "110000|120000|140000|170000",  # 风景名胜|公园|纪念馆|旅游景点
-                "city": city,
-                "citylimit": "true",
-                "offset": min(max_results, 25),
-                "page": 1,
-                "extensions": "all",
-                "output": "JSON",
-            })
-        )
-        req = urllib.request.Request(url, headers={"User-Agent": "G3TA/1.0"})
-        with urllib.request.urlopen(req, timeout=10) as r:
-            data = json.loads(r.read())
+        city_filter = _gaode_city_filter(city)
+        data = _gaode_json("/place/text", {
+            "keywords": search_keywords,
+            "types": "110000|120000|140000|170000",
+            "city": city_filter,
+            "citylimit": "true",
+            "offset": min(max_results, 25),
+            "page": 1,
+            "extensions": "all",
+        }, timeout=10)
 
         if data.get("status") != "1":
             return []
@@ -719,7 +761,7 @@ def search_attraction_pois(
         attractions = []
         for poi in pois:
             name = poi.get("name", "")
-            if not name:
+            if not name or not _poi_matches_city_filter(poi, city_filter):
                 continue
 
             rating_str = poi.get("biz_ext", {}).get("rating", "0")

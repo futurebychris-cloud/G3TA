@@ -1,7 +1,7 @@
 """Food Agent v2 (Taste Editor).
 
 Upgraded from LLM-only estimates:
-1. Google Maps restaurant search via Playwright
+1. City-limited Gaode POI restaurant search, with labeled estimates
 2. Menu scraping from restaurant pages
 3. Dish classification (main/starter/dessert/drink)
 4. Taste profile filtering & cost calculation
@@ -9,7 +9,7 @@ Upgraded from LLM-only estimates:
 6. Meal slot consumption from Activity Agent handoff
 7. Filtering by popularity, preferences, budget constraints
 8. Popularity + cost comparison table for frontend
-9. Auto-ordering integration (restaurant booking via auto_book)
+9. Comparison-only output; the user verifies and orders with the provider
 
 Output: {
     "daily_meals": [...], "cost": number, "reasoning": str,
@@ -18,8 +18,9 @@ Output: {
 """
 from __future__ import annotations
 import hashlib, json, re, time, urllib.parse
-from .base import llm_reason, trip_days
+from .base import report_progress, trip_days
 from services.food_service import get_food_options, matches_cuisine_preferences
+from services.runtime_cache import cached_call
 
 FOOD_DISCOVERY_PROMPT = (
     "You are the Food Agent (Taste Editor) in a multi-agent trip planner. "
@@ -74,52 +75,6 @@ def _stealth_browser():
     page = ctx.new_page()
     page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
     return pw, browser, page
-
-
-# ---- Google Maps restaurant search ----
-
-def _search_google_maps_restaurants(destination: str, cuisine: str = "") -> list[dict]:
-    """Search Google Maps for restaurants in the destination city."""
-    try:
-        pw, browser, page = _stealth_browser()
-        query = f"best {cuisine} restaurants in {destination}"
-        url = f"https://www.google.com/maps/search/{urllib.parse.quote(query)}"
-        page.goto(url, timeout=25000, wait_until="domcontentloaded")
-        page.wait_for_timeout(4000)
-
-        results = []
-        # Google Maps renders results via JS; try to extract from page
-        cards = page.query_selector_all("[role='article'], [class*='section-result'], [class*='Nv2PK']")
-        for card in cards[:15]:
-            try:
-                name_el = card.query_selector("[class*='fontHeadlineSmall'], [class*='qBF1Pd'], h3, [aria-label]")
-                name = name_el.inner_text().strip() if name_el else ""
-                # Extract rating
-                rating_text = card.inner_text() or ""
-                rating_match = re.search(r"([\d.]+)\s*★", rating_text)
-                rating = float(rating_match.group(1)) if rating_match else 0
-                # Extract price level
-                price_match = re.findall(r"[¥$€]{1,4}", rating_text)
-                price_level = len(price_match) if price_match else 1
-
-                if name and len(name) > 2:
-                    results.append({
-                        "name": name,
-                        "cuisine_type": cuisine or "Local",
-                        "rating": rating,
-                        "price_level": price_level,
-                        "estimated_price": price_level * 30,  # rough estimate
-                        "source": "google_maps",
-                    })
-            except Exception:
-                continue
-
-        browser.close()
-        pw.stop()
-        return results
-    except Exception as e:
-        print(f"[food_agent] Google Maps search failed: {e}")
-        return []
 
 
 # ---- Menu scraping ----
@@ -260,12 +215,22 @@ def run(trip_input: dict) -> dict:
     print(f"[food_agent] daily food cap: {cap_label} {currency}, total: {total_food_budget:.0f} {currency}")
 
     # ---- Step 1: Try Gaode POI search (real restaurant data with prices) ----
+    report_progress(trip_input, "正在查询餐厅、评分和人均价格")
     real_restaurants = []
     try:
         from services.gaode_service import search_restaurants as gaode_restaurants
         target_cuisines = cuisine_tags if cuisine_tags else ["中餐"]
         for cuisine in target_cuisines[:3]:
-            found = gaode_restaurants(destination, cuisine=cuisine, max_results=10)
+            found = cached_call(
+                "food-gaode",
+                (destination, cuisine),
+                lambda cuisine=cuisine: gaode_restaurants(
+                    destination,
+                    cuisine=cuisine,
+                    max_results=10,
+                ),
+                ttl_seconds=1800,
+            )
             for r in found:
                 real_restaurants.append({
                     "name": r["name"],
@@ -273,7 +238,7 @@ def run(trip_input: dict) -> dict:
                     "rating": r.get("rating", 0),
                     "price_level": r.get("price_level", 2),
                     "estimated_price": r.get("avg_cost", 0) if r.get("avg_cost", 0) > 0 else r.get("price_level", 2) * 30,
-                    "source": "gaode_poi",
+                    "source": r.get("source", "gaode_poi"),
                     "address": r.get("address", ""),
                     "lat": r.get("lat", 0),
                     "lng": r.get("lng", 0),
@@ -287,31 +252,33 @@ def run(trip_input: dict) -> dict:
     except Exception as e:
         print(f"[food_agent] Gaode POI search failed: {e}")
 
-    # ---- Step 1b: Fall back to Google Maps if Gaode returned nothing ----
-    if len(real_restaurants) < 5:
-        target_cuisines = cuisine_tags if cuisine_tags else ["local", destination]
-        for cuisine in target_cuisines[:3]:
-            found = _search_google_maps_restaurants(destination, cuisine)
-            real_restaurants.extend(found)
-            if len(real_restaurants) >= 12:
-                break
+    # If AMap has no usable record, the destination-labelled deterministic
+    # options below are safer than silently changing map providers.
 
-    # ---- Step 2: Get LLM food options as fallback/enrichment ----
-    all_options = get_food_options(
-        destination, cuisine_tags,
-        num_days=len(days),
-        budget=trip_input.get("budget", {}),
-        preferences=trip_input.get("preferences", {}),
-        time_constraints=trip_input.get("time_constraints", ""),
-        daily_budget=daily_food_cap,
+    # ---- Step 2: Get deterministic options as fallback/enrichment ----
+    report_progress(trip_input, "正在按餐次和每日预算整理候选餐厅")
+    all_options = cached_call(
+        "food-options",
+        (destination, tuple(cuisine_tags), len(days), daily_food_cap),
+        lambda: get_food_options(
+            destination,
+            cuisine_tags,
+            num_days=len(days),
+            budget=trip_input.get("budget", {}),
+            preferences=trip_input.get("preferences", {}),
+            time_constraints=trip_input.get("time_constraints", ""),
+            daily_budget=daily_food_cap,
+            use_ai=False,
+        ),
+        ttl_seconds=1800,
     )
 
-    # Merge real results with LLM options (real data takes priority)
+    # Merge provider records with generated fallback options (provider data first)
     enriched_options = list(all_options)
     existing_names = {o["name"].casefold() for o in enriched_options}
     for r in real_restaurants:
         if r["name"].casefold() not in existing_names:
-            source = r.get("source", "google_maps")
+            source = r.get("source", "gaode_poi")
             enriched_options.append({
                 "id": f"food_real_{len(enriched_options)}",
                 "name": r["name"],
@@ -327,17 +294,8 @@ def run(trip_input: dict) -> dict:
                 "lng": r.get("lng"),
             })
 
-    # ---- Step 3: Scrape menus for top restaurants ----
+    # ---- Step 3: Defer menu scraping until an explicit restaurant detail flow ----
     dish_map = {}
-    for opt in enriched_options[:5]:  # Scrape top 5
-        if opt.get("source") == "google_maps":
-            dishes = _scrape_restaurant_menu(opt["name"], destination)
-            if dishes:
-                for d in dishes:
-                    d["category"] = d.get("category") or _classify_dish_category(d["name"])
-                    d["price"] = d.get("price", opt.get("price", 30) * 0.6)
-                dish_map[opt["name"]] = dishes
-                print(f"[food_agent] scraped {len(dishes)} dishes for {opt['name']}")
 
     # ---- Step 4: Validate against cuisine preferences ----
     matched = [o for o in enriched_options if matches_cuisine_preferences(o, cuisine_tags)] if cuisine_tags else []
@@ -363,40 +321,16 @@ def run(trip_input: dict) -> dict:
         print(f"[food_agent] no restaurants above rating {MIN_POPULARITY}, using all eligible")
 
     # ---- NEW Step 4c: Apply budget filter ----
-    if daily_food_cap > 0:
+    if daily_food_cap is not None and daily_food_cap > 0:
         max_per_meal = daily_food_cap / len(_SLOTS) * 1.5  # allow some meals above average
         budget_filtered = [o for o in eligible if o.get("price", 0) <= max_per_meal * 2]
         if budget_filtered:
             eligible = budget_filtered
             print(f"[food_agent] budget-filtered to {len(eligible)} restaurants (max ~{max_per_meal:.0f}/meal)")
 
-    # ---- Step 5: LLM meal planning ----
-    result = llm_reason(
-        "You are the Food Agent (Taste Editor). Build a meal plan from ONLY the supplied options. "
-        "The traveler's selected_cuisines are ordered by preference; honor them strongly. "
-        "Balance cost against the total trip budget, respect meal slots, and do not repeat a venue "
-        "while unused eligible choices remain. Every venue must be in the exact destination. "
-        "Also use activity_meal_slots to match restaurants near each activity's location & time. "
-        "Return ONLY JSON: {meal_plan: [{date, meals: [{slot, option_id, dish_name, dish_category}]}], reasoning}.",
-        {
-            "destination": destination,
-            "dates": trip_input["dates"],
-            "num_days": len(days),
-            "total_budget": trip_input["budget"],
-            "food_budget_per_day": daily_food_cap,
-            "hard_budget_rule": (
-                "Breakfast, lunch, and dinner combined must not exceed food_budget_per_day."
-                if daily_food_cap is not None else None
-            ),
-            "selected_cuisines": cuisine_tags,
-            "taste_preferences": taste_prefs,
-            "all_preferences": trip_input.get("preferences", {}),
-            "eligible_options": eligible,
-            "dish_map": {k: v for k, v in list(dish_map.items())[:10]},
-            "activity_meal_slots": activity_meal_slots,
-            "daily_food_cap": daily_food_cap,
-        },
-    )
+    # ---- Step 5: Deterministic meal planning ----
+    report_progress(trip_input, "正在把餐厅分配到每天的早午晚餐")
+    result = None
 
     # ---- Step 6: Build daily meal plan with meal-slot proximity ----
     # Slots per day, sorted by meal-slot proximity to activities
@@ -488,6 +422,8 @@ def run(trip_input: dict) -> dict:
                 if not dish_name:
                     dish_name = f"{option.get('cuisine', '')} {slot}"
                     dish_category = _classify_dish_category(dish_name)
+                if dish_category not in {"main", "starter", "dessert", "drink"}:
+                    dish_category = _classify_dish_category(dish_name)
 
                 price = option.get("price", 25)
                 rating = option.get("rating", 0)
@@ -554,7 +490,7 @@ def run(trip_input: dict) -> dict:
                     dish_price=m["price"],
                     dish_popularity=m.get("popularity_score", 5.0),
                     currency=currency,
-                    status="confirmed",
+                    status="pending",
                 )
         print(f"[food_agent] saved {sum(len(d['meals']) for d in daily_meals)} meals to shared DB")
     except Exception as e:
@@ -585,14 +521,18 @@ def run(trip_input: dict) -> dict:
             if meal["cuisine"] not in chosen_cuisines:
                 chosen_cuisines.append(meal["cuisine"])
 
-    real_count = sum(1 for d in daily_meals for m in d["meals"] if m.get("source") == "google_maps")
+    live_place_sources = {"gaode_poi", "osm_fallback"}
+    live_place_count = sum(
+        1 for daily in daily_meals for meal in daily["meals"]
+        if meal.get("source") in live_place_sources
+    )
     slot_info = (
         f"Meal slots from Activity Agent: {len(activity_meal_slots)} day(s) used. "
         if activity_meal_slots else ""
     )
     reasoning = (
         f"Planned {len(days)*3} meals across {len(days)} day(s) in {destination}. "
-        f"{real_count} meals sourced from Google Maps, "
+        f"{live_place_count} meals use live place records from the configured map/search providers, "
         f"{len(dish_map)} menus scraped for dish details. "
         f"{slot_info}"
         f"Total food estimate: {total:.0f} {currency}. "

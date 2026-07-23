@@ -1,10 +1,9 @@
 """Ctrip (携程) hotel search + booking driven by Playwright.
 
-This module is the *real-data seam* of the booking pipeline. It is intentionally
-resilient: every live attempt is wrapped so that if Playwright isn't installed,
-the browser can't launch, the page structure changed, or the network is blocked,
-it degrades to a **deterministic mock** (clearly tagged ``source: "mock"``) so the
-whole pipeline — search → filter → select → confirm → store — stays demonstrable.
+This module is the *real-data seam* of the booking pipeline. Search can use an
+explicitly enabled deterministic demo fallback, clearly tagged
+``source: "mock"``. Booking attempts never simulate a payment checkpoint or
+order number.
 
 Live flow (best effort):
   1. ``search_hotels``  — resolve the city name to a Ctrip city id, open the hotel
@@ -14,9 +13,9 @@ Live flow (best effort):
 
 HONEST LIMITATION: Ctrip requires a logged-in account (QR/password login) and a
 human-scanned WeChat/Alipay payment, so fully-automated booking is not possible.
-``book_hotel`` therefore stops at the **payment checkpoint** and returns
-``status: "pending_payment"`` with a generated order number. The user completes
-payment in their own browser; the pipeline records the "confirmed route".
+``book_hotel`` therefore stops only after verifying a provider payment
+checkpoint and returns ``status: "pending_payment"``. It does not claim payment
+or provider confirmation.
 """
 from __future__ import annotations
 
@@ -26,6 +25,7 @@ import os
 import re
 import time
 from datetime import date
+from pathlib import Path
 
 # --------------------------------------------------------------------------- #
 # Strict (no-mock) mode
@@ -257,6 +257,34 @@ def search_hotels(req) -> list[dict]:
         ) from exc
 
 
+_CTRIP_AUTH_COOKIE_NAMES = {
+    "cticket", "ctoken", "eid", "UID", "LOGIN_TOKEN", "_login", "Uid",
+}
+
+
+def _load_ctrip_cookie_string() -> str:
+    """Read an optional local session without logging or returning secrets."""
+    value = os.environ.get("CTRIP_COOKIE", "").strip()
+    if value:
+        return value
+    cookie_file = Path(__file__).resolve().parent.parent / "cookies.json"
+    if not cookie_file.exists():
+        return ""
+    try:
+        return str(json.loads(cookie_file.read_text()).get("cookie_string", "")).strip()
+    except Exception:
+        return ""
+
+
+def _has_authenticated_ctrip_session() -> bool:
+    cookie_names = {
+        pair.split("=", 1)[0].strip()
+        for pair in _load_ctrip_cookie_string().split(";")
+        if "=" in pair
+    }
+    return bool(cookie_names & _CTRIP_AUTH_COOKIE_NAMES)
+
+
 def _stealth_browser():
     """Create a Playwright Chromium browser + page with anti-detection measures.
 
@@ -322,21 +350,7 @@ def _stealth_browser():
     page = context.new_page()
 
     # --- Load Ctrip session cookies (priority: env var > persisted file) ---
-    ctrip_cookie = os.environ.get("CTRIP_COOKIE", "").strip()
-
-    # If no CTRIP_COOKIE env var, try the persisted cookie file
-    if not ctrip_cookie:
-        from pathlib import Path as _Path
-        cookie_file = _Path(__file__).resolve().parent.parent / "cookies.json"
-        if cookie_file.exists():
-            try:
-                saved = json.loads(cookie_file.read_text())
-                ctrip_cookie = saved.get("cookie_string", "")
-                saved_at = saved.get("saved_at", "unknown")
-                if ctrip_cookie:
-                    print(f"[ctrip] loaded {len(ctrip_cookie.split(';'))} cookies from {cookie_file} (saved {saved_at})")
-            except Exception:
-                pass
+    ctrip_cookie = _load_ctrip_cookie_string()
 
     if ctrip_cookie:
         # Format: "name1=value1; name2=value2" copied from browser DevTools
@@ -359,7 +373,7 @@ def _stealth_browser():
             page.context.add_cookies(cookies)
             # Check if these look like authenticated cookies
             cookie_names = {c["name"] for c in cookies}
-            auth_cookies = cookie_names & {"cticket", "ctoken", "eid", "UID", "LOGIN_TOKEN", "_login", "Uid"}
+            auth_cookies = cookie_names & _CTRIP_AUTH_COOKIE_NAMES
             is_authenticated = bool(auth_cookies)
             print(f"[ctrip] injected {len(cookies)} session cookies (auth cookies found: {auth_cookies if auth_cookies else 'NONE — cookies appear to be anonymous/unauthenticated'})")
             if not is_authenticated:
@@ -443,6 +457,11 @@ def _search_hotels_live(req) -> list[dict]:
         return _normalize_hotels(api_results)
 
     # --- Tier B: Stealth browser scrape (API failed or returned empty) ---
+    if not _has_authenticated_ctrip_session():
+        raise RuntimeError(
+            "Ctrip public API returned no hotel records and no authenticated "
+            "CTRIP_COOKIE session is configured; skipping the slow login redirect."
+        )
     url = (
         f"https://hotels.ctrip.com/hotels/list?city={city_id}"
         f"&checkin={req.check_in}&checkout={req.check_out}"
@@ -787,23 +806,15 @@ def book_hotel(selection, contact: dict, dates: dict, guests: dict,
     """Drive Ctrip to the payment step and return a checkpoint dict.
 
     Returns {"status": "pending_payment"|"failed", "order_no": str|None,
-    "message": str, "source": "ctrip"|"simulated"}.
+    "message": str, "source": "ctrip"}.
     """
     try:
         return _book_hotel_live(selection, contact, dates, guests, payment_method)
     except Exception as exc:  # noqa: BLE001
-        if ALLOW_MOCK:
-            print(f"[ctrip] live booking failed ({exc}); simulating checkpoint (mock enabled).")
-            return {
-                "status": "pending_payment",
-                "order_no": f"SIM-{_seed(selection.id + contact['id_number']).__str__()[:12].upper()}",
-                "message": "预订已提交至支付环节（模拟）。请用户在携程中使用"
-                           f"{'微信' if payment_method=='wechat' else '支付宝'}完成支付。",
-                "source": "simulated",
-            }
         raise RuntimeError(
-            "Live Ctrip booking failed and mock fallback is disabled (strict mode). "
-            f"Set ALLOW_MOCK_RESULTS=1 only for offline demos. Cause: {exc}"
+            "Live Ctrip booking did not reach a verifiable payment checkpoint. "
+            "No simulated order was created. "
+            f"Cause: {exc}"
         ) from exc
 
 

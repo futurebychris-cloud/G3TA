@@ -20,6 +20,13 @@ PIPER_BIN = os.getenv("PIPER_BIN", "/opt/piper/piper")
 CACHE_DIR = Path(os.getenv("PIPER_CACHE_DIR", "/cache"))
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 MAX_TEXT_LENGTH = 12_000
+try:
+    SYNTHESIS_TIMEOUT_SECONDS = max(
+        5,
+        int(os.getenv("PIPER_SYNTHESIS_TIMEOUT_SECONDS", "45")),
+    )
+except ValueError:
+    SYNTHESIS_TIMEOUT_SECONDS = 45
 
 DEFAULT_MODELS = {
     "en": "/models/en_US-lessac-medium.onnx",
@@ -83,12 +90,17 @@ def synthesize(text: str, language: str, speed: float) -> Path:
             "--length_scale",
             f"{1 / speed:.4f}",
         ]
-        process = subprocess.run(
-            command,
-            input=text.encode("utf-8"),
-            capture_output=True,
-            check=False,
-        )
+        try:
+            process = subprocess.run(
+                command,
+                input=text.encode("utf-8"),
+                capture_output=True,
+                check=False,
+                timeout=SYNTHESIS_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
+            temporary.unlink(missing_ok=True)
+            abort(504, description="Piper synthesis timed out.")
         if process.returncode != 0 or not temporary.exists() or temporary.stat().st_size <= 44:
             temporary.unlink(missing_ok=True)
             app.logger.error(

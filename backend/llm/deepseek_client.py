@@ -11,6 +11,20 @@ from openai import OpenAI
 _client: OpenAI | None = None
 
 
+def _float_env(name: str, default: float) -> float:
+    try:
+        return max(float(os.getenv(name, default)), 1.0)
+    except (TypeError, ValueError):
+        return default
+
+
+def _int_env(name: str, default: int) -> int:
+    try:
+        return max(int(os.getenv(name, default)), 0)
+    except (TypeError, ValueError):
+        return default
+
+
 def _get_client() -> OpenAI:
     global _client
     if _client is None:
@@ -21,7 +35,16 @@ def _get_client() -> OpenAI:
                 "DeepSeek key, then restart the backend. See README.md > Setup."
             )
         base_url = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
-        _client = OpenAI(api_key=api_key, base_url=base_url)
+        # The SDK default read timeout is ten minutes and it retries twice. That
+        # is inappropriate for an interactive planner because one slow model
+        # call can leave the UI on "Thinking" for far too long. Keep both values
+        # configurable, but fail over to deterministic agent logic quickly.
+        _client = OpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            timeout=_float_env("DEEPSEEK_TIMEOUT_SECONDS", 12.0),
+            max_retries=_int_env("DEEPSEEK_MAX_RETRIES", 0),
+        )
     return _client
 
 

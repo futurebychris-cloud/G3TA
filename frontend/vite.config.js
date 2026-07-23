@@ -14,6 +14,9 @@ export default defineConfig({
       '/booking': 'http://127.0.0.1:8000',
       '/health': 'http://127.0.0.1:8000',
       '/agents': 'http://127.0.0.1:8000',
+      '/intake': 'http://127.0.0.1:8000',
+      '/speech': 'http://127.0.0.1:8000',
+      '/api': 'http://127.0.0.1:8000',
     },
   },
   test: {

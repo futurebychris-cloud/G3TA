@@ -69,8 +69,8 @@ class HotelSelection(BaseModel):
 
 
 class BookingConfirmRequest(BaseModel):
-    # Traveler identity — resolved against / fetched from the DB. Either pass an
-    # existing id_number (we look the user up) or full identity to upsert first.
+    # One-time traveler identity for the provider request. The pipeline does not
+    # persist these fields in G3TA.
     id_number: str
     name: str | None = None
     phone: str | None = None
@@ -84,7 +84,7 @@ class BookingConfirmRequest(BaseModel):
 
 
 class BookingResult(BaseModel):
-    status: str                     # "pending_payment" | "confirmed" | "failed"
+    status: str                     # usually "pending_payment" | "failed"
     order_no: str | None = None
     message: str = ""
     route: dict | None = None
