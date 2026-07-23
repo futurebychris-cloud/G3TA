@@ -19,7 +19,13 @@ function findPoint(label, points) {
   if (!wanted) return null
   return points.find((point) => {
     const candidate = normalizeLabel(point.label)
-    return candidate === wanted || candidate.includes(wanted) || wanted.includes(candidate)
+    if (candidate === wanted) return true
+    if (normalizeLabel(point.description) === 'city center') return false
+    const shorterLength = Math.min(candidate.length, wanted.length)
+    const longerLength = Math.max(candidate.length, wanted.length)
+    return shorterLength >= 4
+      && shorterLength / longerLength >= 0.6
+      && (candidate.includes(wanted) || wanted.includes(candidate))
   }) || null
 }
 
@@ -41,6 +47,7 @@ export function buildRouteModel(result = {}) {
   }))
   const housing = mapPoints.find((point) => point.type === 'housing') || null
   const activities = mapPoints.filter((point) => point.type === 'activity')
+  const restaurants = mapPoints.filter((point) => point.type === 'restaurant')
   const transportation = result.agent_outputs?.transportation || {}
   const explicitTransportPoints = (transportation.route_points || []).filter(validPoint)
   const mappedTransportPoints = mapPoints.filter((point) => point.type === 'transport')
@@ -61,15 +68,21 @@ export function buildRouteModel(result = {}) {
 
   const days = (result.schedule || []).map((day, dayIndex) => {
     const itemMatches = (day.items || [])
-      .filter((item) => item.type === 'activity')
-      .map((item) => findPoint(item.title, activities))
+      .map((item) => {
+        if (item.type === 'activity') return findPoint(item.title, activities)
+        if (item.type === 'meal') return findPoint(item.title, restaurants)
+        return null
+      })
       .filter(Boolean)
     const titleMatch = findPoint(day.title, activities)
     const dayActivities = uniquePoints(itemMatches.length ? itemMatches : [titleMatch].filter(Boolean))
 
     const stops = []
     if (housing) stops.push({ ...housing, role: 'start' })
-    dayActivities.forEach((point) => stops.push({ ...point, role: 'visit' }))
+    dayActivities.forEach((point) => stops.push({
+      ...point,
+      role: point.type === 'restaurant' ? 'meal' : 'visit',
+    }))
     if (housing && dayActivities.length) stops.push({ ...housing, role: 'return' })
 
     return {
@@ -81,9 +94,27 @@ export function buildRouteModel(result = {}) {
       stops,
     }
   })
+  const scheduledStops = days.flatMap((day) => (
+    day.stops
+      .filter((point) => point.role === 'visit' || point.role === 'meal')
+  ))
+  const itineraryStops = scheduledStops.length
+    ? scheduledStops
+    : mapPoints
+      .filter((point) => point.type === 'activity' || point.type === 'restaurant')
+      .map((point) => ({ ...point, role: point.type === 'restaurant' ? 'meal' : 'visit' }))
+  const fullTripStops = []
+  if (housing) fullTripStops.push({ ...housing, role: 'start' })
+  fullTripStops.push(...itineraryStops)
+  if (housing && itineraryStops.length) fullTripStops.push({ ...housing, role: 'return' })
 
   return {
     days,
+    fullTripRoute: {
+      id: 'full-trip',
+      title: 'Full trip route',
+      stops: fullTripStops,
+    },
     transportationRoute: {
       id: 'transportation',
       mode: transportMode,
@@ -112,26 +143,43 @@ export function uniqueMarkerStops(stops = []) {
   return [...markers.values()]
 }
 
-export function projectPoints(points = [], width = 800, height = 420, padding = 56) {
-  if (!points.length) return []
-  const lngs = points.map((point) => Number(point.lng))
-  const lats = points.map((point) => Number(point.lat))
-  const minLng = Math.min(...lngs)
-  const maxLng = Math.max(...lngs)
-  const minLat = Math.min(...lats)
-  const maxLat = Math.max(...lats)
-  const lngSpan = maxLng - minLng
-  const latSpan = maxLat - minLat
+export function revealRoutePaths(paths = [], progress = 1) {
+  const numericProgress = Number(progress)
+  const normalizedProgress = Number.isFinite(numericProgress)
+    ? Math.min(1, Math.max(0, numericProgress))
+    : 0
+  const edgeCounts = paths.map((path) => Math.max(0, path.length - 1))
+  const totalEdges = edgeCounts.reduce((sum, count) => sum + count, 0)
+  if (!totalEdges) return paths.map((path, index) => (index === 0 ? path.slice(0, 1) : []))
 
-  return points.map((point) => ({
-    ...point,
-    x: lngSpan === 0
-      ? width / 2
-      : padding + ((Number(point.lng) - minLng) / lngSpan) * (width - padding * 2),
-    y: latSpan === 0
-      ? height / 2
-      : padding + (1 - (Number(point.lat) - minLat) / latSpan) * (height - padding * 2),
-  }))
+  const travelledEdges = normalizedProgress * totalEdges
+  let consumedEdges = 0
+
+  return paths.map((path, pathIndex) => {
+    const edgeCount = edgeCounts[pathIndex]
+    if (!edgeCount) return travelledEdges >= consumedEdges ? path.slice(0, 1) : []
+    if (travelledEdges < consumedEdges) {
+      consumedEdges += edgeCount
+      return []
+    }
+
+    const localProgress = Math.min(edgeCount, travelledEdges - consumedEdges)
+    consumedEdges += edgeCount
+    if (localProgress >= edgeCount) return path.slice()
+
+    const completeEdges = Math.floor(localProgress)
+    const partialProgress = localProgress - completeEdges
+    const visiblePath = path.slice(0, completeEdges + 1)
+    if (partialProgress > 0 && path[completeEdges + 1]) {
+      const from = path[completeEdges]
+      const to = path[completeEdges + 1]
+      visiblePath.push([
+        Number(from[0]) + (Number(to[0]) - Number(from[0])) * partialProgress,
+        Number(from[1]) + (Number(to[1]) - Number(from[1])) * partialProgress,
+      ])
+    }
+    return visiblePath
+  })
 }
 
 export function formatDistance(metres) {

@@ -823,9 +823,10 @@ def _book_hotel_live(selection, contact, dates, guests, payment_method) -> dict:
                 room.click()
                 page.wait_for_timeout(1000)
         book_btn = page.query_selector("text=预订, text=Book, .book-btn, [data-test=book]")
-        if book_btn:
-            book_btn.click()
-            page.wait_for_timeout(2000)
+        if not book_btn:
+            raise RuntimeError("no bookable room control was found")
+        book_btn.click()
+        page.wait_for_timeout(2000)
 
         # 2) Fill traveler identity (name / ID / phone) from the DB record.
         _fill(page, ["入住人", "姓名", "name", "contactName"], contact.get("name", ""))
@@ -839,16 +840,29 @@ def _book_hotel_live(selection, contact, dates, guests, payment_method) -> dict:
             pm.click()
             page.wait_for_timeout(500)
         submit = page.query_selector("text=去支付, text=提交订单, .pay-btn, [data-test=pay]")
-        if submit:
-            submit.click()
-            page.wait_for_timeout(1000)
+        if not submit:
+            raise RuntimeError("the Ctrip order/payment control was not found")
+        submit.click()
+        page.wait_for_timeout(2000)
+
+        page_text = page.locator("body").inner_text(timeout=3000)
+        current_url = page.url.casefold()
+        payment_ready = (
+            any(marker in current_url for marker in ("pay", "cashier", "payment"))
+            or any(marker in page_text for marker in ("微信支付", "支付宝", "扫码支付", "待支付"))
+        )
+        if not payment_ready:
+            raise RuntimeError("Ctrip did not expose a verifiable payment checkpoint")
+
+        order_match = re.search(r"(?:订单号|Order\s*(?:No\.?|Number))\s*[:：]?\s*([A-Z0-9-]{6,})", page_text, re.I)
+        order_no = order_match.group(1) if order_match else None
     finally:
         browser.close()
         pw.stop()
 
     return {
         "status": "pending_payment",
-        "order_no": f"CTRIP-{int(time.time())}",
+        "order_no": order_no,
         "message": "已到达支付页面。请用户在携程中使用"
                    f"{'微信' if payment_method=='wechat' else '支付宝'}扫码完成支付，"
                    "支付后在前端标记“已支付”。",

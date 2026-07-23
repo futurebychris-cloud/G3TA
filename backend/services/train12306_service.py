@@ -119,6 +119,15 @@ SEAT_CODES_BY_TYPE: dict[str, list[str]] = {
     "K": ["4", "3", "2", "1"],
 }
 
+# Querying the price-detail endpoint is one HTTP request per train.  Busy routes
+# can contain hundreds of services, so keep the live-price work bounded while
+# still covering a useful set of bookable options.
+MAX_PRICE_DETAIL_QUERIES = 24
+
+_TRAIN_TYPE_PRICE_PRIORITY: dict[str, int] = {
+    "G": 0, "D": 1, "C": 2, "Z": 3, "T": 4, "K": 5,
+}
+
 # Approximate distances between major city pairs (km)
 _DISTANCES: dict[tuple[str, str], int] = {
     ("BJP", "SHH"): 1318, ("BJP", "GZQ"): 2298, ("BJP", "XAY"): 1216,
@@ -143,6 +152,49 @@ def _station_distance(code_a: str, code_b: str) -> int:
     pair = (code_a, code_b)
     rev = (code_b, code_a)
     return _DISTANCES.get(pair) or _DISTANCES.get(rev) or 500
+
+
+def _clock_minutes(value: str, default: int = 24 * 60) -> int:
+    """Convert a 12306 ``HH:MM`` value into minutes for stable sorting."""
+    try:
+        hours, minutes = str(value).split(":", 1)
+        return int(hours) * 60 + int(minutes)
+    except (TypeError, ValueError):
+        return default
+
+
+def _select_price_query_candidates(
+    raw_trains: list[dict],
+    limit: int = MAX_PRICE_DETAIL_QUERIES,
+) -> list[dict]:
+    """Pick the most useful bookable trains for bounded live-price lookups.
+
+    The schedule response is still returned in its original order.  This helper
+    only determines which trains receive the additional price-detail request.
+    """
+    if limit <= 0:
+        return []
+
+    bookable = [
+        train
+        for train in raw_trains
+        if (
+            train.get("can_web_buy")
+            and train.get("has_available_seat")
+            and train.get("internal_train_no")
+            and train.get("from_station_no")
+            and train.get("to_station_no")
+        )
+    ]
+    return sorted(
+        bookable,
+        key=lambda train: (
+            _clock_minutes(train.get("departure_time", "")),
+            _clock_minutes(train.get("duration", "")),
+            _TRAIN_TYPE_PRICE_PRIORITY.get(train.get("type_prefix", ""), 99),
+            str(train.get("train_no", "")),
+        ),
+    )[:limit]
 
 
 def _query_ticket_price(
@@ -451,6 +503,7 @@ def search_trains(origin: str, destination: str, date_str: str) -> list[dict]:
             end_station_code = fields[5]
             from_station_no = fields[16] if len(fields) > 16 else ""
             to_station_no = fields[17] if len(fields) > 17 else ""
+            can_web_buy = fields[11] == "Y"
 
             # Seat availability counts (indices 23-30)
             def _parse_seats(val: str) -> int:
@@ -489,25 +542,44 @@ def search_trains(origin: str, destination: str, date_str: str) -> list[dict]:
                 "seats_second": _parse_seats(ze_count),
                 "seats_first": _parse_seats(zy_count),
                 "seats_business": _parse_seats(swz_count),
+                "can_web_buy": can_web_buy,
+                "has_available_seat": any(
+                    _parse_seats(value) > 0 for value in fields[21:33]
+                ),
                 "currency": "CNY",
                 "from": origin,
                 "to": destination,
             })
 
         # ---- Query REAL prices from 12306 price API (one request per train) ----
+        price_candidates = _select_price_query_candidates(raw_trains)
+        bookable_count = sum(
+            1
+            for train in raw_trains
+            if train["can_web_buy"] and train["has_available_seat"]
+        )
+        print(
+            f"[12306] price details: querying {len(price_candidates)}/"
+            f"{bookable_count} bookable trains "
+            f"(limit={MAX_PRICE_DETAIL_QUERIES}, {len(raw_trains)} total)"
+        )
+
+        prices_by_train_id: dict[int, dict[str, float]] = {}
+        for candidate in price_candidates:
+            seat_codes = SEAT_CODES_BY_TYPE.get(
+                candidate["type_prefix"], ["O", "M"]
+            )
+            prices_by_train_id[id(candidate)] = _query_ticket_price(
+                candidate["internal_train_no"],
+                candidate["from_station_no"],
+                candidate["to_station_no"],
+                seat_codes,
+                date_str,
+            )
+
         real_price_count = 0
         for rt in raw_trains:
-            seat_codes = SEAT_CODES_BY_TYPE.get(rt["type_prefix"], ["O", "M"])
-            real_prices = {}
-
-            if rt["internal_train_no"] and rt["from_station_no"] and rt["to_station_no"]:
-                real_prices = _query_ticket_price(
-                    rt["internal_train_no"],
-                    rt["from_station_no"],
-                    rt["to_station_no"],
-                    seat_codes,
-                    date_str,
-                )
+            real_prices = prices_by_train_id.get(id(rt), {})
 
             price_source = "12306_real_price" if real_prices else "12306_estimated"
 
@@ -529,8 +601,6 @@ def search_trains(origin: str, destination: str, date_str: str) -> list[dict]:
                 price_second = round(dist * price_km, 0)
                 price_first = round(price_second * 1.6, 0)
                 price_business = round(price_second * 3.0, 0)
-                print(f"[12306] using ESTIMATED prices for {rt['train_no']} "
-                      f"(distance={dist}km, rate={price_km}/km)")
 
             trains.append({
                 "train_no": rt["train_no"],

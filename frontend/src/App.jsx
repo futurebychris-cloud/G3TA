@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import {
   ArrowLeft,
   BedDouble,
@@ -26,6 +26,8 @@ import PackingList from './components/PackingList.jsx'
 import ReasoningLog from './components/ReasoningLog.jsx'
 import BookingPanel from './components/BookingPanel.jsx'
 import OrbitGlobe from './components/OrbitGlobe.jsx'
+import AccessibilityButton from './components/accessibility/AccessibilityButton.jsx'
+import AccessibilityPanel from './components/accessibility/AccessibilityPanel.jsx'
 
 const AGENTS = ['budget', 'transportation', 'housing', 'food', 'activity', 'planning', 'orchestrator']
 
@@ -49,7 +51,7 @@ function Brand() {
   )
 }
 
-function AppHeader({ step, onReset }) {
+function AppHeader({ step, onReset, onAccessibility, accessibilityButtonRef }) {
   return (
     <header className="site-header">
       <button className="brand-button" type="button" onClick={step === 'input' ? undefined : onReset}>
@@ -62,6 +64,7 @@ function AppHeader({ step, onReset }) {
             <ArrowLeft size={16} /> New journey
           </button>
         )}
+        <AccessibilityButton onClick={onAccessibility} buttonRef={accessibilityButtonRef} />
         <button className="menu-button" type="button" aria-label="Open menu"><Menu size={20} /></button>
       </div>
     </header>
@@ -171,6 +174,8 @@ export default function App() {
   const [error, setError] = useState(null)
   const [tab, setTab] = useState('itinerary')
   const [tripInput, setTripInput] = useState(null)
+  const [accessibilityOpen, setAccessibilityOpen] = useState(false)
+  const accessibilityButtonRef = useRef(null)
 
   async function handleSubmit(input) {
     setError(null)
@@ -210,7 +215,12 @@ export default function App() {
   }
 
   const handleConfirmAndFinalize = useCallback(async () => {
-    if (!tripInput) return
+    if (!tripInput || !result) return
+    if (!adjustedBudget) {
+      setTab('itinerary')
+      setStep('result')
+      return
+    }
     setStep('progress')
     setError(null)
 
@@ -231,7 +241,7 @@ export default function App() {
     } catch (e) {
       setError(e.message)
     }
-  }, [tripInput, adjustedBudget])
+  }, [tripInput, result, adjustedBudget])
 
   function reset() {
     setStep('input')
@@ -245,7 +255,17 @@ export default function App() {
 
   return (
     <div className={`app-shell view-${step}`}>
-      <AppHeader step={step} onReset={reset} />
+      <AppHeader
+        step={step}
+        onReset={reset}
+        onAccessibility={() => setAccessibilityOpen(true)}
+        accessibilityButtonRef={accessibilityButtonRef}
+      />
+      <AccessibilityPanel
+        open={accessibilityOpen}
+        onClose={() => setAccessibilityOpen(false)}
+        returnFocusRef={accessibilityButtonRef}
+      />
 
       {step === 'input' && <Landing onSubmit={handleSubmit} />}
 
@@ -311,7 +331,13 @@ export default function App() {
 
           <section className="result-panel">
             {tab === 'itinerary' && <ItineraryView result={result} />}
-            {tab === 'map' && <MapView points={result.map_points} />}
+            {tab === 'map' && (
+              <MapView
+                points={result.map_points}
+                result={result}
+                agentOutputs={result.agent_outputs}
+              />
+            )}
             {tab === 'stay' && tripInput && <BookingPanel trip={tripInput} />}
             {tab === 'budget' && (
               <BudgetView

@@ -2,6 +2,8 @@
 
 Endpoints:
     GET  /                 health check
+    POST /intake/parse     turn guided answers into a reviewable form draft
+    POST /speech/synthesize render accessible speech with local Piper
     POST /agents/{name}    run one specialist agent (modularity / debugging)
     POST /plan             run the full orchestration, return the final itinerary
     POST /plan/stream      same, but stream per-agent progress as Server-Sent Events
@@ -10,12 +12,12 @@ Run from the backend/ directory:
     uvicorn main:app --reload
 """
 import json
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 
 from dotenv import find_dotenv, load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 # Load .env from project root or backend dir.
@@ -46,6 +48,8 @@ from booking.auto_book import (  # noqa: E402
     search_flights, search_trains, book_flight_by_index,
 )
 from services import hotels_provider  # noqa: E402
+from services import piper_service  # noqa: E402
+from intake import parse_intake  # noqa: E402
 
 # Gracefully handle missing PostgreSQL: booking pipeline needs it, but
 # the core planning agents + shared_db fall back to SQLite automatically.
@@ -86,6 +90,9 @@ class Preferences(BaseModel):
     bites: list[str] = Field(default_factory=list)
     transportation_type: list[str] = Field(default_factory=list)
     activity_style: list[str] = Field(default_factory=list)
+    taste: list[str] = Field(default_factory=list)
+    food_budget: float = 0
+    budget_priority: dict[str, float] = Field(default_factory=dict)
 
 
 class AccessibilityPreferences(BaseModel):
@@ -101,11 +108,61 @@ class TripInput(BaseModel):
     preferences: Preferences = Field(default_factory=Preferences)
     accessibility: AccessibilityPreferences = Field(default_factory=AccessibilityPreferences)
     time_constraints: str = ""
+    must_go_sites: list[str] = Field(default_factory=list)
+    num_people: int = Field(default=1, ge=1, le=100)
+    is_group: bool = False
 
 
+class IntakeRequest(BaseModel):
+    description: str = Field(min_length=10, max_length=2500)
+
+
+class SpeechRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=12_000)
+    language: str = Field(default="en", max_length=16)
+    speed: float = Field(default=1.0, ge=0.6, le=1.5)
+
+
+@app.get("/")
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "trip-planner", "agents": AGENT_ORDER}
+
+
+@app.post("/intake/parse")
+def intake_parse(request: IntakeRequest):
+    """Extract a reviewable form draft; this endpoint never starts planning."""
+    try:
+        return parse_intake(request.description)
+    except RuntimeError:
+        raise HTTPException(
+            status_code=503,
+            detail="The guided assistant is temporarily unavailable. Your description is still safe to edit, and the normal form remains available.",
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=502,
+            detail="The trip assistant could not understand that description. Your text is still available to edit.",
+        )
+
+
+@app.post("/speech/synthesize")
+def speech_synthesize(request: SpeechRequest):
+    """Render text with Piper; never fall back to an operating-system voice."""
+    language = "zh" if request.language.casefold().startswith("zh") else "en"
+    try:
+        audio = piper_service.synthesize_speech(
+            text=request.text,
+            language=language,
+            speed=request.speed,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return Response(
+        content=audio,
+        media_type="audio/wav",
+        headers={"Cache-Control": "private, max-age=86400"},
+    )
 
 
 @app.post("/agents/{name}")
@@ -472,42 +529,94 @@ def hotel_amenities(location: str, hotel_name: str = ""):
 
 @app.post("/plan/stream")
 def plan_stream(trip: TripInput):
-    """Run agents one at a time and stream progress so the UI can show a live checklist."""
-    import hashlib
-    trip_input = trip.model_dump()
-    # Generate trip_id so agents can persist to shared_checklist and the
-    # frontend can later fetch packed/unpacked state.
-    trip_id = hashlib.sha256(
-        f"{trip_input['location']}{trip_input['dates']['start']}{trip_input.get('origin', '')}".encode()
-    ).hexdigest()[:12]
-    trip_input["trip_id"] = trip_id
+    """Stream the canonical transport-first six-agent planning pipeline."""
+    return _plan_stream_response(trip)
+
+
+def _plan_stream_response(
+    trip: TripInput,
+    *,
+    pipeline_version: str | None = None,
+) -> StreamingResponse:
+    trip_input = orchestrator.prepare_trip_input(trip.model_dump())
 
     def generate():
         outputs = {}
+        shared = dict(trip_input)
         try:
-            # Budget must finish first so every recommendation agent receives the
-            # category limits it is expected to respect.
-            yield _sse({"type": "agent_start", "agent": "budget"})
-            outputs["budget"] = orchestrator.run_single_agent("budget", trip_input)
-            yield _sse({"type": "agent_done", "agent": "budget", "output": outputs["budget"]})
+            # Transportation must complete before Budget so the allocation is
+            # grounded in an actual route cost.
+            yield _sse({"type": "agent_start", "agent": "transportation"})
+            outputs["transportation"] = orchestrator.run_single_agent("transportation", shared)
+            shared["_transport_cost"] = float(outputs["transportation"].get("cost", 0) or 0)
+            shared["_transport_scope"] = outputs["transportation"].get("scope", "national")
+            yield _sse({
+                "type": "agent_done",
+                "agent": "transportation",
+                "output": outputs["transportation"],
+            })
 
-            guided_input = orchestrator.with_budget_guidance(trip_input, outputs["budget"])
-            remaining_agents = [name for name in AGENT_ORDER if name != "budget"]
-            for name in remaining_agents:
-                yield _sse({"type": "agent_start", "agent": name})
-            with ThreadPoolExecutor(max_workers=len(remaining_agents)) as executor:
-                futures = {
-                    executor.submit(orchestrator.run_single_agent, name, guided_input): name
-                    for name in remaining_agents
-                }
-                for future in as_completed(futures):
-                    name = futures[future]
-                    outputs[name] = future.result()
-                    yield _sse({"type": "agent_done", "agent": name, "output": outputs[name]})
+            yield _sse({"type": "agent_start", "agent": "budget"})
+            outputs["budget"] = orchestrator.run_single_agent("budget", shared)
+            shared = orchestrator.with_budget_guidance(shared, outputs["budget"])
+            shared["_budget_allocations"] = outputs["budget"].get("allocations", {})
+            yield _sse({
+                "type": "agent_done",
+                "agent": "budget",
+                "output": outputs["budget"],
+            })
+
+            yield _sse({"type": "agent_start", "agent": "activity"})
+            yield _sse({"type": "agent_start", "agent": "housing"})
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                activity_future = executor.submit(
+                    orchestrator.run_single_agent, "activity", shared
+                )
+                housing_future = executor.submit(
+                    orchestrator.run_single_agent, "housing", shared
+                )
+                outputs["activity"] = activity_future.result()
+                outputs["housing"] = housing_future.result()
+            yield _sse({
+                "type": "agent_done",
+                "agent": "activity",
+                "output": outputs["activity"],
+            })
+            yield _sse({
+                "type": "agent_done",
+                "agent": "housing",
+                "output": outputs["housing"],
+            })
+
+            shared["_activity_meal_slots"] = outputs["activity"].get(
+                "meal_slot_handoff", {}
+            )
+            shared["_activity_outputs"] = outputs["activity"].get("recommended", [])
+            housing_recommendation = outputs["housing"].get("recommended") or {}
+            shared["_hotel_name"] = housing_recommendation.get("name", "")
+            shared["_housing_data"] = outputs["housing"]
+
+            yield _sse({"type": "agent_start", "agent": "food"})
+            outputs["food"] = orchestrator.run_single_agent("food", shared)
+            yield _sse({
+                "type": "agent_done",
+                "agent": "food",
+                "output": outputs["food"],
+            })
+
+            yield _sse({"type": "agent_start", "agent": "planning"})
+            outputs["planning"] = orchestrator.run_single_agent("planning", shared)
+            yield _sse({
+                "type": "agent_done",
+                "agent": "planning",
+                "output": outputs["planning"],
+            })
 
             yield _sse({"type": "agent_start", "agent": "orchestrator"})
-            result = orchestrator.reconcile_and_synthesize(trip_input, outputs)
-            result["trip_id"] = trip_id
+            result = orchestrator.reconcile_and_synthesize(shared, outputs)
+            result["trip_id"] = trip_input["trip_id"]
+            if pipeline_version:
+                result["pipeline_version"] = pipeline_version
             yield _sse({"type": "agent_done", "agent": "orchestrator"})
             yield _sse({"type": "complete", "result": result})
         except RuntimeError as e:
@@ -518,101 +627,18 @@ def plan_stream(trip: TripInput):
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 
-# --------------------------------------------------------------------------- #
-# v2 Serial Pipeline Endpoints
-# --------------------------------------------------------------------------- #
-try:
-    import orchestrator_v2  # noqa: E402
-    _V2_AVAILABLE = True
-except ImportError:
-    _V2_AVAILABLE = False
-
-
+# Keep the existing v2 routes as compatibility aliases. They now delegate to
+# the canonical transport-first orchestrator instead of a second implementation.
 @app.post("/plan/v2")
 def plan_v2(trip: TripInput):
-    """Run v2 serial pipeline: Budget → Transport → Activity → Food+Housing → Planning → Synthesis.
-
-    Agents execute in dependency order with data handoffs between them
-    (activity meal slots → food agent, housing → planning).
-    """
-    if not _V2_AVAILABLE:
-        raise HTTPException(status_code=501, detail="v2 orchestrator not available")
     try:
-        return orchestrator_v2.plan(trip.model_dump())
+        result = orchestrator.plan(trip.model_dump())
+        result["pipeline_version"] = "v2_transport_first"
+        return result
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
 
 
 @app.post("/plan/stream/v2")
 def plan_stream_v2(trip: TripInput):
-    """Stream v2 serial pipeline progress as Server-Sent Events.
-
-    Emits: agent_start, agent_done, agent_note, complete, error.
-    """
-    if not _V2_AVAILABLE:
-        raise HTTPException(status_code=501, detail="v2 orchestrator not available")
-
-    import hashlib
-    trip_input = trip.model_dump()
-    trip_id = hashlib.sha256(
-        f"{trip_input['location']}{trip_input['dates']['start']}{trip_input.get('origin', '')}".encode()
-    ).hexdigest()[:12]
-    trip_input["trip_id"] = trip_id
-
-    def generate():
-        try:
-            yield _sse({"type": "agent_start", "agent": "budget"})
-            outputs = {"budget": orchestrator_v2._AGENTS.get("budget", lambda x: {})(trip_input)}
-            yield _sse({"type": "agent_done", "agent": "budget"})
-
-            gi = orchestrator_v2.with_budget_guidance(trip_input, outputs["budget"])
-
-            yield _sse({"type": "agent_start", "agent": "transportation"})
-            outputs["transportation"] = orchestrator_v2._AGENTS.get("transportation", lambda x: {})(gi)
-            yield _sse({"type": "agent_done", "agent": "transportation"})
-
-            yield _sse({"type": "agent_start", "agent": "activity"})
-            outputs["activity"] = orchestrator_v2._AGENTS.get("activity", lambda x: {})(gi)
-            yield _sse({"type": "agent_done", "agent": "activity"})
-
-            # Inject activity meal slots into food agent input
-            ams = {}
-            for a in outputs["activity"].get("recommended", []):
-                if a.get("meal_slot"):
-                    d = a.get("date", "")
-                    ams.setdefault(d, []).append({
-                        "activity_name": a["name"], "meal_slot": a["meal_slot"],
-                        "start_time": a.get("start_time", ""), "end_time": a.get("end_time", ""),
-                        "location": a.get("location", outputs["activity"].get("destination", "")),
-                    })
-            gi["_activity_meal_slots"] = ams
-
-            yield _sse({"type": "agent_start", "agent": "food"})
-            yield _sse({"type": "agent_start", "agent": "housing"})
-
-            from concurrent.futures import ThreadPoolExecutor
-            with ThreadPoolExecutor(max_workers=2) as ex:
-                ff = ex.submit(orchestrator_v2._AGENTS.get("food", lambda x: {}), gi)
-                hf = ex.submit(orchestrator_v2._AGENTS.get("housing", lambda x: {}), gi)
-                outputs["food"] = ff.result()
-                outputs["housing"] = hf.result()
-            yield _sse({"type": "agent_done", "agent": "food"})
-            yield _sse({"type": "agent_done", "agent": "housing"})
-
-            yield _sse({"type": "agent_start", "agent": "planning"})
-            outputs["planning"] = orchestrator_v2._AGENTS.get("planning", lambda x: {})(gi)
-            yield _sse({"type": "agent_done", "agent": "planning"})
-
-            yield _sse({"type": "agent_start", "agent": "orchestrator"})
-            result = orchestrator_v2.reconcile_and_synthesize(trip_input, outputs)
-            result["trip_id"] = trip_id
-            result["pipeline_version"] = "v2_serial"
-            yield _sse({"type": "agent_done", "agent": "orchestrator"})
-            yield _sse({"type": "complete", "result": result})
-        except RuntimeError as e:
-            yield _sse({"type": "error", "message": str(e)})
-        except Exception as e:
-            yield _sse({"type": "error", "message": f"Unexpected error: {e}"})
-
-    return StreamingResponse(generate(), media_type="text/event-stream")
-
+    return _plan_stream_response(trip, pipeline_version="v2_transport_first")

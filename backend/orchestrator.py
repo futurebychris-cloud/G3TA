@@ -11,7 +11,7 @@ Public API:
     plan(trip_input)                     -> runs everything end to end
 """
 import json
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 
 from agents import (
     activity_agent,
@@ -24,6 +24,13 @@ from agents import (
 from agents.base import trip_days
 from llm.deepseek_client import chat_json
 from booking.shared_db import init_shared_db, save_trip
+from services._geography import (
+    coordinates_are_tokyo_endpoint,
+    destination_allows_retired_tokyo_places,
+    location_allows_tokyo_airport,
+    retired_tokyo_record_field,
+    tokyo_endpoint_marker,
+)
 
 _AGENTS = {
     "budget": budget_agent.run,
@@ -76,32 +83,205 @@ def with_budget_guidance(trip_input: dict, budget_output: dict) -> dict:
     return guided
 
 
-LEGACY_TOKYO_MARKERS = {
-    "tokyo", "asakusa", "shibuya", "ginza", "shinjuku", "akihabara",
-    "senso-ji", "nrt", "haneda", "mt. fuji", "hakone", "teamlab planets",
-}
+def prepare_trip_input(trip_input: dict) -> dict:
+    """Create the stable trip id used by every agent and persist trip metadata."""
+    import hashlib
+
+    prepared = {**trip_input}
+    trip_id = prepared.get("trip_id") or hashlib.sha256(
+        f"{prepared['location']}{prepared['dates']['start']}{prepared.get('origin', '')}".encode()
+    ).hexdigest()[:12]
+    prepared["trip_id"] = trip_id
+    init_shared_db()
+    save_trip(
+        trip_id=trip_id,
+        location=prepared["location"],
+        origin=prepared.get("origin", ""),
+        start_date=prepared["dates"]["start"],
+        end_date=prepared["dates"]["end"],
+        total_budget=float(prepared["budget"]["total"]),
+        currency=prepared["budget"].get("currency", "CNY"),
+    )
+    return prepared
 
 
-def _has_legacy_tokyo_content(value, destination: str) -> bool:
-    destination_text = destination.casefold()
-    if "tokyo" in destination_text or "japan" in destination_text:
-        return False
-    serialized = json.dumps(value, ensure_ascii=False).casefold()
-    return any(marker in serialized for marker in LEGACY_TOKYO_MARKERS)
+def _normalized_location(value) -> str:
+    return str(value or "").strip().casefold()
+
+
+def _expect_location(
+    agent: str,
+    path: str,
+    value,
+    expected: str,
+    role: str,
+    route: str,
+) -> None:
+    if _normalized_location(value) != _normalized_location(expected):
+        raise ValueError(
+            f"{agent} Agent returned '{value}' at {path}; expected {role} "
+            f"'{expected}' for the '{route}' route."
+        )
+
+
+def _selected_place_guard(
+    agent: str,
+    path: str,
+    record: dict,
+    destination: str,
+    route: str,
+    *,
+    include_name: bool = True,
+) -> None:
+    if "destination" in record:
+        _expect_location(
+            agent,
+            f"{path}.destination",
+            record["destination"],
+            destination,
+            "destination",
+            route,
+        )
+    if destination_allows_retired_tokyo_places(destination):
+        return
+    location_value = record.get("location")
+    if tokyo_endpoint_marker(location_value):
+        raise ValueError(
+            f"{agent} Agent selected stale Tokyo/Japan data '{location_value}' at "
+            f"{path}.location for the '{route}' route."
+        )
+    retired_field = retired_tokyo_record_field(
+        record,
+        include_name=include_name,
+    )
+    if retired_field:
+        field, value = retired_field
+        raise ValueError(
+            f"{agent} Agent selected retired Tokyo demo data '{value}' at "
+            f"{path}.{field} for the '{route}' route."
+        )
 
 
 def _validate_agent_geography(trip_input: dict, outputs: dict) -> None:
     destination = trip_input["location"].strip()
+    origin = str(trip_input.get("origin", "")).strip()
+    route = f"{origin} → {destination}"
     for agent, output in outputs.items():
-        output_destination = str(output.get("destination", destination)).strip()
-        if output_destination.casefold() != destination.casefold():
+        label = agent.replace("_", " ").title()
+        if not isinstance(output, dict) or "destination" not in output:
             raise ValueError(
-                f"{agent.title()} Agent returned data for '{output_destination}' instead of '{destination}'."
+                f"{label} Agent response is missing its required destination for "
+                f"the '{route}' route."
             )
-    if _has_legacy_tokyo_content(outputs, destination):
-        raise ValueError(
-            f"Geography guard rejected stale Tokyo/Japan data for a {destination} trip. Please retry."
+        _expect_location(
+            label,
+            f"{agent}.destination",
+            output["destination"],
+            destination,
+            "destination",
+            route,
         )
+
+    transportation = outputs.get("transportation", {})
+    for key in ("recommended", "route_summary"):
+        record = transportation.get(key)
+        if not isinstance(record, dict):
+            continue
+        path = f"transportation.{key}"
+        if origin and "origin" in record:
+            _expect_location(
+                "Transportation",
+                f"{path}.origin",
+                record["origin"],
+                origin,
+                "route origin",
+                route,
+            )
+        if "destination" in record:
+            _expect_location(
+                "Transportation",
+                f"{path}.destination",
+                record["destination"],
+                destination,
+                "destination",
+                route,
+            )
+        for field, expected in (
+            ("departure_airport", origin),
+            ("arrival_airport", destination),
+        ):
+            marker = tokyo_endpoint_marker(record.get(field))
+            if marker and not location_allows_tokyo_airport(expected):
+                raise ValueError(
+                    f"Transportation Agent returned Tokyo endpoint "
+                    f"'{record.get(field)}' at {path}.{field} for the "
+                    f"'{route}' route."
+                )
+
+    route_points = transportation.get("route_points", [])
+    if not isinstance(route_points, list):
+        route_points = []
+    for index, point in enumerate(route_points):
+        if (
+            not isinstance(point, dict)
+            or point.get("role") not in {"departure", "arrival"}
+        ):
+            continue
+        expected = origin if point["role"] == "departure" else destination
+        path = f"transportation.route_points[{index}]"
+        marker = tokyo_endpoint_marker(point.get("label"))
+        if (
+            marker
+            or coordinates_are_tokyo_endpoint(
+                point.get("lat"),
+                point.get("lng"),
+            )
+        ) and not location_allows_tokyo_airport(expected):
+            raise ValueError(
+                f"Transportation Agent returned a Tokyo {point['role']} point "
+                f"at {path} for the '{route}' route."
+            )
+
+    housing = outputs.get("housing", {}).get("recommended")
+    if isinstance(housing, dict):
+        _selected_place_guard(
+            "Housing",
+            "housing.recommended",
+            housing,
+            destination,
+            route,
+        )
+
+    activities = outputs.get("activity", {}).get("recommended", [])
+    if not isinstance(activities, list):
+        activities = []
+    for index, activity in enumerate(activities):
+        if isinstance(activity, dict):
+            _selected_place_guard(
+                "Activity",
+                f"activity.recommended[{index}]",
+                activity,
+                destination,
+                route,
+            )
+
+    daily_meals = outputs.get("food", {}).get("daily_meals", [])
+    if not isinstance(daily_meals, list):
+        daily_meals = []
+    for day_index, day in enumerate(daily_meals):
+        meals = day.get("meals", []) if isinstance(day, dict) else []
+        if not isinstance(meals, list):
+            continue
+        for meal_index, meal in enumerate(meals):
+            if isinstance(meal, dict):
+                _selected_place_guard(
+                    "Food",
+                    f"food.daily_meals[{day_index}].meals[{meal_index}]",
+                    meal,
+                    destination,
+                    route,
+                    include_name=False,
+                )
 
 
 def _reconcile_budget(trip_input: dict, outputs: dict, log: list) -> dict:
@@ -446,13 +626,10 @@ def _map_points(outputs: dict, destination: str = "") -> list:
             print(f"[orchestrator] activity geocoding failed (non-fatal): {e}")
 
         for a in activities:
-            # If still no lat/lng after geocoding, use city center
+            # A city center is not a valid substitute for a named POI: skip unresolved pins.
             if not ("lat" in a and a.get("lat") and "lng" in a and a.get("lng")):
-                if city_center:
-                    a["lat"] = city_center[0]
-                    a["lng"] = city_center[1]
-                else:
-                    continue  # skip this activity entirely
+                print(f"[orchestrator] skipping unresolved map point '{a.get('name', '')}'")
+                continue
 
             act_images = a.get("images", [])
             points.append({
@@ -500,6 +677,168 @@ def _map_points(outputs: dict, destination: str = "") -> list:
     return points
 
 
+OUTDOOR_ACTIVITY_MARKERS = {
+    "adventure",
+    "bike",
+    "cycling",
+    "garden",
+    "hike",
+    "hiking",
+    "nature",
+    "outdoor",
+    "park",
+    "trail",
+    "walking",
+    "waterfront",
+}
+
+
+def _activity_is_outdoor(activity: dict) -> bool:
+    values = [
+        activity.get("name", ""),
+        activity.get("style", activity.get("type", "")),
+        *(activity.get("tags") or []),
+    ]
+    content = " ".join(str(value) for value in values).casefold()
+    return any(marker in content for marker in OUTDOOR_ACTIVITY_MARKERS)
+
+
+def _weather_score(day: dict) -> tuple:
+    """Lower values indicate a better day for an outdoor activity."""
+    condition = str(day.get("condition", "")).casefold()
+    severity = 1 if any(
+        marker in condition
+        for marker in ("thunder", "hail", "heavy", "freezing")
+    ) else 0
+    return (
+        severity,
+        float(day.get("rain_chance") or 0),
+        float(day.get("precipitation_mm") or 0),
+        float(day.get("snowfall_cm") or 0),
+        float(day.get("wind_speed_max_kmh") or 0),
+        day.get("date", ""),
+    )
+
+
+def _weather_activity_assignment(
+    days: list[str],
+    activities: list[dict],
+    weather: list[dict],
+) -> dict:
+    """Put outdoor activities on the clearest dates and indoor ones on the rest."""
+    activities = activities[:len(days)]
+    weather_by_date = {
+        day.get("date"): day
+        for day in weather
+        if isinstance(day, dict)
+    }
+    ranked_days = sorted(
+        days,
+        key=lambda value: _weather_score(
+            weather_by_date.get(value, {"date": value})
+        ),
+    )
+    outdoor = [
+        activity
+        for activity in activities
+        if _activity_is_outdoor(activity)
+    ]
+    indoor = [
+        activity
+        for activity in activities
+        if not _activity_is_outdoor(activity)
+    ]
+
+    assignment = {}
+    for activity, activity_date in zip(outdoor, ranked_days):
+        assignment[activity_date] = activity
+    remaining_days = [value for value in days if value not in assignment]
+    for activity, activity_date in zip(indoor, remaining_days):
+        assignment[activity_date] = activity
+    return assignment
+
+
+def _weather_detail(day: dict | None) -> str:
+    if not day:
+        return ""
+    try:
+        rain = f"{round(float(day.get('rain_chance', 0)) * 100):.0f}% rain"
+        temperatures = f"{float(day['low_c']):.0f}–{float(day['high_c']):.0f}°C"
+    except (KeyError, TypeError, ValueError):
+        return ""
+    label = (
+        "seasonal estimate"
+        if day.get("source") == "deepseek_seasonal_estimate"
+        else "forecast"
+    )
+    return (
+        f"Weather ({label}): {day.get('condition', 'conditions vary')}, "
+        f"{temperatures}, {rain}."
+    )
+
+
+def _apply_weather_activity_order(
+    synth: dict,
+    trip_input: dict,
+    outputs: dict,
+) -> None:
+    """Enforce weather-aware activity placement on any synthesized schedule."""
+    days = trip_days(trip_input)
+    activities = outputs.get("activity", {}).get("recommended", [])
+    weather = outputs.get("planning", {}).get("daily_weather", [])
+    assignment = _weather_activity_assignment(days, activities, weather)
+    activity_records = {
+        activity["name"].strip().casefold(): activity
+        for activity in activities
+        if isinstance(activity, dict) and str(activity.get("name", "")).strip()
+    }
+    weather_by_date = {
+        day.get("date"): day
+        for day in weather
+        if isinstance(day, dict)
+    }
+
+    existing_items = {}
+    slots = {}
+    for day in synth.get("schedule", []):
+        retained = []
+        for item in day.get("items", []):
+            if item.get("type") == "activity":
+                key = str(item.get("title", "")).strip().casefold()
+                existing_items[key] = item
+                slots.setdefault(day.get("date"), len(retained))
+            else:
+                retained.append(item)
+        day["items"] = retained
+
+    for day in synth.get("schedule", []):
+        activity = assignment.get(day.get("date"))
+        if not activity:
+            continue
+        key = activity["name"].strip().casefold()
+        item = dict(existing_items.get(key) or {
+            "time": activity.get("start_time", "10:30"),
+            "type": "activity",
+            "title": activity["name"],
+            "detail": (
+                f"{activity.get('style', activity.get('type', 'activity'))} · "
+                f"{activity.get('duration', '')} · "
+                f"{activity.get('area', activity.get('location', ''))}"
+            ).strip(" ·"),
+        })
+        item["title"] = activity_records[key]["name"]
+        weather_note = _weather_detail(weather_by_date.get(day.get("date")))
+        if weather_note and "Weather (" not in str(item.get("detail", "")):
+            item["detail"] = (
+                f"{str(item.get('detail', '')).strip()} {weather_note}"
+            ).strip()
+        slot = min(
+            slots.get(day.get("date"), len(day["items"])),
+            len(day["items"]),
+        )
+        day["items"].insert(slot, item)
+
+
 def _meal_title(meal: dict) -> str:
     """v1 uses 'name' for restaurant; v2 uses 'name' for dish + 'restaurant' for venue."""
     return meal.get("restaurant", meal.get("name", ""))
@@ -517,6 +856,11 @@ def _meal_detail(meal: dict) -> str:
 def _fallback_schedule(trip_input: dict, outputs: dict) -> dict:
     days = trip_days(trip_input)
     activities = outputs["activity"]["recommended"]
+    activity_by_date = _weather_activity_assignment(
+        days,
+        activities,
+        outputs["planning"].get("daily_weather", []),
+    )
     meals_by_day = {d["date"]: d for d in outputs["food"]["daily_meals"]}
     housing = outputs["housing"]["recommended"]
     transport = outputs["transportation"]["recommended"] or {}
@@ -533,7 +877,7 @@ def _fallback_schedule(trip_input: dict, outputs: dict) -> dict:
                           "detail": f"{f'From {from_loc}. ' if from_loc else ''}"
                                     f"Check in at {hotel_name}."})
         day_meals = meals_by_day.get(date, {}).get("meals", [])
-        act = activities[i] if i < len(activities) else None
+        act = activity_by_date.get(date)
         if day_meals:
             items.append({"time": "08:30", "type": "meal", "title": _meal_title(day_meals[0]),
                           "detail": _meal_detail(day_meals[0])})
@@ -582,25 +926,56 @@ def _valid_synthesis(trip_input: dict, synth: dict | None, outputs: dict) -> boo
         for daily in outputs["food"]["daily_meals"]
         for meal in daily["meals"]
     }
+    housing = outputs.get("housing", {}).get("recommended", {})
+    allowed_lodging = str(housing.get("name", "")).strip().casefold()
     activity_titles = []
     for day in schedule:
         if not isinstance(day.get("items"), list):
             return False
         for item in day["items"]:
-            if item.get("type") == "activity":
+            if not isinstance(item, dict):
+                return False
+            item_type = item.get("type")
+            if item_type not in {
+                "arrival",
+                "departure",
+                "hotel",
+                "lodging",
+                "meal",
+                "activity",
+            }:
+                return False
+            if (
+                not destination_allows_retired_tokyo_places(
+                    trip_input["location"]
+                )
+                and retired_tokyo_record_field({
+                    "name": item.get("title"),
+                })
+            ):
+                return False
+            if item_type == "activity":
                 title = str(item.get("title", "")).strip().casefold()
                 if not title or title not in allowed_activities:
                     return False
                 activity_titles.append(title)
-            if item.get("type") == "meal":
+            if item_type == "meal":
                 title = str(item.get("title", "")).strip().casefold()
                 if not title or title not in allowed_meals:
+                    return False
+            if item_type in {"hotel", "lodging"}:
+                title = str(item.get("title", "")).strip().casefold()
+                if (
+                    not title
+                    or not allowed_lodging
+                    or title != allowed_lodging
+                ):
                     return False
     if len(activity_titles) != min(len(days), len(allowed_activities)):
         return False
     if len(activity_titles) != len(set(activity_titles)):
         return False
-    return not _has_legacy_tokyo_content(synth, trip_input["location"])
+    return True
 
 
 def reconcile_and_synthesize(trip_input: dict, outputs: dict) -> dict:
@@ -646,6 +1021,7 @@ def reconcile_and_synthesize(trip_input: dict, outputs: dict) -> dict:
         synth = None
     if synth is None:
         synth = _fallback_schedule(trip_input, outputs)
+    _apply_weather_activity_order(synth, trip_input, outputs)
 
     return {
         "destination": trip_input["location"],
@@ -656,13 +1032,16 @@ def reconcile_and_synthesize(trip_input: dict, outputs: dict) -> dict:
         "map_points": _map_points(outputs, trip_input["location"]),
         "packing_list": outputs["planning"]["packing_list"],
         "weather_summary": outputs["planning"]["weather_summary"],
+        "weather_source": outputs["planning"].get("weather_source", "unknown"),
+        "weather_location": outputs["planning"].get("weather_location"),
         "reasoning_log": reasoning_log,
         "agent_outputs": outputs,
         "transport_scrape_status": outputs.get("transportation", {}).get("scrape_status", "ok"),
         "transport_errors": outputs.get("transportation", {}).get("errors", []),
         "verification_notice": (
-            "All prices are sourced from real-time Playwright scraping of "
-            "Ctrip (携程) and other booking platforms. Verify before booking."
+            "Live provider data is used when available. Clearly labeled estimates and "
+            "fallbacks may be included when a provider is unavailable; verify every price, "
+            "schedule, availability, and reservation before purchase."
         ),
     }
 
@@ -682,39 +1061,26 @@ def plan(trip_input: dict) -> dict:
     This replaces the previous fire-all-concurrently approach, which never
     delivered the cross-agent handoffs the design requires.
     """
-    # Initialize shared database and save trip metadata
-    init_shared_db()
-    import hashlib
-    trip_id = hashlib.sha256(
-        f"{trip_input['location']}{trip_input['dates']['start']}{trip_input.get('origin','')}".encode()
-    ).hexdigest()[:12]
-    save_trip(
-        trip_id=trip_id,
-        location=trip_input["location"],
-        origin=trip_input.get("origin", ""),
-        start_date=trip_input["dates"]["start"],
-        end_date=trip_input["dates"]["end"],
-        total_budget=float(trip_input["budget"]["total"]),
-        currency=trip_input["budget"].get("currency", "CNY"),
-    )
+    prepared_input = prepare_trip_input(trip_input)
+    trip_id = prepared_input["trip_id"]
+
     # Mutable working copy shared across agents — the handoff channel.
-    shared = dict(trip_input)
-    shared["trip_id"] = trip_id
+    shared = dict(prepared_input)
 
     # ---- 1. TRANSPORTATION FIRST (always) ----
-    transport_out = transportation_agent.run(shared)
+    transport_out = run_single_agent("transportation", shared)
     shared["_transport_cost"] = float(transport_out.get("cost", 0) or 0)
     shared["_transport_scope"] = transport_out.get("scope", "national")
 
     # ---- 2. BUDGET (transport-first, grounded in real transport cost) ----
-    budget_out = budget_agent.run(shared)
+    budget_out = run_single_agent("budget", shared)
     shared = with_budget_guidance(shared, budget_out)  # -> _budget_caps/_budget_ratios/_cost_index
     shared["_budget_allocations"] = budget_out.get("allocations", {})
 
     # ---- 3. ACTIVITY + HOUSING (independent, parallel) ----
     with ThreadPoolExecutor(max_workers=2) as executor:
-        act_f = executor.submit(activity_agent.run, shared)
-        house_f = executor.submit(housing_agent.run, shared)
+        act_f = executor.submit(run_single_agent, "activity", shared)
+        house_f = executor.submit(run_single_agent, "housing", shared)
         activity_out = act_f.result()
         housing_out = house_f.result()
 
@@ -727,10 +1093,10 @@ def plan(trip_input: dict) -> dict:
     shared["_housing_data"] = housing_out
 
     # ---- 4. FOOD (consumes meal slots + budget caps) ----
-    food_out = food_agent.run(shared)
+    food_out = run_single_agent("food", shared)
 
     # ---- 5. PLANNING (consumes activity outputs + budget alloc + hotel) ----
-    planning_out = planning_agent.run(shared)
+    planning_out = run_single_agent("planning", shared)
 
     outputs = {
         "transportation": transport_out,
