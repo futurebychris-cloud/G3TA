@@ -31,6 +31,8 @@ import urllib.parse
 import urllib.request
 from datetime import date
 
+from ._geography import destination_allows_retired_tokyo_places, retired_tokyo_record_field
+
 _PROVIDERS = ("hotelbeds", "amadeus", "rapidapi", "tongcheng", "elong")
 _HTTP_TIMEOUT = 15
 
@@ -55,7 +57,13 @@ def get_hotel_options(
             fn = _DISPATCH[name]
             out = fn(destination, dates, max_price_per_night)
             if out:
-                return out
+                if not destination_allows_retired_tokyo_places(destination):
+                    out = [
+                        option for option in out
+                        if isinstance(option, dict) and not retired_tokyo_record_field(option)
+                    ]
+                if out:
+                    return out
         except Exception as exc:  # a missing key or a network error is not fatal here
             print(f"[hotels] provider '{name}' unavailable ({exc}); trying next.")
     raise RuntimeError(

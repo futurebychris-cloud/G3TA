@@ -134,7 +134,7 @@ class PlanningWeatherTests(unittest.TestCase):
             "location": {"name": "Montreal, Quebec, Canada"},
             "verification_required": False,
             "daily": [{
-                "date": "2026-07-22", "condition": "Snow", "high_c": 28.0, "low_c": -2.0,
+                "date": "2026-07-22", "condition": "Snow", "high_c": 30.0, "low_c": -2.0,
                 "rain_chance": 0.7, "snowfall_cm": 2.0, "precipitation_mm": 5.0,
                 "wind_speed_max_kmh": 42.0, "uv_index_max": 8.0,
                 "source": "open_meteo_forecast",
@@ -144,19 +144,22 @@ class PlanningWeatherTests(unittest.TestCase):
             "location": "Montreal", "dates": {"start": "2026-07-22", "end": "2026-07-22"},
             "preferences": {"activity_style": ["adventure"]},
         }
-        with patch.object(planning_agent, "get_weather", return_value=weather), \
+        with patch.object(planning_agent, "_geocode_city", return_value=(45.5, -73.6)), \
+                patch.object(planning_agent, "_fetch_open_meteo_weather", return_value=weather), \
                 patch.object(planning_agent, "llm_reason", return_value={
-                    "packing_list": ["Camera"], "pacing_notes": "Keep the day flexible."
-                }):
+                    "checklist": [{
+                        "category": "item",
+                        "items": [{"name": "Camera", "quantity": 1, "reason": "Photographs"}],
+                    }],
+                }), \
+                patch("booking.shared_db.save_checklist_item"):
             result = planning_agent.run(trip)
 
-        self.assertEqual(result["packing_list"][0], "Camera")
-        for item in (
-            "Compact umbrella", "Thermal base layers", "Insulated waterproof boots",
-            "Windproof outer layer", "Broad-spectrum sunscreen",
-        ):
-            self.assertIn(item, result["packing_list"])
-        self.assertIn("2026-07-22", result["pacing_notes"])
+        self.assertIn("[item] Camera", result["packing_list"])
+        self.assertIn("[item] Compact umbrella / rain jacket", result["packing_list"])
+        self.assertTrue(any("Warm accessories" in item for item in result["packing_list"]))
+        self.assertTrue(any("Sun protection" in item for item in result["packing_list"]))
+        self.assertIn("significant rain chance", result["pacing_notes"])
         self.assertEqual(result["weather_source"], "open_meteo_forecast")
 
     def test_outdoor_activity_is_moved_to_clearest_day(self):

@@ -1,7 +1,11 @@
+import importlib
 import unittest
 from unittest.mock import patch
 
-from agents import transportation_agent
+
+# Exercise the AMap-compatible v1 adapter directly. The package-level alias may
+# point at the real-data v2 scraper when that optional backend is available.
+transportation_agent = importlib.import_module("agents.transportation_agent")
 
 
 TRIP = {
