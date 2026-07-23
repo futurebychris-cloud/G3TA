@@ -16,7 +16,7 @@ matching spot if a rewrite doesn't land well.
 - H1: `The world is wide.` / `Let go. We'll get you there.`
 - Lede: `Tell us where you're dreaming of. Six AI specialists debate the routes, prices, and trade-offs behind the scenes — so you get one confident plan, not forty open tabs.`
 
-Official slogan now in use: `You find the vibe.` / `The Agents plan the journey. Vibego!` (earlier wordings: `AI Agents will plan the journey.`, `AI task-bot will plan the journey.`)
+Official slogan now in use: `You find the vibe.` / `The Agents plan the journey.` (earlier wordings: `AI Agents will plan the journey.`, `AI task-bot will plan the journey.`)
 
 - Intermediate lede (replaced): `Tell us where you're dreaming of. Six AI specialists debate the routes, prices, and trade-offs behind the scenes — so you get one confident plan, not forty open tabs.`
 - Intermediate lede (replaced): `VibeGo doesn't answer one question — it completes an entire travel-planning task from start to finish through a structured, multi-agent workflow.`
