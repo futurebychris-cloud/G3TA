@@ -215,8 +215,12 @@
 
 .destination-input-row { min-width: 0; display: flex; align-items: center; gap: 7px; }
 .destination-input-row > input { width: 100%; min-width: 0; border: 0; padding: 0; outline: 0; background: transparent; color: var(--ink); font-size: 1.13rem; font-weight: 720; letter-spacing: -.02em; }
-.voice-input-control { position: relative; flex: 0 0 auto; }
+
+/* --- Voice input: one column — button row, then any-language hint, then status --- */
+.voice-input-control { position: relative; flex: 0 0 auto; display: flex; flex-direction: column; gap: 6px; }
+.voice-input-row { display: flex; align-items: center; gap: 8px; }
 .voice-button {
+  position: relative;
   width: 38px;
   height: 38px;
   display: grid;
@@ -241,38 +245,56 @@
   font-size: .8rem;
   font-weight: 850;
 }
-.speech-status:not(.sr-only) {
-  position: absolute;
-  z-index: 5;
-  top: calc(100% + 10px);
-  right: 0;
-  width: max-content;
-  max-width: 260px;
-  padding: 7px 9px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: var(--ink);
-  color: white;
-  font-size: .62rem;
-  line-height: 1.35;
-}
-.voice-detected-language {
-  position: absolute;
-  top: calc(100% + 10px);
-  right: 0;
-  width: max-content;
-  max-width: 240px;
+
+/* "Speak another language" toggle — always paired with the wide (labeled) button. */
+.voice-any-language {
+  height: 48px;
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 7px 10px;
+  padding: 0 14px;
+  border: 1px dashed var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: .72rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.voice-any-language:hover { color: var(--ink); border-color: var(--ink); }
+.voice-any-language:disabled { cursor: not-allowed; opacity: .6; }
+.voice-any-language.active {
+  border: 1px solid #2743a5;
+  background: #eef4ff;
+  color: #2743a5;
+}
+.voice-any-language-hint { margin: 0; color: var(--muted); font-size: .74rem; line-height: 1.5; }
+
+/* Status + detected-language feedback: normal document flow, never floats or overlaps. */
+.voice-input-feedback { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-height: 0; }
+.speech-status:not(.sr-only) {
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: var(--ink);
+  color: white;
+  font-size: .68rem;
+  font-weight: 700;
+  line-height: 1.4;
+}
+.voice-detected-language {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
   border: 1px solid rgba(37, 99, 235, .24);
   border-radius: 999px;
   background: #eef4ff;
   color: #2743a5;
-  font-size: .68rem;
+  font-size: .7rem;
   font-weight: 850;
 }
+.voice-detected-language em { font-style: normal; color: #1a2f70; }
 @keyframes voice-pulse { to { opacity: 0; transform: scale(1.25); } }
 
 .result-heading-actions { display: flex; justify-content: flex-end; margin: -18px 0 18px; }
@@ -762,7 +784,7 @@
   .speed-control, .speed-control input { width: 100%; }
   .day-plan-head > .read-aloud-controls { grid-column: 2; justify-self: start; }
   .result-heading-actions { justify-content: flex-start; margin-top: -8px; }
-  .speech-status:not(.sr-only) { right: -4px; max-width: 210px; }
+  .speech-status:not(.sr-only) { max-width: 210px; }
   .guided-addon { grid-template-columns: 44px 1fr; margin-inline: 20px; }
   .guided-addon-icon { width: 44px; height: 44px; }
   .guided-addon button { grid-column: 1 / -1; width: 100%; }

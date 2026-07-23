@@ -14,11 +14,12 @@ from .base import llm_reason, trip_days
 
 SYSTEM_PROMPT = (
     "You are the Housing Agent in a multi-agent trip planner. From the given lodging options, "
-    "pick the best single place to stay for the whole trip, weighing rating, REAL price per "
-    "night (already scraped live from 携程/Ctrip), area convenience, and how it matches the "
-    "traveler's activity style. "
+    "pick the best single place to stay for the whole trip, weighing rating, price per night "
+    "(live-scraped where available, otherwise a clearly labeled AI estimate — check each "
+    "option's `source` field), area convenience, and how it matches the traveler's activity "
+    "style. "
     "Every option is for the exact supplied destination; never choose or mention another city. "
-    "The prices are REAL scraped values — use them as-is, do not adjust or estimate. "
+    "Use the supplied prices as-is, do not adjust or estimate them yourself. "
     "Return ONLY a JSON object with keys: recommended_id (the id of your pick) and reasoning "
     "(one sentence)."
 )
@@ -99,6 +100,7 @@ def run(trip_input: dict) -> dict:
 
     price = recommended.get("price_per_night")
     cost = (price * nights) if price is not None else None
+    is_estimate = recommended.get("source") == "openstreetmap+deepseek_estimate"
 
     return {
         "options": options,
@@ -107,6 +109,9 @@ def run(trip_input: dict) -> dict:
         "cost": cost,
         "reasoning": reasoning,
         "destination": trip_input["location"],
-        "verification_required": False,
-        "price_note": None if price is not None else "实时房价缺失，请到携程核实。",
+        "verification_required": is_estimate,
+        "price_note": (
+            recommended.get("estimate_note") if is_estimate
+            else (None if price is not None else "实时房价缺失，请到携程核实。")
+        ),
     }

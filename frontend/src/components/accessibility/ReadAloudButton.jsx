@@ -20,7 +20,7 @@ export default function ReadAloudButton({ id, text, label = 'this content' }) {
     : speech.state === 'paused'
       ? `Resume reading ${label}`
       : speech.state === 'loading'
-        ? `Preparing Piper voice for ${label}`
+        ? `Preparing voice for ${label}`
       : `Read ${label} aloud`
 
   return (
@@ -45,9 +45,9 @@ export default function ReadAloudButton({ id, text, label = 'this content' }) {
       )}
       <span className={speech.error ? 'speech-playback-error' : 'sr-only'} role="status" aria-live="polite">
         {speech.state === 'loading'
-          ? `Preparing Piper voice for ${label}`
+          ? `Preparing voice for ${label}`
           : speech.state === 'speaking'
-            ? `Reading ${label} with Piper`
+            ? `Reading ${label} with ${speech.engine === 'browser' ? 'the device voice' : 'Piper'}`
             : speech.state === 'paused'
               ? `Reading ${label} paused`
               : speech.error}

@@ -172,13 +172,13 @@ const UI_COPY = {
     complete: 'complete',
     preparing: 'Preparing voice…',
     replay: 'Replay question',
-    preparingStatus: 'Preparing the Piper voice',
-    readingStatus: 'Piper is reading the question',
-    voiceError: 'Voice could not play. Choose Replay question and make sure the local voice service is running.',
+    preparingStatus: 'Preparing the voice',
+    readingStatus: 'The question is being read aloud',
+    voiceError: 'Voice could not play. Choose Replay question or check your browser audio settings.',
     answer: 'Your answer',
     optional: '(optional)',
     placeholder: 'Speak your answer or type it here',
-    voiceAdvances: 'Speak in any language—we will detect and label it automatically. Voice answers advance after transcription, and missing required details stay in this guide.',
+    voiceAdvances: 'Speak in the selected voice language, or choose "Speak another language" to answer in Spanish, Russian, or any language — it is shown here in English. Your answer advances automatically, and missing required details stay in this guide.',
     startOver: 'Start over',
     back: 'Back',
     next: 'Next question',
@@ -204,13 +204,13 @@ const UI_COPY = {
     complete: '已完成',
     preparing: '正在准备语音…',
     replay: '重播问题',
-    preparingStatus: '正在准备中文语音',
+    preparingStatus: '正在准备语音',
     readingStatus: '正在朗读问题',
-    voiceError: '语音未能播放。请点击“重播问题”重试，并确认本地语音服务已启动。',
+    voiceError: '语音未能播放。请点击“重播问题”重试，或检查浏览器的音频设置。',
     answer: '您的回答',
     optional: '（可选）',
     placeholder: '请说出答案，或在这里输入',
-    voiceAdvances: '您可以使用任何语言回答，我们会自动识别并显示语言。转写完成后会自动进入下一题；缺少的必填信息会继续在这里询问。',
+    voiceAdvances: '请使用当前选择的语音语言回答，或点击“说其他语言”以西班牙语、俄语等任何语言回答——识别结果会以中文显示。识别完成后会自动进入下一题；缺少的必填信息会继续在这里询问。',
     startOver: '重新开始',
     back: '返回',
     next: '下一题',
@@ -483,7 +483,7 @@ export default function GuidedTripAssistant({ open, onClose, onComplete, returnF
                     : guidedSpeech.state === 'speaking'
                       ? copy.readingStatus
                       : guidedSpeech.error
-                        ? copy.voiceError
+                        ? guidedSpeech.error || copy.voiceError
                         : ''}
                 </span>
               </>

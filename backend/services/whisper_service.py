@@ -53,16 +53,26 @@ def _multipart_audio(audio: bytes, content_type: str) -> tuple[bytes, str]:
     return body, boundary
 
 
-def transcribe_speech(audio: bytes, content_type: str = "audio/webm") -> dict[str, str]:
+def transcribe_speech(audio: bytes, content_type: str = "audio/webm", task: str = "transcribe") -> dict[str, str]:
+    """Transcribe (or translate-to-English) recorded speech via the local Whisper service.
+
+    task="translate" uses Whisper's built-in translation mode: it auto-detects the
+    spoken language same as "transcribe", but returns English text regardless of
+    the source language. `language`/`language_name` in the result still report the
+    ORIGINAL spoken language, so the caller can show "heard in Spanish, shown in
+    English" even though `text` itself is already English.
+    """
     if not audio:
         raise ValueError("Recorded audio is empty.")
     if len(audio) > MAX_AUDIO_BYTES:
         raise ValueError("Recorded audio is too large.")
+    if task not in ("transcribe", "translate"):
+        task = "transcribe"
 
     body, boundary = _multipart_audio(audio, content_type or "audio/webm")
     query = urllib.parse.urlencode({
         "encode": "true",
-        "task": "transcribe",
+        "task": task,
         "output": "json",
     })
     request = urllib.request.Request(
@@ -95,4 +105,5 @@ def transcribe_speech(audio: bytes, content_type: str = "audio/webm") -> dict[st
         "text": text,
         "language": language,
         "language_name": LANGUAGE_NAMES.get(language, language.upper() or "Unknown"),
+        "translated": task == "translate" and language not in ("", "en"),
     }

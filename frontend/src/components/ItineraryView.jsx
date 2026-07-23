@@ -1,4 +1,5 @@
 import { BedDouble, CalendarDays, Camera, Coffee, ImageOff, MapPin, PlaneLanding, PlaneTakeoff } from 'lucide-react'
+import ReadAloudButton from './accessibility/ReadAloudButton.jsx'
 
 const TYPE_META = {
   arrival: { label: 'Arrival', icon: PlaneLanding, tone: 'sky' },
@@ -26,6 +27,16 @@ function formatDayDate(value) {
     month: 'long',
     day: 'numeric',
   })
+}
+
+function dayReadAloudText(day) {
+  return [
+    `Day ${day.day}: ${day.title}`,
+    formatDayDate(day.date),
+    ...day.items.map((item) => (
+      `${item.time}, ${(TYPE_META[item.type] || { label: item.type }).label}: ${item.title}${item.detail ? `. ${item.detail}` : ''}`
+    )),
+  ]
 }
 
 export default function ItineraryView({ result }) {
@@ -78,6 +89,13 @@ export default function ItineraryView({ result }) {
         </div>
         <p>{result.schedule.length} days shaped around your tastes, pace, and total budget.</p>
       </div>
+      <div className="result-heading-actions">
+        <ReadAloudButton
+          id="full-itinerary"
+          label="the full itinerary"
+          text={result.schedule.flatMap(dayReadAloudText)}
+        />
+      </div>
 
       <div className="day-stack">
         {result.schedule.map((day, dayIndex) => (
@@ -89,9 +107,14 @@ export default function ItineraryView({ result }) {
                 <h3>{day.title}</h3>
               </div>
               <span className="day-route-label">{dayIndex === 0 ? 'Begin here' : dayIndex === result.schedule.length - 1 ? 'Final chapter' : 'Keep exploring'}</span>
+              <ReadAloudButton
+                id={`day-${day.day}-${day.date}`}
+                label={`day ${day.day}`}
+                text={dayReadAloudText(day)}
+              />
             </header>
 
-            <div className="day-events">
+            <div className={hasAnyImages ? 'day-events' : 'day-events no-thumbnails'}>
               {day.items.map((item, itemIndex) => {
                 const meta = TYPE_META[item.type] || { label: item.type, icon: MapPin, tone: 'slate' }
                 const ItemIcon = meta.icon

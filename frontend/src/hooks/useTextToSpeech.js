@@ -43,16 +43,22 @@ export function TextToSpeechProvider({ children }) {
   const [activeId, setActiveId] = useState(null)
   const [speechState, setSpeechState] = useState('idle')
   const [speechError, setSpeechError] = useState('')
+  const [speechEngine, setSpeechEngine] = useState(null)
   const audioRef = useRef(null)
   const audioUrlRef = useRef('')
+  const browserUtteranceRef = useRef(null)
   const requestRef = useRef(null)
   const requestVersionRef = useRef(0)
   const requiresReadAloudRef = useRef(false)
-  const supported = typeof window !== 'undefined'
+  const piperPlaybackSupported = typeof window !== 'undefined'
     && typeof window.Audio === 'function'
     && typeof URL !== 'undefined'
     && typeof URL.createObjectURL === 'function'
     && typeof URL.revokeObjectURL === 'function'
+  const browserSpeechSupported = typeof window !== 'undefined'
+    && typeof window.speechSynthesis?.speak === 'function'
+    && typeof window.SpeechSynthesisUtterance === 'function'
+  const supported = browserSpeechSupported || piperPlaybackSupported
 
   const releaseAudio = useCallback(() => {
     const audio = audioRef.current
@@ -69,16 +75,33 @@ export function TextToSpeechProvider({ children }) {
     audioUrlRef.current = ''
   }, [])
 
+  const releaseBrowserSpeech = useCallback(() => {
+    const utterance = browserUtteranceRef.current
+    if (utterance) {
+      utterance.onstart = null
+      utterance.onend = null
+      utterance.onerror = null
+      utterance.onpause = null
+      utterance.onresume = null
+    }
+    browserUtteranceRef.current = null
+    if (typeof window !== 'undefined' && window.speechSynthesis && utterance) {
+      window.speechSynthesis.cancel()
+    }
+  }, [])
+
   const stop = useCallback(() => {
     requestVersionRef.current += 1
     requestRef.current?.abort()
     requestRef.current = null
     releaseAudio()
+    releaseBrowserSpeech()
     setActiveId(null)
     setSpeechState('idle')
     setSpeechError('')
+    setSpeechEngine(null)
     requiresReadAloudRef.current = false
-  }, [releaseAudio])
+  }, [releaseAudio, releaseBrowserSpeech])
 
   const speak = useCallback(async (id, content, {
     force = false,
@@ -97,6 +120,69 @@ export function TextToSpeechProvider({ children }) {
     setActiveId(id)
     setSpeechState('loading')
     setSpeechError('')
+    setSpeechEngine(null)
+
+    // Prefer the browser's built-in speech engine. It works on localhost without
+    // Docker, FastAPI, or a network request, and honors the same language/rate
+    // controls as the local Piper service.
+    if (browserSpeechSupported) {
+      try {
+        const synth = window.speechSynthesis
+        const utterance = new window.SpeechSynthesisUtterance(preparedText)
+        const requestedLanguage = String(language || speechLanguage()).toLowerCase()
+        const languagePrefix = requestedLanguage.startsWith('zh') ? 'zh' : 'en'
+        utterance.lang = languagePrefix === 'zh' ? 'zh-CN' : 'en-US'
+        utterance.rate = settings.readingSpeed
+
+        const voices = synth.getVoices?.() || []
+        utterance.voice = voices.find((voice) => (
+          voice.localService && voice.lang?.toLowerCase().startsWith(languagePrefix)
+        )) || voices.find((voice) => voice.lang?.toLowerCase().startsWith(languagePrefix)) || null
+
+        browserUtteranceRef.current = utterance
+        setSpeechEngine('browser')
+        utterance.onstart = () => {
+          setActiveId(id)
+          setSpeechState('speaking')
+        }
+        utterance.onpause = () => setSpeechState('paused')
+        utterance.onresume = () => setSpeechState('speaking')
+        utterance.onend = () => {
+          browserUtteranceRef.current = null
+          setActiveId(null)
+          setSpeechState('idle')
+          setSpeechEngine(null)
+          requiresReadAloudRef.current = false
+        }
+        utterance.onerror = (event) => {
+          browserUtteranceRef.current = null
+          setActiveId(id)
+          setSpeechState('error')
+          setSpeechError(
+            event?.error
+              ? `The browser voice could not play (${event.error}).`
+              : 'The browser voice could not play.',
+          )
+          setSpeechEngine('browser')
+        }
+        if (synth.paused) synth.resume()
+        synth.speak(utterance)
+        // Some engines queue speech before emitting `start`; expose a useful
+        // state immediately so controls do not remain stuck on "Preparing".
+        setSpeechState('speaking')
+        return
+      } catch {
+        releaseBrowserSpeech()
+        // Older or partially implemented browsers can expose the API but throw
+        // on use. Continue to the Piper compatibility path below.
+      }
+    }
+
+    if (!piperPlaybackSupported) {
+      setSpeechState('error')
+      setSpeechError('Speech playback is unavailable in this browser.')
+      return
+    }
 
     let audio = null
     let unlockUrl = ''
@@ -132,6 +218,7 @@ export function TextToSpeechProvider({ children }) {
       audio.preload = 'auto'
       audioUrlRef.current = audioUrl
       audioRef.current = audio
+      setSpeechEngine('piper')
       audio.onplay = () => {
         setActiveId(id)
         setSpeechState('speaking')
@@ -147,6 +234,7 @@ export function TextToSpeechProvider({ children }) {
         setActiveId(id)
         setSpeechState('error')
         setSpeechError('Piper audio could not be played.')
+        setSpeechEngine('piper')
       }
       await audio.play()
     } catch (error) {
@@ -155,19 +243,41 @@ export function TextToSpeechProvider({ children }) {
       setActiveId(id)
       setSpeechState('error')
       setSpeechError(error?.message || 'Piper voice is unavailable.')
+      setSpeechEngine('piper')
     } finally {
       if (requestRef.current === controller) requestRef.current = null
     }
-  }, [releaseAudio, settings.readAloud, settings.readingSpeed, stop, supported])
+  }, [
+    browserSpeechSupported,
+    piperPlaybackSupported,
+    releaseAudio,
+    releaseBrowserSpeech,
+    settings.readAloud,
+    settings.readingSpeed,
+    stop,
+    supported,
+  ])
 
   const pause = useCallback(() => {
-    if (speechState !== 'speaking' || !audioRef.current) return
+    if (speechState !== 'speaking') return
+    if (speechEngine === 'browser' && browserUtteranceRef.current) {
+      window.speechSynthesis.pause()
+      setSpeechState('paused')
+      return
+    }
+    if (!audioRef.current) return
     audioRef.current.pause()
     setSpeechState('paused')
-  }, [speechState])
+  }, [speechEngine, speechState])
 
   const resume = useCallback(async () => {
-    if (speechState !== 'paused' || !audioRef.current) return
+    if (speechState !== 'paused') return
+    if (speechEngine === 'browser' && browserUtteranceRef.current) {
+      window.speechSynthesis.resume()
+      setSpeechState('speaking')
+      return
+    }
+    if (!audioRef.current) return
     try {
       await audioRef.current.play()
       setSpeechState('speaking')
@@ -175,7 +285,7 @@ export function TextToSpeechProvider({ children }) {
       setSpeechState('error')
       setSpeechError('Piper audio could not resume.')
     }
-  }, [speechState])
+  }, [speechEngine, speechState])
 
   useEffect(() => stop, [stop])
   useEffect(() => {
@@ -187,11 +297,12 @@ export function TextToSpeechProvider({ children }) {
     activeId,
     speechState,
     speechError,
+    speechEngine,
     speak,
     pause,
     resume,
     stop,
-  }), [supported, activeId, speechState, speechError, speak, pause, resume, stop])
+  }), [supported, activeId, speechState, speechError, speechEngine, speak, pause, resume, stop])
 
   return createElement(TextToSpeechContext.Provider, { value }, children)
 }
@@ -217,6 +328,7 @@ export default function useTextToSpeech(id, content) {
     supported: context.supported,
     state: isActive ? context.speechState : 'idle',
     error: isActive ? context.speechError : '',
+    engine: isActive ? context.speechEngine : null,
     play,
     playText,
     pause: context.pause,

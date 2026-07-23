@@ -584,7 +584,7 @@ button { -webkit-tap-highlight-color: transparent; }
 .agent-row.done .agent-icon { color: var(--ink); background: var(--lime); border-color: var(--lime); }
 .agent-copy { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
 .agent-copy strong { font-size: 0.78rem; }
-.agent-copy small { color: #98a1a6; font-size: 0.65rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agent-copy small { color: #98a1a6; font-size: 0.65rem; line-height: 1.35; }
 .agent-state { display: inline-flex; align-items: center; gap: 5px; min-width: 82px; justify-content: flex-end; font-size: 0.61rem; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 800; }
 .agent-row.running .agent-state { color: var(--coral-deep); }
 .agent-row.done .agent-state { color: #4e913c; }
@@ -819,6 +819,7 @@ button { -webkit-tap-highlight-color: transparent; }
 .map-point-label { position: absolute; left: 28px; top: -18px; min-width: max-content; display: flex; align-items: center; gap: 7px; padding: 7px 10px; border-radius: 7px; background: var(--white); color: var(--ink); box-shadow: 0 8px 22px rgba(0,0,0,.18); font-size: .68rem; font-weight: 750; }
 .map-point-label small { color: var(--coral-deep); font-size: .52rem; }
 .place-index { padding: 29px; border-radius: var(--radius); background: var(--paper); }
+.place-index-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
 .place-index ol { list-style: none; padding: 0; margin: 19px 0 0; }
 .place-index li { display: grid; grid-template-columns: 32px 1fr; gap: 9px; padding: 14px 0; border-bottom: 1px solid var(--line); }
 .place-number { color: var(--coral-deep); font-size: .6rem; }
@@ -1095,7 +1096,6 @@ button { -webkit-tap-highlight-color: transparent; }
   .progress-stage--town .agent-board { min-height: 0; }
   .agent-row { grid-template-columns: 27px 37px minmax(0,1fr); }
   .agent-state { grid-column: 3; justify-content: flex-start; margin-top: -7px; }
-  .agent-copy small { white-space: normal; }
   .result-page { padding: 44px 0 75px; }
   .trip-kicker { margin-bottom: 25px; }
   .trip-title-row h1 { font-size: clamp(4rem, 20vw, 6.5rem); }
@@ -1487,29 +1487,45 @@ button { -webkit-tap-highlight-color: transparent; }
 .spin { animation: booking-spin 1s linear infinite; }
 @keyframes booking-spin { to { transform: rotate(360deg); } }
 
-/* --- Real Leaflet map --- */
-.leaflet-map-container {
+/* --- Real Google Maps map (Gaode tiles by default, see MapView.jsx) --- */
+.gmap-container {
   border-radius: var(--radius);
   overflow: hidden;
   box-shadow: 0 4px 24px rgba(0,0,0,.08);
 }
-.custom-map-marker {
-  background: transparent !important;
-  border: none !important;
+.map-type-toggle {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 5;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--paper);
+  color: var(--sky);
+  font-size: .72rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0,0,0,.12);
+  transition: all .15s;
 }
-.leaflet-popup-content-wrapper {
-  border-radius: 10px;
-  font-family: inherit;
-}
-.leaflet-popup-content {
-  margin: 10px 14px;
-  font-size: .82rem;
-  line-height: 1.5;
+.map-type-toggle:hover {
+  background: var(--sky);
+  color: #fff;
+  border-color: var(--sky);
 }
 
 /* --- Itinerary event thumbnails --- */
 .event-row {
   grid-template-columns: 76px 40px 1fr 52px 30px;
+}
+/* No image anywhere in this trip: drop the thumbnail column entirely instead of
+   rendering dozens of empty placeholder boxes down the whole itinerary. */
+.day-events.no-thumbnails .event-row {
+  grid-template-columns: 76px 40px 1fr 30px;
+}
+.day-events.no-thumbnails .event-thumb {
+  display: none;
 }
 .event-thumb {
   width: 44px;

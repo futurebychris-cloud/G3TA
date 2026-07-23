@@ -38,6 +38,20 @@ DISCOVERY_PROMPT = (
     "  and reasoning (one sentence)."
 )
 
+KNOWLEDGE_PROMPT = (
+    "You are the Activity Agent (Experience Scout) in a multi-agent trip planner. "
+    "Web search and travel-platform scraping both failed for this destination, and it "
+    "is not in our curated database, so recommend real, well-known attractions from your "
+    "own travel knowledge. "
+    "Given a destination, number of days, and activity style preferences, return exactly "
+    "`num_days` DISTINCT real attractions that actually exist in that destination. "
+    "NEVER invent placeholder names like 'Destination Attraction 1' — every name must be "
+    "a specific, real, verifiable place. "
+    "Return ONLY a JSON object with key `activities`: an array of objects with "
+    "{name, type (culture|nature|entertainment|shopping), description (one sentence), "
+    "ticket_price (number, in local currency, 0 if free), rating (1.0-5.0)}."
+)
+
 TIME_SCHEDULING_PROMPT = (
     "You are a time scheduler for trip activities. Given activities with opening hours "
     "and user time preferences, schedule each activity to a specific time slot. "
@@ -392,37 +406,46 @@ def run(trip_input: dict) -> dict:
                 activities = known
                 print(f"[activity_agent] using known attractions DB: {len(activities)} items for {destination}")
             else:
-                # Absolute last resort: LLM must generate names (city not in our DB)
-                from .base import llm_reason as _lr
-                fallback = _lr(DISCOVERY_PROMPT, {
+                # Absolute last resort: city isn't in our curated DB and scraping came up
+                # empty. Ask DeepSeek directly for real attraction names — do NOT invent
+                # placeholder names like "New York Attraction 1".
+                knowledge = llm_reason(KNOWLEDGE_PROMPT, {
                     "destination": destination,
-                    "activity_styles": activity_styles,
                     "num_days": target,
-                    "total_budget": trip_input.get("budget", {}),
+                    "activity_styles": activity_styles,
                     "all_preferences": preferences,
-                    "options": [{"id": f"fb_{i}", "name": f"{destination} attraction {i+1}", "price": 50 + i*20,
-                                 "rating": 4.0 + (i*0.2), "type": "culture", "source": "llm"}
-                                for i in range(10)],
                 })
-                selected = (fallback or {}).get("recommended_ids", [f"fb_{i}" for i in range(target)])
-                for i, aid in enumerate(selected[:target]):
+                llm_activities = (knowledge or {}).get("activities", []) if knowledge else []
+                for i, item in enumerate(llm_activities[:target]):
+                    name = str(item.get("name") or "").strip()
+                    if not name:
+                        continue
+                    try:
+                        price = float(item.get("ticket_price", 0) or 0)
+                    except (TypeError, ValueError):
+                        price = 0.0
+                    try:
+                        rating = float(item.get("rating", 4.0) or 4.0)
+                    except (TypeError, ValueError):
+                        rating = 4.0
                     activities.append({
-                        "id": aid,
-                        "name": f"{destination} Attraction {i+1}",
+                        "id": f"llm_{trip_id}_{i}",
+                        "name": name,
                         "location": destination,
-                        "description": f"Popular attraction in {destination}",
-                        "type": "culture",
+                        "description": str(item.get("description") or f"Popular attraction in {destination}"),
+                        "type": item.get("type") or "culture",
                         "start_time": "09:00",
                         "end_time": "12:00",
-                        "ticket_price": 50,
-                        "total_price": 50 * num_people,
-                        "opening_hours": "09:00-17:00",
+                        "ticket_price": price,
+                        "total_price": price * num_people,
+                        "opening_hours": item.get("opening_hours", ""),
                         "best_visit_time": "09:00-11:00",
                         "population_level": "medium",
-                        "rating": 4.0,
+                        "rating": rating,
                         "meal_slot": "lunch",
-                        "source": "llm",
+                        "source": "llm_knowledge (unverified — confirm before travel)",
                     })
+                print(f"[activity_agent] using LLM knowledge fallback: {len(activities)} items for {destination}")
 
     # ---- Store to shared database ----
     try:

@@ -49,6 +49,7 @@ from booking.auto_book import (  # noqa: E402
 )
 from services import hotels_provider  # noqa: E402
 from services import piper_service  # noqa: E402
+from services import translate_service  # noqa: E402
 from services import whisper_service  # noqa: E402
 from intake import parse_intake  # noqa: E402
 
@@ -157,16 +158,32 @@ def speech_synthesize(request: SpeechRequest):
 
 
 @app.post("/speech/transcribe")
-async def speech_transcribe(request: Request):
-    """Transcribe a short recording and report Whisper's detected language."""
+async def speech_transcribe(request: Request, translate: bool = False, target_language: str = "en"):
+    """Transcribe a short recording and report Whisper's detected language.
+
+    translate=true asks for the result in `target_language` ("en" or "zh")
+    regardless of the language spoken — e.g. answer in Spanish while the guided
+    setup is in Chinese, and see Chinese text back. The original detected
+    language is always reported too, for a "heard in X" note. Whisper only
+    transcribes (it can't target arbitrary languages), so the actual translation
+    step goes through DeepSeek — and only runs when the spoken language differs
+    from the target, so answering in the target language already is a no-op.
+    """
     audio = await request.body()
     content_type = request.headers.get("content-type", "audio/webm").split(";", 1)[0]
     try:
-        return whisper_service.transcribe_speech(audio, content_type)
+        result = whisper_service.transcribe_speech(audio, content_type)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    target = "zh" if target_language.casefold().startswith("zh") else "en"
+    translated = False
+    if translate and result["language"] and result["language"] != target:
+        result = {**result, "text": translate_service.translate_text(result["text"], target)}
+        translated = True
+    return {**result, "translated": translated}
 
 
 @app.post("/agents/{name}")

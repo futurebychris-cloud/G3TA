@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import urllib.parse
 import urllib.request
 
@@ -57,27 +58,52 @@ _CITY_COORDS: dict[str, tuple[float, float]] = {
 }
 
 
-def _geocode_single(address: str, city: str = "") -> tuple[float, float] | None:
-    """Geocode a single address/POI name via Gaode API. Returns (lat, lng) or None."""
-    if not GAODE_KEY:
-        return None
+def _nominatim_geocode(query: str) -> tuple[float, float] | None:
+    """Free, no-key POI/address geocode via OpenStreetMap Nominatim."""
     try:
-        full_address = f"{city} {address}" if city else address
         url = (
-            f"{GAODE_BASE}/geocode/geo?"
-            + urllib.parse.urlencode({
-                "key": GAODE_KEY, "address": full_address, "output": "JSON",
-            })
+            "https://nominatim.openstreetmap.org/search?"
+            + urllib.parse.urlencode({"q": query, "format": "json", "limit": 1})
         )
-        req = urllib.request.Request(url, headers={"User-Agent": "G3TA/1.0"})
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "G3TA/1.0 (trip planner)",
+            "Accept-Language": "zh-CN,zh;q=0.9",
+        })
         with urllib.request.urlopen(req, timeout=8) as r:
-            data = json.loads(r.read())
-        if data.get("status") == "1" and data.get("geocodes"):
-            loc = data["geocodes"][0]["location"].split(",")
-            return (float(loc[1]), float(loc[0]))
+            results = json.loads(r.read())
+        if results:
+            return (float(results[0]["lat"]), float(results[0]["lon"]))
     except Exception as e:
-        print(f"[gaode] geocode '{address}' failed: {e}")
+        print(f"[gaode] OSM POI geocoding failed for {query!r}: {e}")
     return None
+
+
+def _geocode_single(address: str, city: str = "") -> tuple[float, float] | None:
+    """Geocode a single address/POI name.
+
+    Priority: Gaode API (if GAODE_KEY is set — best for Chinese addresses) →
+    OpenStreetMap Nominatim (free, no key, worldwide). Without this OSM fallback,
+    every POI silently collapsed to the city-center coordinate whenever GAODE_KEY
+    was unset, stacking every activity marker on top of each other on the map.
+    """
+    full_address = f"{city} {address}" if city else address
+    if GAODE_KEY:
+        try:
+            url = (
+                f"{GAODE_BASE}/geocode/geo?"
+                + urllib.parse.urlencode({
+                    "key": GAODE_KEY, "address": full_address, "output": "JSON",
+                })
+            )
+            req = urllib.request.Request(url, headers={"User-Agent": "G3TA/1.0"})
+            with urllib.request.urlopen(req, timeout=8) as r:
+                data = json.loads(r.read())
+            if data.get("status") == "1" and data.get("geocodes"):
+                loc = data["geocodes"][0]["location"].split(",")
+                return (float(loc[1]), float(loc[0]))
+        except Exception as e:
+            print(f"[gaode] geocode '{address}' failed: {e}")
+    return _nominatim_geocode(full_address)
 
 
 def geocode_city(city: str) -> tuple[float, float] | None:
@@ -142,7 +168,10 @@ def geocode_poi(name: str, city: str = "", venue: str = "") -> tuple[float, floa
     1. Full address: city + venue + name
     2. City + name
     3. Name only
-    4. City center fallback
+    4. First segment of a compound name ("X and Y", "X & Y") — free-text
+       geocoders often can't resolve the combined phrase even when each half
+       is a real, well-known place on its own.
+    5. City center fallback
 
     Returns (lat, lng) or None.
     """
@@ -163,7 +192,14 @@ def geocode_poi(name: str, city: str = "", venue: str = "") -> tuple[float, floa
     if result:
         return result
 
-    # Strategy 4: city center
+    # Strategy 4: first segment of a compound name
+    segment = re.split(r"\s+(?:and|&|/)\s+|,", name, maxsplit=1)[0].strip()
+    if segment and segment.lower() != name.lower():
+        result = _geocode_single(segment, city) or _geocode_single(segment)
+        if result:
+            return result
+
+    # Strategy 5: city center
     return geocode_city(city)
 
 

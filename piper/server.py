@@ -29,6 +29,14 @@ MODELS = {
     "en": os.getenv("PIPER_CUSTOM_MODEL") or os.getenv("PIPER_EN_MODEL") or DEFAULT_MODELS["en"],
     "zh": os.getenv("PIPER_ZH_MODEL") or DEFAULT_MODELS["zh"],
 }
+# Some voices (e.g. en_US-libritts_r-medium) are multi-speaker and need an
+# explicit --speaker index — otherwise Piper silently falls back to speaker 0,
+# which is rarely the best-sounding one. Unset by default (single-speaker voices
+# like Lessac ignore it).
+SPEAKERS = {
+    "en": os.getenv("PIPER_EN_SPEAKER"),
+    "zh": os.getenv("PIPER_ZH_SPEAKER"),
+}
 
 app = Flask(__name__)
 _render_locks: dict[str, threading.Lock] = {}
@@ -63,8 +71,9 @@ def _lock_for(cache_key: str) -> threading.Lock:
 
 def synthesize(text: str, language: str, speed: float) -> Path:
     model = _model_for(language)
+    speaker = SPEAKERS.get(language)
     cache_key = hashlib.sha256(
-        f"{model}|{language}|{speed:.2f}|{text}".encode("utf-8")
+        f"{model}|{language}|{speaker}|{speed:.2f}|{text}".encode("utf-8")
     ).hexdigest()
     output = CACHE_DIR / f"{cache_key}.wav"
     if output.exists() and output.stat().st_size > 44:
@@ -83,6 +92,8 @@ def synthesize(text: str, language: str, speed: float) -> Path:
             "--length_scale",
             f"{1 / speed:.4f}",
         ]
+        if speaker:
+            command += ["--speaker", speaker]
         process = subprocess.run(
             command,
             input=text.encode("utf-8"),
@@ -123,6 +134,7 @@ def health():
         language: {
             "ready": Path(model).is_file() and Path(f"{model}.json").is_file(),
             "name": Path(model).stem,
+            "speaker": SPEAKERS.get(language),
             "custom": language == "en" and bool(os.getenv("PIPER_CUSTOM_MODEL")),
         }
         for language, model in MODELS.items()

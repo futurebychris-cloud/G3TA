@@ -1,4 +1,5 @@
 import { AlertTriangle, Check, CircleDollarSign, Gauge, TrendingUp, Receipt } from 'lucide-react'
+import ReadAloudButton from './accessibility/ReadAloudButton.jsx'
 
 const LABELS = {
   transportation: 'Getting there',
@@ -36,11 +37,24 @@ export default function BudgetView({ cost, budgetAgent }) {
       return `${color} ${start}deg ${runningAngle}deg`
     }).join(', ')
 
+  const spokenBudget = [
+    withinBudget
+      ? `Total estimated cost: ${currency} ${total.toLocaleString()}, ${currency} ${remaining.toLocaleString()} remains of your ${currency} ${budget.toLocaleString()} budget.`
+      : `Total estimated cost: ${currency} ${total.toLocaleString()}, ${usedPercentage}% of your ${currency} ${budget.toLocaleString()} budget.`,
+    ...entries.map(([key, value]) => (
+      `${LABELS[key] || key}: ${currency} ${value.toLocaleString()}, ${Math.round((value / Math.max(total, 1)) * 100)}% of the trip.`
+    )),
+    ...(budgetAgent?.warnings || []),
+  ]
+
   return (
     <div className="budget-view">
       <div className="panel-heading">
         <div><span className="section-index">MONEY, CONSIDERED</span><h2>A clear view of<br />where it all goes.</h2></div>
         <p>Real agent costs reconciled against your total budget — every line item is based on actual search results.</p>
+      </div>
+      <div className="result-heading-actions">
+        <ReadAloudButton id="budget-breakdown" label="the budget breakdown" text={spokenBudget} />
       </div>
 
       <div className="budget-overview">

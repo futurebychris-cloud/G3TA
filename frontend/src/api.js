@@ -51,8 +51,9 @@ export async function synthesizeSpeech(text, { language = 'en', speed = 1, signa
 
 // Recordings are transcribed by local multilingual Whisper, which detects the
 // spoken language instead of forcing the currently selected reply language.
-export async function transcribeSpeech(audio, { signal } = {}) {
-  const resp = await fetch(`${API_BASE}/speech/transcribe`, {
+export async function transcribeSpeech(audio, { signal, translate = false, targetLanguage = 'en' } = {}) {
+  const query = translate ? `?translate=true&target_language=${targetLanguage}` : ''
+  const resp = await fetch(`${API_BASE}/speech/transcribe${query}`, {
     method: 'POST',
     headers: { 'Content-Type': audio.type || 'audio/webm' },
     body: audio,

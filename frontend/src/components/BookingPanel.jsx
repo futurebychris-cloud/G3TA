@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { BedDouble, Check, LoaderCircle, MapPin, RefreshCw, Search, ShieldAlert, Star, ImageOff, Info, Wallet, Sparkles, Bath, Coffee, Wifi, Tv, Wind, Car, Dumbbell, Waves, UtensilsCrossed } from 'lucide-react'
 import { streamBookingSearch, confirmBooking, markBookingPaid } from '../api.js'
+import ReadAloudButton from './accessibility/ReadAloudButton.jsx'
+import VoiceInputButton from './accessibility/VoiceInputButton.jsx'
 
 const STAGES = [
   { key: 'search', label: 'Search', note: 'Querying the live hotel APIs and Ctrip', icon: Search },
@@ -218,7 +220,18 @@ export default function BookingPanel({ trip }) {
       )}
 
       {hotels.length > 0 && (
-        <div className="hotel-grid">
+        <>
+          <div className="result-heading-actions">
+            <ReadAloudButton
+              id="hotel-shortlist"
+              label="the hotel shortlist"
+              text={hotels.map((h) => (
+                `${h.name}, ${h.area || 'area unknown'}${h.star_rating != null ? `, ${h.star_rating} stars` : ''}. `
+                + (h.price_per_night != null ? `${h.price_per_night} ${h.currency} per night.` : 'Price to confirm on provider.')
+              ))}
+            />
+          </div>
+          <div className="hotel-grid">
           {hotels.map((h) => {
             const hasImage = h.images?.length > 0
             const hasMap = h.lat != null && h.lng != null
@@ -371,7 +384,8 @@ export default function BookingPanel({ trip }) {
             </article>
             )
           })}
-        </div>
+          </div>
+        </>
       )}
 
       {selected && (
@@ -379,13 +393,31 @@ export default function BookingPanel({ trip }) {
           <h3>Confirm booking — {selected.name}</h3>
           <div className="id-grid">
             <label><span>Name</span>
-              <input value={identity.name} onChange={(e) => setIdentity({ ...identity, name: e.target.value })} placeholder="Traveler name" />
+              <span className="destination-input-row">
+                <input value={identity.name} onChange={(e) => setIdentity({ ...identity, name: e.target.value })} placeholder="Traveler name" />
+                <VoiceInputButton
+                  label="Enter traveler name by voice"
+                  onTranscript={(transcript) => setIdentity((current) => ({ ...current, name: transcript }))}
+                />
+              </span>
             </label>
             <label><span>ID number</span>
-              <input value={identity.id_number} onChange={(e) => setIdentity({ ...identity, id_number: e.target.value })} placeholder="ID / passport no." />
+              <span className="destination-input-row">
+                <input value={identity.id_number} onChange={(e) => setIdentity({ ...identity, id_number: e.target.value })} placeholder="ID / passport no." />
+                <VoiceInputButton
+                  label="Enter ID or passport number by voice"
+                  onTranscript={(transcript) => setIdentity((current) => ({ ...current, id_number: transcript }))}
+                />
+              </span>
             </label>
             <label><span>Phone</span>
-              <input value={identity.phone} onChange={(e) => setIdentity({ ...identity, phone: e.target.value })} placeholder="Contact phone" />
+              <span className="destination-input-row">
+                <input value={identity.phone} onChange={(e) => setIdentity({ ...identity, phone: e.target.value })} placeholder="Contact phone" />
+                <VoiceInputButton
+                  label="Enter contact phone by voice"
+                  onTranscript={(transcript) => setIdentity((current) => ({ ...current, phone: transcript }))}
+                />
+              </span>
             </label>
           </div>
           <div className="pay-toggle">
@@ -398,6 +430,19 @@ export default function BookingPanel({ trip }) {
 
           {confirmResult && (
             <div className={`confirm-result ${confirmResult.status}`}>
+              <ReadAloudButton
+                id="booking-confirmation"
+                label="the booking result"
+                text={[
+                  confirmResult.status === 'confirmed'
+                    ? `Booking confirmed. Order number ${confirmResult.route?.order_no}.`
+                    : confirmResult.message,
+                  confirmResult.order_no ? `Order number ${confirmResult.order_no}.` : null,
+                  confirmResult.status === 'pending_payment'
+                    ? `Pay in your own ${payment === 'wechat' ? 'WeChat' : 'Alipay'} app, then mark as paid.`
+                    : null,
+                ]}
+              />
               {confirmResult.status === 'pending_payment' && (
                 <>
                   <p className="ok">{confirmResult.message}</p>

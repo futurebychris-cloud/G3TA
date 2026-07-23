@@ -15,7 +15,7 @@ function preferredMimeType() {
   return candidates.find((type) => window.MediaRecorder.isTypeSupported?.(type)) || ''
 }
 
-export default function useAutoSpeechRecognition({ onTranscript, uiLanguage = 'en' } = {}) {
+export default function useAutoSpeechRecognition({ onTranscript, uiLanguage = 'en', translate = false } = {}) {
   const recorderRef = useRef(null)
   const streamRef = useRef(null)
   const timerRef = useRef(null)
@@ -25,6 +25,7 @@ export default function useAutoSpeechRecognition({ onTranscript, uiLanguage = 'e
   const [status, setStatus] = useState('')
   const [detectedLanguage, setDetectedLanguage] = useState(null)
   const isChineseUi = String(uiLanguage).toLowerCase().startsWith('zh')
+  const targetLanguage = isChineseUi ? 'zh' : 'en'
   const supported = recordingSupport()
 
   const release = useCallback(() => {
@@ -64,17 +65,22 @@ export default function useAutoSpeechRecognition({ onTranscript, uiLanguage = 'e
       }
       recorder.onstop = async () => {
         setIsListening(false)
-        setStatus(isChineseUi ? '正在识别语言和文字…' : 'Detecting language and transcribing…')
+        setStatus(
+          translate
+            ? (isChineseUi ? '正在识别语言并翻译成中文…' : 'Detecting language and translating to English…')
+            : (isChineseUi ? '正在识别语言和文字…' : 'Detecting language and transcribing…'),
+        )
         const audio = new Blob(chunksRef.current, { type: recorder.mimeType || mimeType || 'audio/webm' })
         release()
         const controller = new AbortController()
         requestRef.current = controller
         try {
-          const result = await transcribeSpeech(audio, { signal: controller.signal })
+          const result = await transcribeSpeech(audio, { signal: controller.signal, translate, targetLanguage })
           if (controller.signal.aborted) return
           const detected = {
             code: result.language || '',
             name: result.language_name || result.language || 'Unknown',
+            translated: Boolean(result.translated),
           }
           setDetectedLanguage(detected)
           setStatus('')
@@ -82,6 +88,7 @@ export default function useAutoSpeechRecognition({ onTranscript, uiLanguage = 'e
             isFinal: true,
             language: detected.code,
             languageName: detected.name,
+            translated: detected.translated,
           })
         } catch (error) {
           if (!controller.signal.aborted) {
@@ -93,14 +100,18 @@ export default function useAutoSpeechRecognition({ onTranscript, uiLanguage = 'e
       }
       recorder.start()
       setIsListening(true)
-      setStatus(isChineseUi ? '正在聆听…说任何语言' : 'Listening… speak in any language')
+      setStatus(
+        translate
+          ? (isChineseUi ? '正在聆听…可以说任何语言，我们会显示中文' : "Listening… speak any language, we'll show it in English")
+          : (isChineseUi ? '正在聆听…说任何语言' : 'Listening… speak in any language'),
+      )
       timerRef.current = window.setTimeout(stop, MAX_LISTEN_MS)
     } catch {
       release()
       setIsListening(false)
       setStatus(isChineseUi ? '无法使用麦克风，您可以继续打字。' : 'The microphone is unavailable. You can continue typing.')
     }
-  }, [isChineseUi, onTranscript, release, stop, supported])
+  }, [isChineseUi, onTranscript, release, stop, supported, targetLanguage, translate])
 
   useEffect(() => () => {
     requestRef.current?.abort()

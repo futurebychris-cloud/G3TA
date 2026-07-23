@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Check, CloudDrizzle, CloudRain, CloudSun, Luggage, Sun, TimerReset, Umbrella, Wind } from 'lucide-react'
+import ReadAloudButton from './accessibility/ReadAloudButton.jsx'
 
 function weatherIcon(condition, size = 18) {
   const c = (condition || '').toLowerCase()
@@ -42,11 +43,24 @@ export default function PackingList({ items, weather, pacing, dailyWeather, heal
       ? 'Forecast + seasonal estimates'
       : 'Seasonal estimates — verify'
 
+  const spokenPacking = [
+    weather,
+    pacing,
+    healthAdvice,
+    ...(dailyWeather || []).map((day) => (
+      `${formatDate(day.date)}: ${day.condition || 'weather unknown'}, high ${day.high_c != null ? `${Math.round(day.high_c)} degrees` : 'unknown'}, low ${day.low_c != null ? `${Math.round(day.low_c)} degrees` : 'unknown'}.`
+    )),
+    `Packing checklist, ${items.length} items: ${items.join(', ')}.`,
+  ]
+
   return (
     <div className="packing-view">
       <div className="panel-heading">
         <div><span className="section-index">READY, SET</span><h2>Pack light.<br />Arrive prepared.</h2></div>
         <p>A practical list shaped by the forecast, your plans, and the way you like to travel.</p>
+      </div>
+      <div className="result-heading-actions">
+        <ReadAloudButton id="packing-list" label="the weather outlook and packing list" text={spokenPacking} />
       </div>
 
       {/* Weather outlook */}

@@ -25,6 +25,10 @@ node_modules/
 frontend/dist/
 frontend/.vite/
 
+# Piper voice model binaries — transfer via USB/AirDrop per piper/README.md,
+# not git (126MB, and the whole point is avoiding a network transfer).
+piper/voicemodelssource/
+
 # Editor / OS
 .DS_Store
 .idea/
