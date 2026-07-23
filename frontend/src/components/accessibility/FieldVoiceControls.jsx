@@ -101,13 +101,13 @@ export default function FieldVoiceControls({
       {speech.supported && (
         <button
           type="button"
-          className="voice-pair-btn"
+          className="voice-pair-btn listen"
           onClick={handleListen}
           disabled={speech.state === 'loading'}
           aria-label={copy.listen(label)}
           title={copy.listen(label)}
         >
-          <Volume2 size={15} aria-hidden="true" />
+          <Volume2 size={19} strokeWidth={2.2} aria-hidden="true" />
         </button>
       )}
       {recognition.supported && (
@@ -118,7 +118,7 @@ export default function FieldVoiceControls({
           aria-label={recognition.isListening ? copy.stopSpeak : copy.speak(label)}
           title={recognition.isListening ? copy.stopSpeak : copy.speak(label)}
         >
-          <Mic size={15} aria-hidden="true" />
+          <Mic size={19} strokeWidth={2.2} aria-hidden="true" />
         </button>
       )}
       <span className="sr-only" role="status" aria-live="polite">

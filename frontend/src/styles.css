@@ -573,28 +573,34 @@ button { -webkit-tap-highlight-color: transparent; }
    selects the matching choices. Quiet, uniform buttons that sit together right
    after the field label; the mic glows while recording — no status text, no
    layout shift. */
-.field-voice-controls { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; flex: 0 0 auto; }
+.field-voice-controls { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; flex: 0 0 auto; }
 .voice-pair-btn {
-  width: 30px;
-  height: 30px;
+  width: 36px;
+  height: 36px;
   display: grid;
   place-items: center;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--white);
-  color: var(--ink);
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: var(--brand-gradient);
+  background-size: 200% 100%;
+  background-position: 0 50%;
+  color: white;
   cursor: pointer;
-  transition: border-color 140ms ease, color 140ms ease, box-shadow 140ms ease;
+  box-shadow: 0 4px 12px rgba(79, 70, 229, .28);
+  transition: background-position 260ms ease, box-shadow 140ms ease, transform 140ms ease;
 }
-.voice-pair-btn:hover:not(:disabled) { border-color: var(--brand-blue); color: var(--brand-blue); }
+.voice-pair-btn svg { display: block; }
+/* Lucide's Volume2 glyph is left-weighted in its viewBox — optically recenter. */
+.voice-pair-btn.listen svg { transform: translateX(1.5px); }
+.voice-pair-btn:hover:not(:disabled) { background-position: 100% 50%; transform: translateY(-1px); box-shadow: 0 6px 16px rgba(124, 58, 237, .36); }
 .voice-pair-btn:disabled { cursor: not-allowed; opacity: .45; }
 .voice-pair-btn.listening {
-  border-color: var(--brand-blue);
-  color: var(--brand-blue);
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, .28);
+  background-position: 100% 50%;
+  box-shadow: 0 0 0 4px rgba(124, 58, 237, .3);
   animation: voice-glow 1.2s ease-in-out infinite;
 }
-@keyframes voice-glow { 50% { box-shadow: 0 0 0 7px rgba(37, 99, 235, .1); } }
+@keyframes voice-glow { 50% { box-shadow: 0 0 0 8px rgba(124, 58, 237, .12); } }
 [data-reduced-motion="true"] .voice-pair-btn.listening { animation: none; }
 .preference-hint { margin: -5px 0 12px; color: var(--muted); font-size: .76rem; line-height: 1.4; }
 .choice-list { display: flex; flex-wrap: wrap; gap: 7px; }
