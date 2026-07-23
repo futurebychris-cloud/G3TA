@@ -1,17 +1,49 @@
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { beforeEach, vi } from 'vitest'
-import { parseTripIntake, synthesizeSpeech } from '../../api.js'
+import { afterEach, beforeEach, vi } from 'vitest'
+import { parseTripIntake, synthesizeSpeech, transcribeSpeech } from '../../api.js'
 import { AccessibilityProvider } from '../../accessibility/AccessibilityContext.jsx'
 import { TextToSpeechProvider } from '../../hooks/useTextToSpeech.js'
 import GuidedTripAssistant from './GuidedTripAssistant.jsx'
 
 vi.mock('../../api.js', () => ({
   parseTripIntake: vi.fn(),
+  transcribeSpeech: vi.fn(),
   // Speech playback has its own focused tests. Keep automatic question audio
   // pending here so questionnaire timing cannot race form-navigation assertions.
   synthesizeSpeech: vi.fn(() => new Promise(() => {})),
 }))
+
+// The dialog's mic uses the Whisper recording path (MediaRecorder + /speech/transcribe).
+function installRecorder() {
+  Object.defineProperty(window, 'isSecureContext', { configurable: true, value: true })
+  Object.defineProperty(navigator, 'mediaDevices', {
+    configurable: true,
+    value: { getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [{ stop: vi.fn() }] }) },
+  })
+  window.MediaRecorder = class MediaRecorder {
+    static isTypeSupported = vi.fn(() => true)
+
+    constructor(_stream, options) {
+      this.mimeType = options?.mimeType || 'audio/webm'
+      this.state = 'inactive'
+    }
+
+    start = vi.fn(() => { this.state = 'recording' })
+
+    stop = vi.fn(() => {
+      this.state = 'inactive'
+      this.ondataavailable?.({ data: new Blob(['spoken audio'], { type: this.mimeType }) })
+      this.onstop?.()
+    })
+  }
+}
+
+function removeRecorder() {
+  delete window.MediaRecorder
+  delete navigator.mediaDevices
+  Object.defineProperty(window, 'isSecureContext', { configurable: true, value: false })
+}
 
 const ANSWERS = [
   'New York',
@@ -80,6 +112,10 @@ describe('voice-guided trip accessibility add-on', () => {
     delete window.webkitSpeechRecognition
   })
 
+  afterEach(() => {
+    removeRecorder()
+  })
+
   it('asks every main-form question and starts planning immediately at the end', async () => {
     const user = userEvent.setup()
     const { onComplete, onClose } = renderAssistant()
@@ -87,7 +123,6 @@ describe('voice-guided trip accessibility add-on', () => {
 
     expect(screen.getByText('Question 1 of 11')).toBeVisible()
     expect(screen.getByRole('heading', { name: /Where will you be traveling from/ })).toBeVisible()
-    expect(screen.getByRole('button', { name: 'Answer flying from by voice' })).toBeInTheDocument()
 
     await answerEveryQuestion(user)
     await user.click(screen.getByRole('button', { name: /Start planning/ }))
@@ -128,26 +163,16 @@ describe('voice-guided trip accessibility add-on', () => {
 
   it('advances final voice answers and starts without a finish-form click', async () => {
     const user = userEvent.setup()
-    let recognition
-    window.SpeechRecognition = class SpeechRecognition {
-      constructor() {
-        recognition = this
-        this.start = vi.fn(() => this.onstart?.())
-        this.stop = vi.fn(() => this.onend?.())
-        this.abort = vi.fn()
-      }
-    }
+    installRecorder()
     parseTripIntake.mockResolvedValue(RESULT)
     const { onComplete } = renderAssistant()
 
     for (let index = 0; index < ANSWERS.length; index += 1) {
-      await user.click(screen.getByRole('button', { name: /Answer .* by voice/ }))
-      const finalResult = [[{ transcript: ANSWERS[index] }]]
-      finalResult[0].isFinal = true
-      await act(async () => {
-        recognition.onresult({ results: finalResult })
-        recognition.onend()
+      transcribeSpeech.mockResolvedValueOnce({
+        text: ANSWERS[index], language: 'en', language_name: 'English', translated: false,
       })
+      await user.click(screen.getByRole('button', { name: /Answer .* by voice/ }))
+      await user.click(screen.getByRole('button', { name: 'Stop listening' }))
       if (index < ANSWERS.length - 1) {
         expect(await screen.findByText(`Question ${index + 2} of 11`)).toBeVisible()
       }
@@ -159,15 +184,8 @@ describe('voice-guided trip accessibility add-on', () => {
 
   it('switches the visible guide, recognition, and spoken reply language to Chinese', async () => {
     const user = userEvent.setup()
-    let recognition
-    window.SpeechRecognition = class SpeechRecognition {
-      constructor() {
-        recognition = this
-        this.start = vi.fn(() => this.onstart?.())
-        this.stop = vi.fn(() => this.onend?.())
-        this.abort = vi.fn()
-      }
-    }
+    installRecorder()
+    transcribeSpeech.mockReturnValue(new Promise(() => {}))
     renderAssistant()
 
     await user.click(screen.getByRole('button', { name: '中文' }))
@@ -175,8 +193,7 @@ describe('voice-guided trip accessibility add-on', () => {
     expect(screen.getByRole('heading', { name: '您将从哪个城市出发？' })).toBeVisible()
     expect(screen.getByRole('button', { name: '中文' })).toHaveAttribute('aria-pressed', 'true')
     await user.click(screen.getByRole('button', { name: '用语音回答出发城市' }))
-    expect(recognition.lang).toBe('zh-CN')
-    expect(screen.getByText('正在聆听')).toBeInTheDocument()
+    expect(await screen.findByText(/正在聆听/)).toBeInTheDocument()
     await waitFor(() => expect(synthesizeSpeech).toHaveBeenCalledWith(
       expect.stringContaining('您将从哪个城市出发'),
       expect.objectContaining({ language: 'zh' }),

@@ -431,7 +431,7 @@
 .guided-example p { margin: 0; color: var(--muted); font-size: .88rem; line-height: 1.65; }
 .guided-example strong { display: block; margin-bottom: 3px; color: var(--ink); }
 .guided-description-field { display: block; margin-bottom: 8px; font-size: 1rem; font-weight: 850; }
-.guided-description-input { position: relative; display: flex; gap: 10px; align-items: flex-start; }
+.guided-description-input { position: relative; display: flex; gap: 10px; align-items: center; }
 .guided-description-input textarea {
   width: 100%;
   min-height: 170px;
@@ -445,7 +445,21 @@
   font-size: 1rem;
   line-height: 1.65;
 }
-.guided-description-input textarea::placeholder { color: var(--muted); opacity: 1; }
+/* One-line answer row in the guided assistant: input flexes to the full width
+   with only the two voice icons beside it. */
+.guided-description-input input {
+  flex: 1;
+  min-width: 0;
+  border: 2px solid var(--ink);
+  border-radius: 12px;
+  padding: 12px 16px;
+  background: var(--white);
+  color: var(--ink);
+  font: inherit;
+  font-size: 1rem;
+}
+.guided-description-input textarea::placeholder,
+.guided-description-input input::placeholder { color: var(--muted); opacity: 1; }
 .guided-description-input .voice-button { width: 48px; height: 48px; }
 .guided-description-input .voice-button-wide { width: auto; height: 48px; }
 .guided-privacy { display: flex; gap: 9px; align-items: flex-start; margin: 13px 0 0; color: var(--muted); font-size: .78rem; line-height: 1.55; }

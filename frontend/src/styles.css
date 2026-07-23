@@ -670,6 +670,11 @@ button { -webkit-tap-highlight-color: transparent; }
 }
 @keyframes voice-glow { 50% { box-shadow: 0 0 0 8px rgba(124, 58, 237, .12); } }
 [data-reduced-motion="true"] .va-btn.listening { animation: none; }
+/* Nothing was understood — flash red briefly, no text, no layout shift. */
+.va-btn.error { background: #dc2626; box-shadow: 0 0 0 4px rgba(220, 38, 38, .3); }
+
+/* Per-date voice pair sits with the Arrival/Departure label under each input. */
+.date-col-foot { display: flex; align-items: center; gap: 8px; }
 .preference-hint { margin: -5px 0 12px; color: var(--muted); font-size: .76rem; line-height: 1.4; }
 .choice-list { display: flex; flex-wrap: wrap; gap: 7px; }
 .choice-chip {

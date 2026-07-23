@@ -220,9 +220,21 @@ export default function InputForm({ onSubmit, intakeDraft, intakeNotice }) {
     [key]: String(value || '').trim().replace(/[.。,，!！?？]+$/u, ''),
   }))
 
-  function fillDatesByVoice(transcript) {
+  // Each date has its own speak button (far more reliable than range parsing),
+  // but if someone speaks a full range to either one, both fields fill.
+  // Returns false when nothing parsed so the mic can flash its error state.
+  const fillOneDateByVoice = (key) => (transcript) => {
     const range = parseSpokenDateRange(transcript)
-    if (range) setForm((current) => ({ ...current, start: range.start, end: range.end }))
+    if (range) {
+      setForm((current) => ({ ...current, start: range.start, end: range.end }))
+      return true
+    }
+    const single = parseSpokenDate(String(transcript).replace(/[.。,!?！？]+$/g, ''))
+    if (single) {
+      setForm((current) => ({ ...current, [key]: dateInputValue(single) }))
+      return true
+    }
+    return false
   }
 
   function fillBudgetByVoice(transcript) {
@@ -317,21 +329,31 @@ export default function InputForm({ onSubmit, intakeDraft, intakeNotice }) {
         <div className="field dates-field">
           <span className="field-label">
             <CalendarDays size={15} /> Dates
-            <FieldVoiceControls
-              label="Dates"
-              readText="Dates. Say your arrival and departure, for example: August 23rd to August 27th."
-              listenSeconds={5}
-              onText={fillDatesByVoice}
-            />
           </span>
           <span className="date-pair">
             <span className="date-col">
               <input name="start-date" aria-label="Start date" type="date" value={form.start} onChange={set('start')} required />
-              <small>Arrival</small>
+              <span className="date-col-foot">
+                <small>Arrival</small>
+                <FieldVoiceControls
+                  label="Arrival date"
+                  readText="Arrival date. Say the date, for example: August 23rd."
+                  listenSeconds={4}
+                  onText={fillOneDateByVoice('start')}
+                />
+              </span>
             </span>
             <span className="date-col">
               <input name="end-date" aria-label="End date" type="date" value={form.end} onChange={set('end')} required />
-              <small>Departure</small>
+              <span className="date-col-foot">
+                <small>Departure</small>
+                <FieldVoiceControls
+                  label="Departure date"
+                  readText="Departure date. Say the date, for example: August 27th."
+                  listenSeconds={4}
+                  onText={fillOneDateByVoice('end')}
+                />
+              </span>
             </span>
           </span>
         </div>

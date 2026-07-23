@@ -61,6 +61,14 @@ export default function FieldVoiceControls({
   const speechId = useId()
   const speech = useTextToSpeech(speechId, '')
   const [announcement, setAnnouncement] = useState('')
+  const [failed, setFailed] = useState(false)
+
+  // Textless failure feedback: the mic flashes red briefly, buttons never move.
+  function flashError() {
+    setFailed(true)
+    window.setTimeout(() => setFailed(false), 2200)
+  }
+
   const recognition = useAutoSpeechRecognition({
     uiLanguage: language,
     translate: true,
@@ -69,10 +77,11 @@ export default function FieldVoiceControls({
       if (options && onMatch) {
         const matches = matchOptions(transcript, options)
         setAnnouncement(matches.length ? `Selected: ${matches.join(', ')}` : 'No option recognized.')
+        if (!matches.length) flashError()
         onMatch(matches)
       } else if (onText) {
         setAnnouncement(`Heard: ${transcript}`)
-        onText(transcript)
+        if (onText(transcript) === false) flashError()
       }
     },
   })
@@ -113,7 +122,7 @@ export default function FieldVoiceControls({
       {recognition.supported && (
         <button
           type="button"
-          className={recognition.isListening ? 'va-btn listening' : 'va-btn'}
+          className={`va-btn${recognition.isListening ? ' listening' : ''}${failed ? ' error' : ''}`}
           onClick={handleSpeak}
           aria-label={recognition.isListening ? copy.stopSpeak : copy.speak(label)}
           title={recognition.isListening ? copy.stopSpeak : copy.speak(label)}

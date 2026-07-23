@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ArrowLeft, ArrowRight, Check, RotateCcw, ShieldCheck, Volume2, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Check, RotateCcw, X } from 'lucide-react'
 import { parseTripIntake } from '../../api.js'
 import useTextToSpeech from '../../hooks/useTextToSpeech.js'
 import AccessibleDialog from './AccessibleDialog.jsx'
-import VoiceInputButton from './VoiceInputButton.jsx'
+import FieldVoiceControls from './FieldVoiceControls.jsx'
 
 const ENGLISH_QUESTIONS = [
   {
@@ -163,8 +163,8 @@ const QUESTIONS_BY_LANGUAGE = {
 const UI_COPY = {
   en: {
     eyebrow: 'OPTIONAL DYSLEXIA & READING SUPPORT',
-    title: 'Voice-guided trip setup',
-    description: 'The guide asks the same questions as the main form, one at a time. A final voice answer starts trip planning automatically.',
+    title: 'Voice-guided Travel Assistant',
+    description: 'The agent will ask you some questions, one at a time, in order to plan your journey intelligently. You can hear each question and its options by clicking the speaker button. When you are ready to provide an answer, click the mic button and speak. Our agent is multilingual.',
     languageLabel: 'Voice language',
     close: 'Close voice-guided trip setup',
     question: 'Question',
@@ -178,14 +178,12 @@ const UI_COPY = {
     answer: 'Your answer',
     optional: '(optional)',
     placeholder: 'Speak your answer or type it here',
-    voiceAdvances: 'Speak in the selected voice language, or choose "Speak another language" to answer in Spanish, Russian, or any language — it is shown here in English. Your answer advances automatically, and missing required details stay in this guide.',
     startOver: 'Start over',
     back: 'Back',
     next: 'Next question',
     skip: 'Skip question',
     startPlanning: 'Start planning',
     starting: 'Starting your trip…',
-    voiceLabel: (label) => `Answer ${label.toLowerCase()} by voice`,
     required: (label) => `Please answer ${label.toLowerCase()} before continuing. You can speak or type your answer.`,
     requiredShort: (label) => `Please answer ${label.toLowerCase()} before continuing.`,
     stillNeed: 'I still need this answer. ',
@@ -195,8 +193,8 @@ const UI_COPY = {
   },
   zh: {
     eyebrow: '可选的语音与阅读辅助',
-    title: '语音引导式旅行设置',
-    description: '我们会逐一询问与主表单相同的问题。最后一个语音回答确认后，将自动开始规划。',
+    title: '语音引导旅行助手',
+    description: '助手会逐一提问，以便智能规划您的旅程。点击喇叭按钮可朗读问题和选项；准备好回答时，点击麦克风按钮说话。我们的助手支持多种语言。',
     languageLabel: '语音语言',
     close: '关闭语音引导式旅行设置',
     question: '问题',
@@ -210,14 +208,12 @@ const UI_COPY = {
     answer: '您的回答',
     optional: '（可选）',
     placeholder: '请说出答案，或在这里输入',
-    voiceAdvances: '请使用当前选择的语音语言回答，或点击“说其他语言”以西班牙语、俄语等任何语言回答——识别结果会以中文显示。识别完成后会自动进入下一题；缺少的必填信息会继续在这里询问。',
     startOver: '重新开始',
     back: '返回',
     next: '下一题',
     skip: '跳过此题',
     startPlanning: '开始规划',
     starting: '正在开始规划…',
-    voiceLabel: (label) => `用语音回答${label}`,
     required: (label) => `请先回答“${label}”。您可以使用语音或文字输入。`,
     requiredShort: (label) => `请先回答“${label}”。`,
     stillNeed: '还需要您回答这个问题。',
@@ -285,14 +281,24 @@ export default function GuidedTripAssistant({ open, onClose, onComplete, returnF
     guidedSpeech.playText(`${prefix}${question.prompt}`, { force: true, language, userInitiated })
   }, [guidedSpeech.playText, language, question.prompt])
 
+  const introducedRef = useRef(false)
+
   useEffect(() => {
     if (!open || status === 'loading') return undefined
-    const timer = window.setTimeout(() => speakQuestion(repairMessage ? `${repairMessage} ` : ''), 260)
+    const timer = window.setTimeout(() => {
+      // First read after opening introduces the assistant by name, then the question.
+      const intro = introducedRef.current ? '' : `${copy.title}. `
+      introducedRef.current = true
+      speakQuestion(`${intro}${repairMessage ? `${repairMessage} ` : ''}`)
+      // Bring the response box into view so the answer field is ready right away.
+      answerRef.current?.scrollIntoView?.({ block: 'center', behavior: 'smooth' })
+    }, 260)
     return () => window.clearTimeout(timer)
-  }, [open, repairMessage, speakQuestion, status, step])
+  }, [copy.title, open, repairMessage, speakQuestion, status, step])
 
   useEffect(() => {
     if (!open) {
+      introducedRef.current = false
       intakeRequestVersionRef.current += 1
       guidedSpeech.stop()
     }
@@ -392,7 +398,6 @@ export default function GuidedTripAssistant({ open, onClose, onComplete, returnF
   }
 
   const currentAnswer = answers[question.id] || ''
-  const speechSupported = guidedSpeech.supported
   const repairIndex = repairQuestionIds.indexOf(question.id)
   const canGoBack = repairQuestionIds.length > 0 ? repairIndex > 0 : step > 0
   const isLastQuestion = repairQuestionIds.length > 0
@@ -466,56 +471,30 @@ export default function GuidedTripAssistant({ open, onClose, onComplete, returnF
             <span className="section-index">{question.label}</span>
             <h3 id="guided-question-label">{question.prompt}</h3>
             <p>{question.hint}</p>
-            {speechSupported && (
-              <>
-                <button
-                  className="replay-question"
-                  type="button"
-                  onClick={() => speakQuestion('', { userInitiated: true })}
-                  disabled={guidedSpeech.state === 'loading'}
-                >
-                  <Volume2 size={17} aria-hidden="true" />
-                  {guidedSpeech.state === 'loading' ? copy.preparing : copy.replay}
-                </button>
-                <span className={guidedSpeech.error ? 'guided-speech-status error' : 'sr-only'} role="status" aria-live="polite">
-                  {guidedSpeech.state === 'loading'
-                    ? copy.preparingStatus
-                    : guidedSpeech.state === 'speaking'
-                      ? copy.readingStatus
-                      : guidedSpeech.error
-                        ? guidedSpeech.error || copy.voiceError
-                        : ''}
-                </span>
-              </>
-            )}
           </section>
 
           <label className="guided-description-field" htmlFor="guided-trip-answer">
             {copy.answer} {question.required ? '' : copy.optional}
           </label>
           <div className="guided-description-input guided-answer-input">
-            <textarea
+            <input
               ref={answerRef}
               id="guided-trip-answer"
+              type="text"
               value={currentAnswer}
               onChange={(event) => setAnswers((current) => ({ ...current, [question.id]: event.target.value }))}
-              rows="3"
               maxLength="500"
-              aria-describedby="guided-answer-hint guided-trip-error"
+              aria-describedby="guided-trip-error"
               placeholder={copy.placeholder}
             />
-            <VoiceInputButton
-              autoDetect
-              label={copy.voiceLabel(question.label)}
-              language={language === 'zh' ? 'zh-CN' : 'en-US'}
-              showText
-              onTranscript={acceptVoiceAnswer}
+            <FieldVoiceControls
+              label={question.label}
+              readText={`${question.prompt} ${question.hint}`}
+              listenSeconds={6}
+              language={language === 'zh' ? 'zh-CN' : 'en'}
+              onText={(transcript) => acceptVoiceAnswer(String(transcript).trim(), { isFinal: true })}
             />
           </div>
-          <p id="guided-answer-hint" className="guided-privacy">
-            <ShieldCheck size={16} aria-hidden="true" />
-            {copy.voiceAdvances}
-          </p>
           <p id="guided-trip-error" className="guided-error" role="alert">{error}</p>
         </>
       </div>
