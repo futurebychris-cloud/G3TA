@@ -66,6 +66,23 @@ class IntakeTests(unittest.TestCase):
         self.assertEqual(result["draft"]["location"], "Kyoto")
         self.assertIn("origin", result["missing"])
 
+    @patch.object(intake, "chat_json")
+    def test_chinese_voice_intake_requests_and_falls_back_to_a_chinese_confirmation(self, chat_json):
+        chat_json.return_value = {
+            "origin": "上海",
+            "location": "北京",
+            "start_date": "2026-10-10",
+            "end_date": "2026-10-14",
+            "budget_total": 8000,
+            "currency": "CNY",
+        }
+
+        result = intake.parse_intake("我想从上海去北京旅行", language="zh-CN")
+        payload = chat_json.call_args.args[1]
+
+        self.assertIn('"preferred_response_language": "Chinese"', payload)
+        self.assertEqual(result["summary"], "已创建旅行草案：从上海前往北京，日期为2026-10-10至2026-10-14，预算为CNY 8000。")
+
 
 if __name__ == "__main__":
     unittest.main()

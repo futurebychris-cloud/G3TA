@@ -1,0 +1,15 @@
+services:
+  whisper:
+    image: onerahmet/openai-whisper-asr-webservice:latest
+    container_name: g3ta-whisper
+    environment:
+      ASR_ENGINE: faster_whisper
+      ASR_MODEL: tiny
+    ports:
+      - "9000:9000"
+    volumes:
+      - g3ta-whisper-cache:/root/.cache
+    restart: unless-stopped
+
+volumes:
+  g3ta-whisper-cache:

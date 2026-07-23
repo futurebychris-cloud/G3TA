@@ -1,13 +1,16 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, vi } from 'vitest'
-import { synthesizeSpeech } from '../../api.js'
+import { synthesizeSpeech, transcribeSpeech } from '../../api.js'
 import { ACCESSIBILITY_STORAGE_KEY, AccessibilityProvider } from '../../accessibility/AccessibilityContext.jsx'
 import { TextToSpeechProvider } from '../../hooks/useTextToSpeech.js'
 import ReadAloudButton from './ReadAloudButton.jsx'
 import VoiceInputButton from './VoiceInputButton.jsx'
 
-vi.mock('../../api.js', () => ({ synthesizeSpeech: vi.fn() }))
+vi.mock('../../api.js', () => ({
+  synthesizeSpeech: vi.fn(),
+  transcribeSpeech: vi.fn(),
+}))
 
 let latestAudio
 
@@ -71,6 +74,62 @@ describe('voice input', () => {
     expect(recognition.stop).toHaveBeenCalledOnce()
     expect(screen.getByRole('status')).toHaveTextContent('Voice input stopped')
   })
+
+  it('records once, auto-detects a common language, and labels the result', async () => {
+    const user = userEvent.setup()
+    const onTranscript = vi.fn()
+    const stopTrack = vi.fn()
+    let recorder
+    Object.defineProperty(window, 'isSecureContext', { configurable: true, value: true })
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: {
+        getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [{ stop: stopTrack }] }),
+      },
+    })
+    window.MediaRecorder = class MediaRecorder {
+      static isTypeSupported = vi.fn(() => true)
+
+      constructor(_stream, options) {
+        recorder = this
+        this.mimeType = options?.mimeType || 'audio/webm'
+        this.state = 'inactive'
+      }
+
+      start = vi.fn(() => {
+        this.state = 'recording'
+      })
+
+      stop = vi.fn(() => {
+        this.state = 'inactive'
+        this.ondataavailable?.({ data: new Blob(['spoken audio'], { type: this.mimeType }) })
+        this.onstop?.()
+      })
+    }
+    transcribeSpeech.mockResolvedValue({
+      text: 'Quiero visitar Madrid',
+      language: 'es',
+      language_name: 'Spanish',
+    })
+
+    render(<VoiceInputButton autoDetect showText onTranscript={onTranscript} />)
+    await user.click(screen.getByRole('button', { name: 'Enter destination by voice' }))
+    expect(screen.getByText('Listening… speak in any language')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Stop voice input' }))
+
+    await waitFor(() => expect(onTranscript).toHaveBeenCalledWith('Quiero visitar Madrid', {
+      isFinal: true,
+      language: 'es',
+      languageName: 'Spanish',
+    }))
+    expect(screen.getByText('Detected: Spanish')).toBeVisible()
+    expect(recorder.stop).toHaveBeenCalledOnce()
+    expect(stopTrack).toHaveBeenCalledOnce()
+
+    delete window.MediaRecorder
+    delete navigator.mediaDevices
+    Object.defineProperty(window, 'isSecureContext', { configurable: true, value: false })
+  })
 })
 
 describe('read aloud', () => {
@@ -92,11 +151,11 @@ describe('read aloud', () => {
     await user.click(screen.getByRole('button', { name: 'Read flight result aloud' }))
     await waitFor(() => expect(synthesizeSpeech).toHaveBeenCalledOnce())
     expect(synthesizeSpeech.mock.calls[0][0]).toContain('John F. Kennedy International Airport (JFK)')
-    expect(latestAudio.play).toHaveBeenCalledOnce()
-    await user.click(screen.getByRole('button', { name: 'Pause reading flight result' }))
-    expect(latestAudio.pause).toHaveBeenCalledOnce()
-    await user.click(screen.getByRole('button', { name: 'Resume reading flight result' }))
     expect(latestAudio.play).toHaveBeenCalledTimes(2)
+    await user.click(screen.getByRole('button', { name: 'Pause reading flight result' }))
+    expect(latestAudio.pause).toHaveBeenCalledTimes(2)
+    await user.click(screen.getByRole('button', { name: 'Resume reading flight result' }))
+    expect(latestAudio.play).toHaveBeenCalledTimes(3)
     await user.click(screen.getByRole('button', { name: 'Stop reading flight result' }))
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:piper-audio')
   })

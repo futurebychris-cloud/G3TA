@@ -25,7 +25,7 @@ export default function AccessibilityOnboarding() {
     >
       <header className="onboarding-head">
         <span className="onboarding-icon" aria-hidden="true"><Accessibility size={25} /></span>
-        <span className="section-index">WELCOME TO G3TA</span>
+        <span className="section-index">WELCOME TO vibego</span>
         <h2 id="accessibility-onboarding-title">How should your trip planner feel?</h2>
         <p id="accessibility-onboarding-description">
           Choose a starting point. You can change every option later from the Accessibility button.

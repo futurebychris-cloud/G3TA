@@ -11,6 +11,33 @@ function speechLanguage() {
   return String(pageLanguage || browserLanguage || 'en').toLowerCase().startsWith('zh') ? 'zh' : 'en'
 }
 
+function createSilentWavUrl() {
+  const sampleRate = 8000
+  const sampleCount = 400
+  const buffer = new ArrayBuffer(44 + sampleCount)
+  const view = new DataView(buffer)
+  const writeText = (offset, value) => {
+    for (let index = 0; index < value.length; index += 1) {
+      view.setUint8(offset + index, value.charCodeAt(index))
+    }
+  }
+  writeText(0, 'RIFF')
+  view.setUint32(4, 36 + sampleCount, true)
+  writeText(8, 'WAVE')
+  writeText(12, 'fmt ')
+  view.setUint32(16, 16, true)
+  view.setUint16(20, 1, true)
+  view.setUint16(22, 1, true)
+  view.setUint32(24, sampleRate, true)
+  view.setUint32(28, sampleRate, true)
+  view.setUint16(32, 1, true)
+  view.setUint16(34, 8, true)
+  writeText(36, 'data')
+  view.setUint32(40, sampleCount, true)
+  for (let index = 44; index < buffer.byteLength; index += 1) view.setUint8(index, 128)
+  return URL.createObjectURL(new Blob([buffer], { type: 'audio/wav' }))
+}
+
 export function TextToSpeechProvider({ children }) {
   const { settings } = useAccessibilitySettings()
   const [activeId, setActiveId] = useState(null)
@@ -53,7 +80,11 @@ export function TextToSpeechProvider({ children }) {
     requiresReadAloudRef.current = false
   }, [releaseAudio])
 
-  const speak = useCallback(async (id, content, { force = false } = {}) => {
+  const speak = useCallback(async (id, content, {
+    force = false,
+    language,
+    userInitiated = false,
+  } = {}) => {
     if (!supported || (!force && !settings.readAloud)) return
     const preparedText = prepareTextForSpeech(content)
     if (!preparedText) return
@@ -67,16 +98,37 @@ export function TextToSpeechProvider({ children }) {
     setSpeechState('loading')
     setSpeechError('')
 
+    let audio = null
+    let unlockUrl = ''
+    if (userInitiated) {
+      unlockUrl = createSilentWavUrl()
+      audio = new window.Audio(unlockUrl)
+      audio.preload = 'auto'
+      audioRef.current = audio
+      audioUrlRef.current = unlockUrl
+      // Start a silent clip inside the trusted click. This keeps the same audio
+      // element authorized while the local Piper request finishes.
+      audio.play().catch(() => {})
+    }
+
     try {
       const blob = await synthesizeSpeech(preparedText, {
-        language: speechLanguage(),
+        language: language || speechLanguage(),
         speed: settings.readingSpeed,
         signal: controller.signal,
       })
       if (controller.signal.aborted || requestVersion !== requestVersionRef.current) return
 
       const audioUrl = URL.createObjectURL(blob)
-      const audio = new window.Audio(audioUrl)
+      if (audio) {
+        audio.pause()
+        URL.revokeObjectURL(unlockUrl)
+        audioUrlRef.current = ''
+        audio.src = audioUrl
+        audio.load?.()
+      } else {
+        audio = new window.Audio(audioUrl)
+      }
       audio.preload = 'auto'
       audioUrlRef.current = audioUrl
       audioRef.current = audio
@@ -154,7 +206,7 @@ export default function useTextToSpeech(id, content) {
   }, [context.stop, id])
   const isActive = context.activeId === id
   const play = useCallback(
-    () => context.speak(id, content),
+    (options) => context.speak(id, content, options),
     [content, context.speak, id],
   )
   const playText = useCallback(

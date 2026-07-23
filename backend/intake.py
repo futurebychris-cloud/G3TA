@@ -35,6 +35,7 @@ Rules:
   budget_total, currency, num_people, cuisines, transportation,
   activity_styles, time_constraints, must_go_sites.
 - confirmation is one short, plain-language sentence describing only extracted facts.
+- Write confirmation in the preferred_response_language from the payload.
 - Do not start planning and do not provide recommendations.
 """
 
@@ -140,7 +141,7 @@ def _contains_place_name(resolved_name: str, requested_name: str) -> bool:
     ) is not None
 
 
-def normalize_intake(raw: dict[str, Any]) -> dict[str, Any]:
+def normalize_intake(raw: dict[str, Any], language: str = "en") -> dict[str, Any]:
     """Validate model output and return the frontend's structured draft contract."""
     origin = _text(raw.get("origin"))
     location = _canonicalize_spoken_location(raw.get("location"))
@@ -183,16 +184,28 @@ def normalize_intake(raw: dict[str, Any]) -> dict[str, Any]:
 
     confirmation = _text(raw.get("confirmation"))
     if not confirmation:
-        facts = []
-        if origin and location:
-            facts.append(f"from {origin} to {location}")
-        elif location:
-            facts.append(f"to {location}")
-        if start and end:
-            facts.append(f"from {start} to {end}")
-        if total and currency:
-            facts.append(f"with a {currency} {total:g} budget")
-        confirmation = "I created a draft " + ", ".join(facts) + "." if facts else "I created a partial trip draft."
+        if str(language).casefold().startswith("zh"):
+            facts = []
+            if origin and location:
+                facts.append(f"从{origin}前往{location}")
+            elif location:
+                facts.append(f"前往{location}")
+            if start and end:
+                facts.append(f"日期为{start}至{end}")
+            if total and currency:
+                facts.append(f"预算为{currency} {total:g}")
+            confirmation = f"已创建旅行草案：{'，'.join(facts)}。" if facts else "已创建部分旅行草案。"
+        else:
+            facts = []
+            if origin and location:
+                facts.append(f"from {origin} to {location}")
+            elif location:
+                facts.append(f"to {location}")
+            if start and end:
+                facts.append(f"from {start} to {end}")
+            if total and currency:
+                facts.append(f"with a {currency} {total:g} budget")
+            confirmation = "I created a draft " + ", ".join(facts) + "." if facts else "I created a partial trip draft."
 
     return {
         "draft": {
@@ -215,12 +228,19 @@ def normalize_intake(raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def parse_intake(description: str, current_date: date | None = None) -> dict[str, Any]:
+def parse_intake(
+    description: str,
+    current_date: date | None = None,
+    *,
+    language: str = "en",
+) -> dict[str, Any]:
+    preferred_language = "Chinese" if str(language).casefold().startswith("zh") else "English"
     payload = {
         "current_date": (current_date or date.today()).isoformat(),
+        "preferred_response_language": preferred_language,
         "traveler_description": description.strip(),
     }
     raw = chat_json(INTAKE_PROMPT, json.dumps(payload, ensure_ascii=False), temperature=0.1)
     if not isinstance(raw, dict):
         raw = {}
-    return normalize_intake(raw)
+    return normalize_intake(raw, language=language)

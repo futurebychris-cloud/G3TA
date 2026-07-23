@@ -10,7 +10,11 @@ export default function ReadAloudButton({ id, text, label = 'this content' }) {
     return <span className="speech-unavailable" role="status">Read aloud is unavailable in this browser.</span>
   }
 
-  const primaryAction = speech.state === 'speaking' ? speech.pause : speech.state === 'paused' ? speech.resume : speech.play
+  const primaryAction = speech.state === 'speaking'
+    ? speech.pause
+    : speech.state === 'paused'
+      ? speech.resume
+      : () => speech.play({ userInitiated: true })
   const primaryLabel = speech.state === 'speaking'
     ? `Pause reading ${label}`
     : speech.state === 'paused'
@@ -39,7 +43,7 @@ export default function ReadAloudButton({ id, text, label = 'this content' }) {
           <Square size={13} aria-hidden="true" /> Stop
         </button>
       )}
-      <span className="sr-only" role="status" aria-live="polite">
+      <span className={speech.error ? 'speech-playback-error' : 'sr-only'} role="status" aria-live="polite">
         {speech.state === 'loading'
           ? `Preparing Piper voice for ${label}`
           : speech.state === 'speaking'

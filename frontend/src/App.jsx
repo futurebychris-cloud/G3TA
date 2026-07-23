@@ -74,9 +74,9 @@ function tripInputFromGuidedDraft(draft) {
 
 function Brand() {
   return (
-    <div className="brand" aria-label="G3TA home">
+    <div className="brand" aria-label="vibego home">
       <span className="brand-mark"><Compass size={19} strokeWidth={2.2} /></span>
-      <span className="brand-word">G3TA</span>
+      <span className="brand-word">vibego</span>
       <span className="brand-divider" />
       <span className="brand-sub">Journey intelligence</span>
     </div>
@@ -86,7 +86,7 @@ function Brand() {
 function AppHeader({ step, onReset, onAccessibility, accessibilityButtonRef }) {
   return (
     <header className="site-header">
-      <button className="brand-button" type="button" onClick={onReset} aria-label="G3TA trip planner home">
+      <button className="brand-button" type="button" onClick={onReset} aria-label="vibego trip planner home">
         <Brand />
       </button>
       <div className="header-actions">
@@ -472,7 +472,7 @@ export default function App() {
             <p className="weather-attribution">
               Weather data by <a href="https://open-meteo.com/" target="_blank" rel="noreferrer">Open-Meteo.com</a>
               {' · '}<a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noreferrer">CC BY 4.0</a>
-              {' · '}normalized for this itinerary by G3TA
+              {' · '}normalized for this itinerary by vibego
             </p>
           )}
           {isSenior && <NextStepHelper result={result} />}
@@ -482,7 +482,7 @@ export default function App() {
       <footer className="site-footer">
         <Brand />
         <p>Thoughtful journeys, composed by people and machines.</p>
-        <span>DeepSeek-powered · G3TA 2026</span>
+        <span>DeepSeek-powered · vibego 2026</span>
       </footer>
     </div>
   )

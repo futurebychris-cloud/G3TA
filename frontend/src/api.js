@@ -5,11 +5,11 @@ const API_BASE = import.meta.env.VITE_API_BASE || ''
 
 // Normalize guided answers into a validated draft. The caller decides whether
 // to edit that draft or immediately start the planner.
-export async function parseTripIntake(description) {
+export async function parseTripIntake(description, { language = 'en' } = {}) {
   const resp = await fetch(`${API_BASE}/intake/parse`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ description }),
+    body: JSON.stringify({ description, language }),
   })
   if (!resp.ok) {
     let message = 'The guided assistant is unavailable. Your description is still here, and the standard form remains available.'
@@ -47,6 +47,28 @@ export async function synthesizeSpeech(text, { language = 'en', speed = 1, signa
     throw new Error('Piper returned invalid audio. Please try again.')
   }
   return audio
+}
+
+// Recordings are transcribed by local multilingual Whisper, which detects the
+// spoken language instead of forcing the currently selected reply language.
+export async function transcribeSpeech(audio, { signal } = {}) {
+  const resp = await fetch(`${API_BASE}/speech/transcribe`, {
+    method: 'POST',
+    headers: { 'Content-Type': audio.type || 'audio/webm' },
+    body: audio,
+    signal,
+  })
+  if (!resp.ok) {
+    let message = 'Automatic language detection is unavailable. Please try again or continue typing.'
+    try {
+      const body = await resp.json()
+      if (typeof body.detail === 'string' && body.detail.length < 240) message = body.detail
+    } catch {
+      // Keep the safe fallback when the backend has no JSON error body.
+    }
+    throw new Error(message)
+  }
+  return resp.json()
 }
 
 // Streams the full plan. Calls onEvent(evt) for each SSE message:

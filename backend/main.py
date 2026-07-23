@@ -15,7 +15,7 @@ import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from dotenv import find_dotenv, load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
@@ -49,6 +49,7 @@ from booking.auto_book import (  # noqa: E402
 )
 from services import hotels_provider  # noqa: E402
 from services import piper_service  # noqa: E402
+from services import whisper_service  # noqa: E402
 from intake import parse_intake  # noqa: E402
 
 db.init_db()  # create users + confirmed_routes tables on startup
@@ -104,6 +105,7 @@ class TripInput(BaseModel):
 
 class IntakeRequest(BaseModel):
     description: str = Field(min_length=10, max_length=2500)
+    language: str = Field(default="en", max_length=16)
 
 
 class SpeechRequest(BaseModel):
@@ -122,7 +124,7 @@ def health():
 def intake_parse(request: IntakeRequest):
     """Extract a reviewable form draft; this endpoint never starts planning."""
     try:
-        return parse_intake(request.description)
+        return parse_intake(request.description, language=request.language)
     except RuntimeError:
         raise HTTPException(
             status_code=503,
@@ -152,6 +154,19 @@ def speech_synthesize(request: SpeechRequest):
         media_type="audio/wav",
         headers={"Cache-Control": "private, max-age=86400"},
     )
+
+
+@app.post("/speech/transcribe")
+async def speech_transcribe(request: Request):
+    """Transcribe a short recording and report Whisper's detected language."""
+    audio = await request.body()
+    content_type = request.headers.get("content-type", "audio/webm").split(";", 1)[0]
+    try:
+        return whisper_service.transcribe_speech(audio, content_type)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.post("/agents/{name}")

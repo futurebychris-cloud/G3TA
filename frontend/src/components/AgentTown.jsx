@@ -148,7 +148,7 @@ export default function AgentTown({ agents, statuses, events = [], trip = null, 
         <TownBuilding className="town-building--planning" label="WORKSHOP" />
 
         <div className="town-hall" aria-hidden="true">
-          <span className="town-hall-flag">G3TA</span>
+          <span className="town-hall-flag">vibego</span>
           <span className="town-hall-roof" />
           <span className="town-hall-face"><i /><i /><b /></span>
           <span className="town-planning-table"><i /><i /><i /></span>

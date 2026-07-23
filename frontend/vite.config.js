@@ -8,6 +8,7 @@ export default defineConfig({
   envDir: '..',
   server: {
     port: 5173,
+    allowedHosts: true,
     proxy: {
       // Forward all API calls to backend; Vite serves the SPA source itself.
       '/plan': 'http://localhost:8000',
