@@ -491,7 +491,7 @@ button { -webkit-tap-highlight-color: transparent; }
 .taskbot-launch-copy { flex: 1; display: flex; flex-direction: column; gap: 5px; }
 .taskbot-launch-copy strong { font-size: 1.08rem; font-weight: 850; }
 .taskbot-launch-copy small { font-size: .88rem; line-height: 1.55; color: rgba(255, 255, 255, 0.95); }
-.taskbot-launch-arrow { flex: 0 0 auto; transition: transform 180ms ease; }
+.taskbot-launch-arrow { display: inline-block; vertical-align: -4px; margin-left: 8px; transition: transform 180ms ease; }
 .taskbot-launch:hover .taskbot-launch-arrow { transform: translateX(5px); }
 .planner-heading, .panel-heading {
   display: flex;
@@ -579,12 +579,12 @@ button { -webkit-tap-highlight-color: transparent; }
 .field input::placeholder { color: #a1a8ab; }
 .field small { color: #9aa2a7; font-size: 0.8rem; }
 .route-arrow { width: 34px; height: 34px; display: grid; place-items: center; align-self: center; justify-self: center; color: var(--coral); background: rgba(255, 104, 71, 0.1); border-radius: 50%; }
-.date-pair { display: flex; align-items: flex-start; gap: 7px; }
+.date-pair { display: flex; align-items: flex-start; gap: 13px; }
 .date-pair input { font-size: 0.82rem; }
 /* Equal-width columns keep the arrow perfectly centered between the dates. */
 .date-col { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
 .date-col small { color: #9aa2a7; font-size: 0.78rem; }
-.date-arrow { flex: 0 0 auto; align-self: flex-start; margin-top: 8px; color: var(--coral); }
+.date-arrow { flex: 0 0 auto; align-self: flex-start; margin-top: 2px; color: var(--coral); }
 /* Stretch keeps the currency dropdown exactly the same height as the amount input. */
 .money-input { display: flex; align-items: stretch; gap: 8px; }
 .money-input .currency-select {

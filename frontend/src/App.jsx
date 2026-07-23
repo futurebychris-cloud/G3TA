@@ -150,9 +150,13 @@ function Landing({ onSubmit, intakeDraft, intakeNotice, onOpenTaskBot }) {
         <button type="button" className="taskbot-launch" onClick={onOpenTaskBot}>
           <span className="taskbot-launch-copy">
             <strong>Struggle with forms or small text? Let the agent do it for you.</strong>
-            <small>Built for dyslexia and low vision: the task-bot reads every question and option aloud, listens to your answers in any language, fills the whole application, and confirms simply.</small>
+            <small>
+              Built for dyslexia and low vision: the task-bot reads every question and option aloud, listens to your answers in any language,
+              <br />
+              fills the whole application, and confirms simply.
+              <ArrowRight size={18} aria-hidden="true" className="taskbot-launch-arrow" />
+            </small>
           </span>
-          <ArrowRight size={22} aria-hidden="true" className="taskbot-launch-arrow" />
         </button>
         <InputForm onSubmit={onSubmit} intakeDraft={intakeDraft} intakeNotice={intakeNotice} />
         <img
