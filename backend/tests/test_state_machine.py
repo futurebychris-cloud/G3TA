@@ -39,7 +39,7 @@ class StateChartTests(unittest.TestCase):
         self.assertIn("planned trip is ready", final_node["text"])
         self.assertTrue(machine.is_terminal())
 
-    def test_voice_path_returns_to_reviewable_main_form(self):
+    def test_voice_path_starts_normal_planning_without_returning_to_main_form(self):
         machine = StateMachine(CHART_PATH)
 
         machine.start()
@@ -47,10 +47,10 @@ class StateChartTests(unittest.TestCase):
         machine.transition("User starts guided setup")
         machine.transition("User provides an answer")
         machine.transition("All guided questions were answered")
-        machine.transition("All required details are present")
-        main_form = machine.transition("User fills the main form with the draft")
+        validation = machine.transition("All required details are present")
 
-        self.assertEqual(main_form["id"], 1)
+        self.assertEqual(validation["id"], 2)
+        self.assertEqual(validation["function"]["name"], "validate_trip_input")
 
     def test_orchestration_wrapper_tracks_real_agent_outputs(self):
         machine = OrchestrationStateMachine()

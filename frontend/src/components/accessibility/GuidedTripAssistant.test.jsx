@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, vi } from 'vitest'
 import { parseTripIntake } from '../../api.js'
@@ -47,19 +47,19 @@ const RESULT = {
   summary: 'A Tokyo trip for two with a USD 4,000 budget.',
 }
 
-function renderAssistant(onApplyDraft = vi.fn()) {
+function renderAssistant(onComplete = vi.fn(), onClose = vi.fn()) {
   render(
     <AccessibilityProvider>
       <TextToSpeechProvider>
         <GuidedTripAssistant
           open
-          onClose={vi.fn()}
-          onApplyDraft={onApplyDraft}
+          onClose={onClose}
+          onComplete={onComplete}
         />
       </TextToSpeechProvider>
     </AccessibilityProvider>,
   )
-  return onApplyDraft
+  return { onComplete, onClose }
 }
 
 async function answerEveryQuestion(user) {
@@ -74,11 +74,15 @@ async function answerEveryQuestion(user) {
 }
 
 describe('voice-guided trip accessibility add-on', () => {
-  beforeEach(() => vi.clearAllMocks())
+  beforeEach(() => {
+    vi.clearAllMocks()
+    delete window.SpeechRecognition
+    delete window.webkitSpeechRecognition
+  })
 
-  it('asks every main-form question, creates a review, and never submits directly', async () => {
+  it('asks every main-form question and starts planning immediately at the end', async () => {
     const user = userEvent.setup()
-    const onApplyDraft = renderAssistant()
+    const { onComplete, onClose } = renderAssistant()
     parseTripIntake.mockResolvedValue(RESULT)
 
     expect(screen.getByText('Question 1 of 11')).toBeVisible()
@@ -86,19 +90,15 @@ describe('voice-guided trip accessibility add-on', () => {
     expect(screen.getByRole('button', { name: 'Answer flying from by voice' })).toBeInTheDocument()
 
     await answerEveryQuestion(user)
-    await user.click(screen.getByRole('button', { name: /Review my answers/ }))
+    await user.click(screen.getByRole('button', { name: /Start planning/ }))
 
-    expect(await screen.findByText('Your answers are ready')).toBeVisible()
-    expect(screen.getByText('A Tokyo trip for two with a USD 4,000 budget.')).toBeVisible()
-    expect(screen.getByRole('note')).toHaveTextContent('Please double-check: Anything we should work around?')
-    expect(onApplyDraft).not.toHaveBeenCalled()
-
-    await user.click(screen.getByRole('button', { name: /Fill the trip form/ }))
-    expect(onApplyDraft).toHaveBeenCalledWith(RESULT.draft, {
+    await waitFor(() => expect(onComplete).toHaveBeenCalledWith(RESULT.draft, {
       summary: RESULT.summary,
       missing: [],
       uncertain: ['time_constraints'],
-    })
+    }))
+    expect(onClose).toHaveBeenCalledOnce()
+    expect(screen.queryByRole('button', { name: /Fill the trip form/ })).not.toBeInTheDocument()
   })
 
   it('keeps missing details inside guided setup and asks only that question again', async () => {
@@ -114,16 +114,46 @@ describe('voice-guided trip accessibility add-on', () => {
     renderAssistant()
 
     await answerEveryQuestion(user)
-    await user.click(screen.getByRole('button', { name: /Review my answers/ }))
+    await user.click(screen.getByRole('button', { name: /Start planning/ }))
 
     expect(await screen.findByRole('heading', { name: /What is your total budget/ })).toBeVisible()
     expect(screen.getByRole('alert')).toHaveTextContent('stay in guided setup')
     const answer = screen.getByRole('textbox', { name: /Your answer/ })
     await user.clear(answer)
     await user.type(answer, 'four thousand US dollars')
-    await user.click(screen.getByRole('button', { name: /Review my answers/ }))
+    await user.click(screen.getByRole('button', { name: /Start planning/ }))
 
-    expect(await screen.findByText('Your answers are ready')).toBeVisible()
-    expect(parseTripIntake).toHaveBeenCalledTimes(2)
+    await waitFor(() => expect(parseTripIntake).toHaveBeenCalledTimes(2))
+  })
+
+  it('advances final voice answers and starts without a finish-form click', async () => {
+    const user = userEvent.setup()
+    let recognition
+    window.SpeechRecognition = class SpeechRecognition {
+      constructor() {
+        recognition = this
+        this.start = vi.fn(() => this.onstart?.())
+        this.stop = vi.fn(() => this.onend?.())
+        this.abort = vi.fn()
+      }
+    }
+    parseTripIntake.mockResolvedValue(RESULT)
+    const { onComplete } = renderAssistant()
+
+    for (let index = 0; index < ANSWERS.length; index += 1) {
+      await user.click(screen.getByRole('button', { name: /Answer .* by voice/ }))
+      const finalResult = [[{ transcript: ANSWERS[index] }]]
+      finalResult[0].isFinal = true
+      await act(async () => {
+        recognition.onresult({ results: finalResult })
+        recognition.onend()
+      })
+      if (index < ANSWERS.length - 1) {
+        expect(await screen.findByText(`Question ${index + 2} of 11`)).toBeVisible()
+      }
+    }
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalledOnce())
+    expect(screen.queryByRole('button', { name: /Fill the trip form/ })).not.toBeInTheDocument()
   })
 })

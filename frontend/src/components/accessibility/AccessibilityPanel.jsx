@@ -49,7 +49,7 @@ export default function AccessibilityPanel({ open, onClose, returnFocusRef, onOp
           <div>
             <span className="section-index">DYSLEXIA &amp; READING SUPPORT</span>
             <h3 id="guided-addon-title">Prefer one spoken question at a time?</h3>
-            <p>A voice guide asks every trip question, listens to each answer, and completes the existing form for you to check.</p>
+            <p>A Piper voice asks every trip question. Voice answers advance automatically, and the final answer starts planning.</p>
           </div>
           <button type="button" onClick={onOpenTripAssistant}>Open guided setup</button>
         </section>
@@ -91,7 +91,7 @@ export default function AccessibilityPanel({ open, onClose, returnFocusRef, onOp
           <label className="speed-setting">
             <span className="setting-copy">
               <strong>Reading Speed</strong>
-              <small>Controls browser read-aloud speed.</small>
+              <small>Controls Piper read-aloud speed.</small>
             </span>
             <span className="speed-control">
               <input

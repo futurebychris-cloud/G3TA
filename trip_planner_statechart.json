@@ -197,7 +197,7 @@
   {
     "id": 20,
     "type": 2,
-    "text": "Start the optional voice-guided accessible trip intake. Explain that the assistant will ask the same trip-brief questions one at a time and will fill, but not submit, the main form.",
+    "text": "Start the optional voice-guided accessible trip intake. Explain that the assistant will ask the same trip-brief questions one at a time, advance after each final voice answer, and start planning after the final validated answer.",
     "transition_list": [
       {
         "condition_text": "User starts guided setup",
@@ -212,7 +212,7 @@
   {
     "id": 21,
     "type": 1,
-    "text": "Speak the current trip-brief question and accept a voice or typed answer. Ask about origin, destination, dates, budget and currency, cuisines, activity style, transportation, constraints, must-see places, and traveler count.",
+    "text": "Speak the current trip-brief question and accept a voice or typed answer. A final voice answer advances automatically. Ask about origin, destination, dates, budget and currency, cuisines, activity style, transportation, constraints, must-see places, and traveler count.",
     "transition_list": [
       {
         "condition_text": "User provides an answer",
@@ -259,7 +259,7 @@
   {
     "id": 23,
     "type": 3,
-    "text": "Parse and normalize the complete guided description into a reviewable trip-form draft.",
+    "text": "Parse and normalize the complete guided description into a validated trip input for the normal planning pipeline.",
     "function": {
       "name": "parse_intake",
       "parameters": [
@@ -272,7 +272,7 @@
     "transition_list": [
       {
         "condition_text": "All required details are present",
-        "next_node_id": 24
+        "next_node_id": 2
       },
       {
         "condition_text": "Required details are missing",
@@ -281,25 +281,6 @@
       {
         "condition_text": "Guided description could not be parsed",
         "next_node_id": 98
-      }
-    ]
-  },
-  {
-    "id": 24,
-    "type": 1,
-    "text": "Read and display the normalized trip draft for review. Let the user fill the main form or return to a guided question to edit an answer.",
-    "transition_list": [
-      {
-        "condition_text": "User fills the main form with the draft",
-        "next_node_id": 1
-      },
-      {
-        "condition_text": "User edits a guided answer",
-        "next_node_id": 21
-      },
-      {
-        "condition_text": "User closes guided setup",
-        "next_node_id": 0
       }
     ]
   },
@@ -426,10 +407,10 @@
   {
     "id": 98,
     "type": 2,
-    "text": "The guided answers could not be parsed. Keep every answer available and offer another review attempt without sending the user to the regular form.",
+    "text": "The guided answers could not be parsed. Keep every answer available and offer another guided parsing attempt without sending the user to the regular form.",
     "transition_list": [
       {
-        "condition_text": "User retries guided review",
+        "condition_text": "User retries guided parsing",
         "next_node_id": 23
       },
       {

@@ -3,8 +3,8 @@
 
 const API_BASE = import.meta.env.VITE_API_BASE || ''
 
-// Build a draft from natural language. This never starts the planner; the
-// traveler reviews the populated standard form and submits it separately.
+// Normalize guided answers into a validated draft. The caller decides whether
+// to edit that draft or immediately start the planner.
 export async function parseTripIntake(description) {
   const resp = await fetch(`${API_BASE}/intake/parse`, {
     method: 'POST',

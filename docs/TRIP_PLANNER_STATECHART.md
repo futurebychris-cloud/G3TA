@@ -26,7 +26,6 @@ flowchart TD
     VOICE_QUESTION["21 · Ask one trip question<br/>Voice or typed answer · Type 1"]
     VOICE_CAPTURE["22 · Store current answer<br/>Type 3 · capture_guided_answer"]
     VOICE_PARSE["23 · Normalize all answers<br/>Type 3 · parse_intake"]
-    VOICE_REVIEW["24 · Review accessible draft<br/>Type 1"]
 
     INPUT_ERROR["90 · Trip brief needs correction"]
     SESSION_ERROR["91 · Session creation failed"]
@@ -79,14 +78,12 @@ flowchart TD
     VOICE_UNAVAILABLE -->|Type instead| VOICE_QUESTION
     VOICE_CAPTURE -->|More questions| VOICE_QUESTION
     VOICE_CAPTURE -->|All answered| VOICE_PARSE
-    VOICE_PARSE -->|Complete| VOICE_REVIEW
+    VOICE_PARSE -->|Complete · start automatically| VALIDATE
     VOICE_PARSE -->|Missing required answer| VOICE_MISSING
     VOICE_PARSE -->|Parse failed| VOICE_ERROR
     VOICE_MISSING -->|Repeat missing question| VOICE_QUESTION
-    VOICE_ERROR -->|Retry review| VOICE_PARSE
+    VOICE_ERROR -->|Retry parsing| VOICE_PARSE
     VOICE_ERROR -->|Edit answer| VOICE_QUESTION
-    VOICE_REVIEW -->|Fill main form| FORM
-    VOICE_REVIEW -->|Edit answer| VOICE_QUESTION
 
     classDef entry fill:#0a2034,color:#fff,stroke:#0a2034,stroke-width:2px;
     classDef action fill:#dff3ff,color:#0a2034,stroke:#0a2034;
@@ -96,7 +93,7 @@ flowchart TD
 
     class START entry;
     class VALIDATE,PREPARE,BUDGET,SPECIALISTS,GEO,SYNTH,VOICE_CAPTURE,VOICE_PARSE action;
-    class FORM,VOICE_QUESTION,VOICE_REVIEW decision;
+    class FORM,VOICE_QUESTION decision;
     class INPUT_ERROR,SESSION_ERROR,BUDGET_ERROR,AGENT_ERROR,GEO_ERROR,SYNTH_ERROR,VOICE_UNAVAILABLE,VOICE_MISSING,VOICE_ERROR recovery;
     class READY final;
 ```
@@ -105,6 +102,10 @@ flowchart TD
 
 `Trip brief → validation → planning session → Budget Agent → five parallel
 specialists → destination check → reconciliation and synthesis → planned trip`
+
+The accessible voice path automatically advances after each final spoken answer.
+After the last required answer is normalized, it joins the same validation and
+planning pipeline at node `2`; it does not return to the main form for another click.
 
 ## Source files
 

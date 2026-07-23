@@ -99,62 +99,20 @@ const FIELD_LABELS = Object.fromEntries(QUESTIONS.map(({ id, label }) => [id, la
 FIELD_LABELS.budget_total = 'Total budget'
 FIELD_LABELS.currency = 'Budget currency'
 
-function display(value, fallback = 'No preference') {
-  if (Array.isArray(value)) return value.length ? value.join(', ') : fallback
-  if (value === null || value === undefined || value === '') return fallback
-  return String(value)
-}
-
-function DraftReview({ result }) {
-  const { draft } = result
-  const fields = [
-    ['From', display(draft.origin, 'Not provided')],
-    ['Going to', display(draft.location, 'Not provided')],
-    ['Dates', `${display(draft.dates.start, 'Not provided')} to ${display(draft.dates.end, 'Not provided')}`],
-    ['Budget', draft.budget.total
-      ? `${display(draft.budget.currency, '')} ${draft.budget.total}`.trim()
-      : 'Not provided'],
-    ['Travelers', display(draft.num_people, 'Not provided')],
-    ['Food', display(draft.preferences.bites)],
-    ['Transport', display(draft.preferences.transportation_type)],
-    ['Trip style', display(draft.preferences.activity_style)],
-    ['Timing and access needs', display(draft.time_constraints)],
-    ['Must-see places', display(draft.must_go_sites)],
-  ]
-
-  return (
-    <div className="guided-review">
-      <div className="guided-review-summary" role="status">
-        <Check size={19} aria-hidden="true" />
-        <div><strong>Your answers are ready</strong><p>{result.summary}</p></div>
-      </div>
-      <dl className="guided-review-grid">
-        {fields.map(([label, value]) => (
-          <div key={label}><dt>{label}</dt><dd>{value}</dd></div>
-        ))}
-      </dl>
-      {result.uncertain.length > 0 && (
-        <div className="guided-review-note" role="note">
-          <strong>Please double-check:</strong>{' '}
-          {result.uncertain.map((field) => FIELD_LABELS[FIELD_TO_QUESTION[field]] || field).join(', ')}.
-        </div>
-      )}
-    </div>
-  )
-}
-
 function answersForAssistant(answers) {
   return QUESTIONS.map((question) => (
     `${question.label}: ${answers[question.id]?.trim() || 'None'}`
   )).join('\n')
 }
 
-export default function GuidedTripAssistant({ open, onClose, onApplyDraft, returnFocusRef }) {
+export default function GuidedTripAssistant({ open, onClose, onComplete, returnFocusRef }) {
   const closeRef = useRef(null)
   const answerRef = useRef(null)
+  const intakeRequestVersionRef = useRef(0)
+  const openRef = useRef(open)
+  openRef.current = open
   const [step, setStep] = useState(0)
   const [answers, setAnswers] = useState({})
-  const [result, setResult] = useState(null)
   const [status, setStatus] = useState('answering')
   const [error, setError] = useState('')
   const [repairMessage, setRepairMessage] = useState('')
@@ -162,22 +120,35 @@ export default function GuidedTripAssistant({ open, onClose, onApplyDraft, retur
   const question = QUESTIONS[step]
   const guidedSpeech = useTextToSpeech('guided-trip-assistant', '')
 
+  const closeGuided = useCallback(() => {
+    intakeRequestVersionRef.current += 1
+    guidedSpeech.stop()
+    onClose()
+  }, [guidedSpeech.stop, onClose])
+
   const speakQuestion = useCallback((prefix = '') => {
     guidedSpeech.playText(`${prefix}${question.prompt}`, { force: true })
   }, [guidedSpeech.playText, question.prompt])
 
   useEffect(() => {
-    if (!open || result || status === 'loading') return undefined
+    if (!open || status === 'loading') return undefined
     const timer = window.setTimeout(() => speakQuestion(repairMessage ? `${repairMessage} ` : ''), 260)
     return () => window.clearTimeout(timer)
-  }, [open, repairMessage, result, speakQuestion, status, step])
+  }, [open, repairMessage, speakQuestion, status, step])
 
   useEffect(() => {
-    if (!open) guidedSpeech.stop()
+    if (!open) {
+      intakeRequestVersionRef.current += 1
+      guidedSpeech.stop()
+    }
   }, [guidedSpeech.stop, open])
 
-  function move(direction) {
-    const answer = answers[question.id]?.trim() || ''
+  useEffect(() => () => {
+    intakeRequestVersionRef.current += 1
+  }, [])
+
+  function move(direction, answerSet = answers) {
+    const answer = answerSet[question.id]?.trim() || ''
     if (direction > 0 && question.required && (!answer || answer.toLowerCase() === 'none')) {
       setError(`Please answer ${question.label.toLowerCase()} before continuing. You can speak or type your answer.`)
       answerRef.current?.focus()
@@ -192,15 +163,15 @@ export default function GuidedTripAssistant({ open, onClose, onApplyDraft, retur
       if (nextRepair) {
         setStep(QUESTIONS.findIndex(({ id }) => id === nextRepair))
       } else if (direction > 0) {
-        reviewAnswers()
+        reviewAnswers(answerSet)
       }
       return
     }
     setStep((current) => Math.max(0, Math.min(QUESTIONS.length - 1, current + direction)))
   }
 
-  async function reviewAnswers() {
-    const answer = answers[question.id]?.trim() || ''
+  async function reviewAnswers(answerSet = answers) {
+    const answer = answerSet[question.id]?.trim() || ''
     if (question.required && (!answer || answer.toLowerCase() === 'none')) {
       setError(`Please answer ${question.label.toLowerCase()} before continuing.`)
       answerRef.current?.focus()
@@ -210,8 +181,10 @@ export default function GuidedTripAssistant({ open, onClose, onApplyDraft, retur
     setStatus('loading')
     setError('')
     guidedSpeech.stop()
+    const requestVersion = ++intakeRequestVersionRef.current
     try {
-      const parsed = await parseTripIntake(answersForAssistant(answers))
+      const parsed = await parseTripIntake(answersForAssistant(answerSet))
+      if (requestVersion !== intakeRequestVersionRef.current || !openRef.current) return
       if (parsed.missing.length > 0) {
         const missingQuestionIds = [...new Set(parsed.missing.map((field) => FIELD_TO_QUESTION[field]).filter(Boolean))]
         const nextIndex = QUESTIONS.findIndex(({ id }) => missingQuestionIds.includes(id))
@@ -224,34 +197,25 @@ export default function GuidedTripAssistant({ open, onClose, onApplyDraft, retur
         window.setTimeout(() => answerRef.current?.focus(), 0)
         return
       }
-      setResult(parsed)
       setRepairQuestionIds([])
-      setStatus('review')
-      if (guidedSpeech.supported) {
-        guidedSpeech.playText(
-          `Your trip details are ready to review. ${parsed.summary}`,
-          { force: true },
-        )
-      }
+      setStatus('starting')
+      guidedSpeech.stop()
+      onComplete(parsed.draft, {
+        summary: parsed.summary,
+        missing: [],
+        uncertain: parsed.uncertain,
+      })
+      closeGuided()
     } catch (requestError) {
-      setError(`${requestError.message} Your answers have not been lost. Choose review again to retry.`)
+      if (requestVersion !== intakeRequestVersionRef.current || !openRef.current) return
+      setError(`${requestError.message} Your answers have not been lost. Choose Start planning again to retry.`)
       setStatus('answering')
     }
   }
 
-  function editAnswers() {
-    setResult(null)
-    setStep(0)
-    setStatus('answering')
-    setError('')
-    setRepairMessage('')
-    setRepairQuestionIds([])
-    window.setTimeout(() => answerRef.current?.focus(), 0)
-  }
-
   function startOver() {
+    intakeRequestVersionRef.current += 1
     setAnswers({})
-    setResult(null)
     setStep(0)
     setStatus('answering')
     setError('')
@@ -259,13 +223,16 @@ export default function GuidedTripAssistant({ open, onClose, onApplyDraft, retur
     setRepairQuestionIds([])
   }
 
-  function applyDraft() {
-    onApplyDraft(result.draft, {
-      summary: result.summary,
-      missing: [],
-      uncertain: result.uncertain,
-    })
-    onClose()
+  function acceptVoiceAnswer(transcript, { isFinal = true } = {}) {
+    const nextAnswers = { ...answers, [question.id]: transcript }
+    setAnswers(nextAnswers)
+    setError('')
+    if (!isFinal) return
+    if (isLastQuestion) {
+      reviewAnswers(nextAnswers)
+    } else {
+      move(1, nextAnswers)
+    }
   }
 
   const currentAnswer = answers[question.id] || ''
@@ -279,7 +246,7 @@ export default function GuidedTripAssistant({ open, onClose, onApplyDraft, retur
   return (
     <AccessibleDialog
       open={open}
-      onClose={onClose}
+      onClose={closeGuided}
       returnFocusRef={returnFocusRef}
       initialFocusRef={closeRef}
       labelledBy="guided-trip-title"
@@ -291,113 +258,95 @@ export default function GuidedTripAssistant({ open, onClose, onApplyDraft, retur
           <span className="section-index">OPTIONAL DYSLEXIA &amp; READING SUPPORT</span>
           <h2 id="guided-trip-title">Voice-guided trip setup</h2>
           <p id="guided-trip-description">
-            The guide asks the same questions as the main form, one at a time. Answer by voice or typing, then review the completed details.
+            The guide asks the same questions as the main form, one at a time. A final voice answer starts trip planning automatically.
           </p>
         </div>
-        <button ref={closeRef} className="dialog-close" type="button" onClick={onClose} aria-label="Close voice-guided trip setup">
+        <button ref={closeRef} className="dialog-close" type="button" onClick={closeGuided} aria-label="Close voice-guided trip setup">
           <X size={20} aria-hidden="true" />
         </button>
       </header>
 
       <div className="guided-trip-body">
-        {!result ? (
-          <>
-            <div className="guided-progress" aria-label={`Question ${step + 1} of ${QUESTIONS.length}`}>
-              <div><strong>Question {step + 1} of {QUESTIONS.length}</strong><span>{Math.round(((step + 1) / QUESTIONS.length) * 100)}% complete</span></div>
-              <progress max={QUESTIONS.length} value={step + 1}>{step + 1} of {QUESTIONS.length}</progress>
-            </div>
+        <>
+          <div className="guided-progress" aria-label={`Question ${step + 1} of ${QUESTIONS.length}`}>
+            <div><strong>Question {step + 1} of {QUESTIONS.length}</strong><span>{Math.round(((step + 1) / QUESTIONS.length) * 100)}% complete</span></div>
+            <progress max={QUESTIONS.length} value={step + 1}>{step + 1} of {QUESTIONS.length}</progress>
+          </div>
 
-            <section className="guided-question" aria-labelledby="guided-question-label">
-              <span className="section-index">{question.label}</span>
-              <h3 id="guided-question-label">{question.prompt}</h3>
-              <p>{question.hint}</p>
-              {speechSupported && (
-                <>
-                  <button
-                    className="replay-question"
-                    type="button"
-                    onClick={() => speakQuestion()}
-                    disabled={guidedSpeech.state === 'loading'}
-                  >
-                    <Volume2 size={17} aria-hidden="true" />
-                    {guidedSpeech.state === 'loading' ? 'Preparing voice…' : 'Replay question'}
-                  </button>
-                  <span className="sr-only" role="status" aria-live="polite">
-                    {guidedSpeech.state === 'loading'
-                      ? 'Preparing the Piper voice'
-                      : guidedSpeech.state === 'speaking'
-                        ? 'Piper is reading the question'
-                        : guidedSpeech.error}
-                  </span>
-                </>
-              )}
-            </section>
+          <section className="guided-question" aria-labelledby="guided-question-label">
+            <span className="section-index">{question.label}</span>
+            <h3 id="guided-question-label">{question.prompt}</h3>
+            <p>{question.hint}</p>
+            {speechSupported && (
+              <>
+                <button
+                  className="replay-question"
+                  type="button"
+                  onClick={() => speakQuestion()}
+                  disabled={guidedSpeech.state === 'loading'}
+                >
+                  <Volume2 size={17} aria-hidden="true" />
+                  {guidedSpeech.state === 'loading' ? 'Preparing voice…' : 'Replay question'}
+                </button>
+                <span className="sr-only" role="status" aria-live="polite">
+                  {guidedSpeech.state === 'loading'
+                    ? 'Preparing the Piper voice'
+                    : guidedSpeech.state === 'speaking'
+                      ? 'Piper is reading the question'
+                      : guidedSpeech.error}
+                </span>
+              </>
+            )}
+          </section>
 
-            <label className="guided-description-field" htmlFor="guided-trip-answer">
-              Your answer {question.required ? '' : '(optional)'}
-            </label>
-            <div className="guided-description-input guided-answer-input">
-              <textarea
-                ref={answerRef}
-                id="guided-trip-answer"
-                value={currentAnswer}
-                onChange={(event) => setAnswers((current) => ({ ...current, [question.id]: event.target.value }))}
-                rows="3"
-                maxLength="500"
-                aria-describedby="guided-answer-hint guided-trip-error"
-                placeholder="Speak your answer or type it here"
-              />
-              <VoiceInputButton
-                label={`Answer ${question.label.toLowerCase()} by voice`}
-                showText
-                onTranscript={(transcript) => {
-                  setAnswers((current) => ({ ...current, [question.id]: transcript }))
-                  setError('')
-                }}
-              />
-            </div>
-            <p id="guided-answer-hint" className="guided-privacy">
-              <ShieldCheck size={16} aria-hidden="true" />
-              Your spoken answer appears above so you can check it. The guide will ask again if a required detail is missing.
-            </p>
-            <p id="guided-trip-error" className="guided-error" role="alert">{error}</p>
-          </>
-        ) : <DraftReview result={result} />}
+          <label className="guided-description-field" htmlFor="guided-trip-answer">
+            Your answer {question.required ? '' : '(optional)'}
+          </label>
+          <div className="guided-description-input guided-answer-input">
+            <textarea
+              ref={answerRef}
+              id="guided-trip-answer"
+              value={currentAnswer}
+              onChange={(event) => setAnswers((current) => ({ ...current, [question.id]: event.target.value }))}
+              rows="3"
+              maxLength="500"
+              aria-describedby="guided-answer-hint guided-trip-error"
+              placeholder="Speak your answer or type it here"
+            />
+            <VoiceInputButton
+              label={`Answer ${question.label.toLowerCase()} by voice`}
+              showText
+              onTranscript={acceptVoiceAnswer}
+            />
+          </div>
+          <p id="guided-answer-hint" className="guided-privacy">
+            <ShieldCheck size={16} aria-hidden="true" />
+            Voice answers advance automatically. After the final answer, planning starts. Missing required details stay in this guide.
+          </p>
+          <p id="guided-trip-error" className="guided-error" role="alert">{error}</p>
+        </>
       </div>
 
       <footer className="accessibility-panel-actions guided-trip-actions">
-        {result ? (
-          <>
-            <button className="reset-accessibility" type="button" onClick={editAnswers}>
-              <ArrowLeft size={16} aria-hidden="true" /> Edit answers
+        <button className="reset-accessibility start-over-button" type="button" onClick={startOver}>
+          <RotateCcw size={16} aria-hidden="true" /> Start over
+        </button>
+        <div className="guided-step-actions">
+          {canGoBack && (
+            <button className="reset-accessibility" type="button" onClick={() => move(-1)}>
+              <ArrowLeft size={16} aria-hidden="true" /> Back
             </button>
-            <button className="done-accessibility" type="button" onClick={applyDraft}>
-              Fill the trip form <Check size={16} aria-hidden="true" />
+          )}
+          {!isLastQuestion ? (
+            <button className="done-accessibility" type="button" onClick={() => move(1)}>
+              {currentAnswer.trim() || question.required ? 'Next question' : 'Skip question'} <ArrowRight size={16} aria-hidden="true" />
             </button>
-          </>
-        ) : (
-          <>
-            <button className="reset-accessibility start-over-button" type="button" onClick={startOver}>
-              <RotateCcw size={16} aria-hidden="true" /> Start over
+          ) : (
+            <button className="done-accessibility" type="button" onClick={() => reviewAnswers()} disabled={status === 'loading'}>
+              {status === 'loading' ? 'Starting your trip…' : 'Start planning'} <Check size={16} aria-hidden="true" />
             </button>
-            <div className="guided-step-actions">
-              {canGoBack && (
-                <button className="reset-accessibility" type="button" onClick={() => move(-1)}>
-                  <ArrowLeft size={16} aria-hidden="true" /> Back
-                </button>
-              )}
-              {!isLastQuestion ? (
-                <button className="done-accessibility" type="button" onClick={() => move(1)}>
-                  {currentAnswer.trim() || question.required ? 'Next question' : 'Skip question'} <ArrowRight size={16} aria-hidden="true" />
-                </button>
-              ) : (
-                <button className="done-accessibility" type="button" onClick={reviewAnswers} disabled={status === 'loading'}>
-                  {status === 'loading' ? 'Preparing your details…' : 'Review my answers'} <Check size={16} aria-hidden="true" />
-                </button>
-              )}
-            </div>
-          </>
-        )}
+          )}
+        </div>
       </footer>
     </AccessibleDialog>
   )
