@@ -126,6 +126,15 @@ function Landing({ onSubmit, intakeDraft, intakeNotice, onOpenTaskBot }) {
         </div>
         <div className="hero-visual">
           <OrbitGlobe />
+          <div className="hero-taskcard" aria-hidden="true">
+            <div className="hero-taskcard-head"><Sparkles size={14} /> Task-bot at work</div>
+            <ul>
+              <li><Check size={13} /> Flights compared</li>
+              <li><Check size={13} /> Stays priced</li>
+              <li><Check size={13} /> Budget balanced</li>
+              <li className="working"><span className="working-dot" /> Drafting your day-by-day plan…</li>
+            </ul>
+          </div>
         </div>
       </section>
 
