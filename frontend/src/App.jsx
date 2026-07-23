@@ -144,7 +144,7 @@ function Landing({ onSubmit, intakeDraft, intakeNotice, onOpenTaskBot }) {
             <span className="section-index">01 / START</span>
             <h2>Where to next?</h2>
           </div>
-          <p>Start with the essentials. Fine-tune the flavor below.</p>
+          <p>Start with the essentials — or answer out loud. Speak any language; VibeGo translates.</p>
         </div>
         <button type="button" className="taskbot-launch" onClick={onOpenTaskBot}>
           <span className="taskbot-launch-icon" aria-hidden="true"><Volume2 size={20} /></span>

@@ -1,65 +1,86 @@
 import { useId, useState } from 'react'
-import { Mic, MicOff, Volume2 } from 'lucide-react'
+import { Mic, Volume2 } from 'lucide-react'
 import useTextToSpeech from '../../hooks/useTextToSpeech.js'
 import useAutoSpeechRecognition from '../../hooks/useAutoSpeechRecognition.js'
 
 const COPY = {
   en: {
-    listen: (label) => `Listen to ${label} options`,
+    listen: (label) => `Read ${label} and its options aloud`,
     speak: (label) => `Answer ${label} by voice`,
     stopSpeak: 'Stop listening',
-    matched: (values) => `Selected: ${values.join(', ')}`,
-    noMatch: "Didn't catch an option in that — try again, naming one of the choices.",
   },
   zh: {
-    listen: (label) => `朗读${label}选项`,
+    listen: (label) => `朗读${label}及其选项`,
     speak: (label) => `用语音回答${label}`,
     stopSpeak: '停止聆听',
-    matched: (values) => `已选择：${values.join('、')}`,
-    noMatch: '没有识别到选项，请重试并说出其中一个选项。',
   },
 }
 
-function matchOptions(transcript, options) {
-  const normalized = String(transcript || '').toLowerCase()
-  return options.filter((option) => normalized.includes(String(option).toLowerCase()))
+function normalizeWords(text) {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .split(/\s+/)
+    .filter(Boolean)
+}
+
+// Forgiving option matching: every word of an option must appear in the spoken
+// text, allowing prefix matches so "flights"→flight and "cultural"→culture work.
+export function matchOptions(transcript, options) {
+  const words = normalizeWords(transcript)
+  return options.filter((option) => {
+    const optionWords = normalizeWords(option)
+    return optionWords.length > 0 && optionWords.every((ow) =>
+      words.some((w) => w.startsWith(ow) || (ow.startsWith(w) && w.length >= 3)),
+    )
+  })
 }
 
 /**
- * Pairs a "listen" (Piper reads the field title + every option aloud) and a
- * "speak" (Whisper records for a few seconds, auto-detects the language,
- * translates to the site's current language, then matches spoken words
- * against the option list) control for any choice-based form field —
- * checkbox groups today, the same pattern extends to native <select>s.
+ * The universal listen/speak pair for a form field (travelvoice-setup-v2 pattern):
+ *  - listen (speaker icon): Piper reads the field title — and every option, for
+ *    checkbox groups and dropdowns — out loud.
+ *  - speak (mic icon): records for `listenSeconds`, Whisper auto-detects the
+ *    language and translates to the site language, then either fills the text
+ *    input (onText) or selects the matching choices (options + onMatch).
+ * No visible status text — the mic glows while recording; feedback for screen
+ * readers stays in an sr-only live region so the buttons never move.
  */
 export default function FieldVoiceControls({
   label,
   options,
-  language = 'en',
+  readText,
   onMatch,
-  maxListenSeconds = 3,
+  onText,
+  onSpeakStart,
+  language = 'en',
+  listenSeconds = 3,
 }) {
   const isChinese = language.toLowerCase().startsWith('zh')
   const copy = isChinese ? COPY.zh : COPY.en
   const speechId = useId()
   const speech = useTextToSpeech(speechId, '')
-  const [confirmation, setConfirmation] = useState('')
+  const [announcement, setAnnouncement] = useState('')
   const recognition = useAutoSpeechRecognition({
     uiLanguage: language,
     translate: true,
-    maxListenMs: maxListenSeconds * 1000,
+    maxListenMs: listenSeconds * 1000,
     onTranscript: (transcript) => {
-      const matches = matchOptions(transcript, options)
-      setConfirmation(matches.length ? copy.matched(matches) : copy.noMatch)
-      if (matches.length) onMatch(matches)
+      if (options && onMatch) {
+        const matches = matchOptions(transcript, options)
+        setAnnouncement(matches.length ? `Selected: ${matches.join(', ')}` : 'No option recognized.')
+        onMatch(matches)
+      } else if (onText) {
+        setAnnouncement(`Heard: ${transcript}`)
+        onText(transcript)
+      }
     },
   })
 
   function handleListen() {
-    setConfirmation('')
-    const spoken = isChinese
-      ? `${label}。选项包括：${options.join('、')}。`
-      : `${label}. Options are: ${options.join(', ')}.`
+    const spoken = readText || (options
+      ? (isChinese ? `${label}。选项包括：${options.join('、')}。` : `${label}. Options are: ${options.join(', ')}.`)
+      : label)
     speech.playText(spoken, { force: true, userInitiated: true })
   }
 
@@ -68,7 +89,8 @@ export default function FieldVoiceControls({
       recognition.stop()
       return
     }
-    setConfirmation('')
+    setAnnouncement('')
+    onSpeakStart?.()
     recognition.start()
   }
 
@@ -79,7 +101,7 @@ export default function FieldVoiceControls({
       {speech.supported && (
         <button
           type="button"
-          className="field-voice-btn field-voice-listen"
+          className="voice-pair-btn"
           onClick={handleListen}
           disabled={speech.state === 'loading'}
           aria-label={copy.listen(label)}
@@ -91,16 +113,16 @@ export default function FieldVoiceControls({
       {recognition.supported && (
         <button
           type="button"
-          className={recognition.isListening ? 'field-voice-btn field-voice-speak listening' : 'field-voice-btn field-voice-speak'}
+          className={recognition.isListening ? 'voice-pair-btn listening' : 'voice-pair-btn'}
           onClick={handleSpeak}
           aria-label={recognition.isListening ? copy.stopSpeak : copy.speak(label)}
           title={recognition.isListening ? copy.stopSpeak : copy.speak(label)}
         >
-          {recognition.isListening ? <MicOff size={15} aria-hidden="true" /> : <Mic size={15} aria-hidden="true" />}
+          <Mic size={15} aria-hidden="true" />
         </button>
       )}
-      <span className={confirmation || recognition.status ? 'field-voice-status' : 'field-voice-status sr-only'} role="status" aria-live="polite">
-        {confirmation || recognition.status}
+      <span className="sr-only" role="status" aria-live="polite">
+        {announcement || recognition.status}
       </span>
     </span>
   )

@@ -14,7 +14,6 @@ import {
   Landmark,
   Users,
 } from 'lucide-react'
-import VoiceInputButton from './accessibility/VoiceInputButton.jsx'
 import FieldVoiceControls from './accessibility/FieldVoiceControls.jsx'
 
 const CUISINES = [
@@ -31,18 +30,69 @@ const CUISINES = [
 ]
 const STYLES = ['cultural', 'adventure', 'relaxed']
 const TRANSPORT = ['flight', 'train', 'car']
+const CURRENCIES = ['USD', 'EUR', 'GBP', 'CNY', 'JPY', 'KRW', 'AUD', 'CAD', 'SGD', 'THB']
+
+const CURRENCY_WORDS = {
+  dollar: 'USD', dollars: 'USD', usd: 'USD',
+  euro: 'EUR', euros: 'EUR', eur: 'EUR',
+  pound: 'GBP', pounds: 'GBP', gbp: 'GBP',
+  yuan: 'CNY', rmb: 'CNY', renminbi: 'CNY', cny: 'CNY',
+  yen: 'JPY', jpy: 'JPY',
+  won: 'KRW', krw: 'KRW',
+  baht: 'THB', thb: 'THB',
+}
+
+const NUMBER_WORDS = {
+  one: 1, two: 2, three: 3, four: 4, five: 5,
+  six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+}
 
 function dateInputValue(date) {
   const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000)
   return local.toISOString().slice(0, 10)
 }
 
-function defaultTripDates() {
-  const start = new Date()
-  start.setDate(start.getDate() + 30)
-  const end = new Date(start)
-  end.setDate(end.getDate() + 4)
+function parseSpokenDate(text) {
+  const cleaned = String(text || '')
+    .trim()
+    .replace(/(\d+)(st|nd|rd|th)\b/gi, '$1')
+    .replace(/\bof\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+  if (!cleaned) return null
+  const hasYear = /\d{4}/.test(cleaned)
+  const parsed = new Date(hasYear ? cleaned : `${cleaned}, ${new Date().getFullYear()}`)
+  return Number.isNaN(parsed.getTime()) ? null : parsed
+}
+
+function parseSpokenDateRange(transcript) {
+  const parts = String(transcript || '').split(/\s*(?:\bto\b|\buntil\b|\btill\b|\bthrough\b|–|—)\s*/i).filter(Boolean)
+  if (parts.length < 2) return null
+  const start = parseSpokenDate(parts[0])
+  const end = parseSpokenDate(parts[1])
+  if (!start || !end) return null
   return { start: dateInputValue(start), end: dateInputValue(end) }
+}
+
+function parseSpokenBudget(transcript) {
+  const text = String(transcript || '').toLowerCase().replace(/,/g, '')
+  const numberMatch = text.match(/\d+(?:\.\d+)?/)
+  let amount = numberMatch ? Number(numberMatch[0]) : null
+  if (amount != null && /\bthousand\b/.test(text)) amount *= 1000
+  let currency = null
+  for (const [word, code] of Object.entries(CURRENCY_WORDS)) {
+    if (new RegExp(`\\b${word}\\b`).test(text)) { currency = code; break }
+  }
+  return { amount, currency }
+}
+
+function parseSpokenCount(transcript) {
+  const text = String(transcript || '').toLowerCase()
+  const digits = text.match(/\d+/)
+  if (digits) return Number(digits[0])
+  for (const [word, value] of Object.entries(NUMBER_WORDS)) {
+    if (new RegExp(`\\b${word}\\b`).test(text)) return value
+  }
+  return null
 }
 
 const FIELD_META = {
@@ -51,7 +101,7 @@ const FIELD_META = {
   transportation_type: { label: 'Preferred transport', icon: PlaneTakeoff },
 }
 
-function PreferenceGroup({ field, values, selected, onToggle, onVoiceMatch }) {
+function PreferenceGroup({ field, values, selected, onToggle, onVoiceMatch, onVoiceStart }) {
   const { label, icon: Icon } = FIELD_META[field]
   return (
     <fieldset className="preference-group">
@@ -60,8 +110,9 @@ function PreferenceGroup({ field, values, selected, onToggle, onVoiceMatch }) {
         <FieldVoiceControls
           label={label}
           options={values}
-          maxListenSeconds={values.length > 5 ? 5 : 3}
+          listenSeconds={values.length > 5 ? 5 : 3}
           onMatch={(matches) => onVoiceMatch(field, matches)}
+          onSpeakStart={() => onVoiceStart(field)}
         />
       </legend>
       {field === 'bites' && <p className="preference-hint">Choose in priority order. Your first choice is treated as primary.</p>}
@@ -89,15 +140,16 @@ function PreferenceGroup({ field, values, selected, onToggle, onVoiceMatch }) {
 export default function InputForm({ onSubmit, intakeDraft, intakeNotice }) {
   const [showPreferences, setShowPreferences] = useState(true)
   const [form, setForm] = useState(() => ({
-    origin: 'New York',
+    origin: '',
     location: '',
-    ...defaultTripDates(),
-    total: 2500,
+    start: '',
+    end: '',
+    total: '',
     currency: 'USD',
     bites: [],
-    transportation_type: ['flight'],
-    activity_style: ['cultural', 'adventure'],
-    time_constraints: 'fixed dates',
+    transportation_type: [],
+    activity_style: [],
+    time_constraints: '',
     must_go_sites: '',
     num_people: 1,
   }))
@@ -138,13 +190,37 @@ export default function InputForm({ onSubmit, intakeDraft, intakeNotice }) {
     })
   }
 
-  // Voice adds to the existing selection rather than toggling, so repeating an
-  // already-selected option out loud never accidentally deselects it.
+  // A fresh "speak" wipes the field's previous selection, then the transcript's
+  // matches become the new selection — saying several options checks them all.
+  function clearChoices(field) {
+    setForm((current) => ({ ...current, [field]: [] }))
+  }
+
   function selectByVoice(field, matchedValues) {
+    setForm((current) => ({ ...current, [field]: matchedValues }))
+  }
+
+  const setValue = (key) => (value) => setForm((current) => ({ ...current, [key]: value }))
+
+  function fillDatesByVoice(transcript) {
+    const range = parseSpokenDateRange(transcript)
+    if (range) setForm((current) => ({ ...current, start: range.start, end: range.end }))
+  }
+
+  function fillBudgetByVoice(transcript) {
+    const { amount, currency } = parseSpokenBudget(transcript)
     setForm((current) => ({
       ...current,
-      [field]: Array.from(new Set([...current[field], ...matchedValues])),
+      ...(amount != null ? { total: amount } : {}),
+      ...(currency ? { currency } : {}),
     }))
+  }
+
+  function fillTravelersByVoice(transcript) {
+    const count = parseSpokenCount(transcript)
+    if (count != null && count >= 1 && count <= 100) {
+      setForm((current) => ({ ...current, num_people: count }))
+    }
   }
 
   function submit(event) {
@@ -184,57 +260,78 @@ export default function InputForm({ onSubmit, intakeDraft, intakeNotice }) {
         </div>
       )}
       <div className="core-fields">
-        <label className="field route-field">
-          <span className="field-label"><PlaneTakeoff size={15} /> Flying from</span>
-          <span className="destination-input-row">
-            <input id="trip-origin" name="origin" autoComplete="address-level2" value={form.origin} onChange={set('origin')} placeholder="Your city" required />
-            <VoiceInputButton
-              label="Enter departure city by voice"
-              onTranscript={(transcript) => setForm((current) => ({ ...current, origin: transcript }))}
+        <div className="field route-field">
+          <span className="field-label">
+            <PlaneTakeoff size={15} /> <label htmlFor="trip-origin">Flying from</label>
+            <FieldVoiceControls
+              label="Flying from"
+              readText="Flying from. Say your departure city."
+              onText={setValue('origin')}
             />
           </span>
+          <input id="trip-origin" name="origin" autoComplete="address-level2" value={form.origin} onChange={set('origin')} placeholder="Your city" required />
           <small>Departure city</small>
-        </label>
+        </div>
 
         <span className="route-arrow"><ArrowRight size={18} /></span>
 
-        <label className="field route-field destination-field">
-          <span className="field-label"><MapPin size={15} /> Going to</span>
-          <span className="destination-input-row">
-            <input
-              id="trip-destination"
-              name="destination"
-              autoComplete="off"
-              value={form.location}
-              onChange={set('location')}
-              placeholder="City or country"
-              required
-            />
-            <VoiceInputButton
-              onTranscript={(transcript) => setForm((current) => ({ ...current, location: transcript }))}
+        <div className="field route-field destination-field">
+          <span className="field-label">
+            <MapPin size={15} /> <label htmlFor="trip-destination">Going to</label>
+            <FieldVoiceControls
+              label="Going to"
+              readText="Going to. Say the city or country you want to visit."
+              onText={setValue('location')}
             />
           </span>
+          <input
+            id="trip-destination"
+            name="destination"
+            autoComplete="off"
+            value={form.location}
+            onChange={set('location')}
+            placeholder="City or country"
+            required
+          />
           <small>City or region</small>
-        </label>
+        </div>
 
-        <label className="field dates-field">
-          <span className="field-label"><CalendarDays size={15} /> Dates</span>
+        <div className="field dates-field">
+          <span className="field-label">
+            <CalendarDays size={15} /> Dates
+            <FieldVoiceControls
+              label="Dates"
+              readText="Dates. Say your arrival and departure, for example: August 23rd to August 27th."
+              listenSeconds={5}
+              onText={fillDatesByVoice}
+            />
+          </span>
           <span className="date-pair">
             <input name="start-date" aria-label="Start date" type="date" value={form.start} onChange={set('start')} required />
             <span>→</span>
             <input name="end-date" aria-label="End date" type="date" value={form.end} onChange={set('end')} required />
           </span>
           <small>Arrival and departure</small>
-        </label>
+        </div>
 
-        <label className="field budget-field">
-          <span className="field-label"><CircleDollarSign size={15} /> Total budget</span>
+        <div className="field budget-field">
+          <span className="field-label">
+            <CircleDollarSign size={15} /> Total budget
+            <FieldVoiceControls
+              label="Total budget"
+              readText={`Total budget. Say the amount and currency, for example: 2500 US dollars. Currency options are: ${CURRENCIES.join(', ')}.`}
+              listenSeconds={5}
+              onText={fillBudgetByVoice}
+            />
+          </span>
           <span className="money-input">
-            <input name="currency" className="currency-input" aria-label="Currency" value={form.currency} onChange={set('currency')} maxLength={3} />
-            <input name="budget" aria-label="Budget amount" type="number" min="1" value={form.total} onChange={set('total')} required />
+            <select name="currency" className="currency-select" aria-label="Currency" value={form.currency} onChange={set('currency')}>
+              {CURRENCIES.map((code) => <option key={code} value={code}>{code}</option>)}
+            </select>
+            <input name="budget" aria-label="Budget amount" type="number" min="1" value={form.total} onChange={set('total')} placeholder="Amount" required />
           </span>
           <small>For the entire trip</small>
-        </label>
+        </div>
       </div>
 
       <button
@@ -251,35 +348,46 @@ export default function InputForm({ onSubmit, intakeDraft, intakeNotice }) {
 
       {showPreferences && (
         <div className="preferences-panel" id="trip-preferences">
-          <PreferenceGroup field="bites" values={CUISINES} selected={form.bites} onToggle={toggle} onVoiceMatch={selectByVoice} />
-          <PreferenceGroup field="activity_style" values={STYLES} selected={form.activity_style} onToggle={toggle} onVoiceMatch={selectByVoice} />
-          <PreferenceGroup field="transportation_type" values={TRANSPORT} selected={form.transportation_type} onToggle={toggle} onVoiceMatch={selectByVoice} />
+          <PreferenceGroup field="bites" values={CUISINES} selected={form.bites} onToggle={toggle} onVoiceMatch={selectByVoice} onVoiceStart={clearChoices} />
+          <PreferenceGroup field="activity_style" values={STYLES} selected={form.activity_style} onToggle={toggle} onVoiceMatch={selectByVoice} onVoiceStart={clearChoices} />
+          <PreferenceGroup field="transportation_type" values={TRANSPORT} selected={form.transportation_type} onToggle={toggle} onVoiceMatch={selectByVoice} onVoiceStart={clearChoices} />
 
           <div className="constraint-row">
-            <label className="constraint-field">
-              <span><Clock3 size={16} /> Anything we should work around?</span>
-              <span className="destination-input-row">
-                <input name="time-constraints" value={form.time_constraints} onChange={set('time_constraints')} placeholder="Flexible dates, late arrival, accessibility needs…" />
-                <VoiceInputButton
-                  label="Describe timing or accessibility needs by voice"
-                  onTranscript={(transcript) => setForm((current) => ({ ...current, time_constraints: transcript }))}
+            <div className="constraint-field">
+              <span>
+                <Clock3 size={16} /> <label htmlFor="time-constraints">Anything we should work around?</label>
+                <FieldVoiceControls
+                  label="Anything we should work around"
+                  readText="Anything we should work around? For example: flexible dates, late arrival, or accessibility needs."
+                  listenSeconds={5}
+                  onText={setValue('time_constraints')}
                 />
               </span>
-            </label>
-            <label className="constraint-field">
-              <span><Landmark size={16} /> Must-see places</span>
-              <span className="destination-input-row">
-                <input name="must-go-sites" value={form.must_go_sites} onChange={set('must_go_sites')} placeholder="The Bund, Yu Garden…" />
-                <VoiceInputButton
-                  label="Name must-see places by voice"
-                  onTranscript={(transcript) => setForm((current) => ({ ...current, must_go_sites: transcript }))}
+              <input id="time-constraints" name="time-constraints" value={form.time_constraints} onChange={set('time_constraints')} placeholder="Flexible dates, late arrival, accessibility needs…" />
+            </div>
+            <div className="constraint-field">
+              <span>
+                <Landmark size={16} /> <label htmlFor="must-go-sites">Must-see places</label>
+                <FieldVoiceControls
+                  label="Must-see places"
+                  readText="Must-see places. Name one or more places you don't want to miss."
+                  listenSeconds={5}
+                  onText={setValue('must_go_sites')}
                 />
               </span>
-            </label>
-            <label className="constraint-field party-field">
-              <span><Users size={16} /> Travelers</span>
-              <input name="num-people" type="number" min="1" max="100" value={form.num_people} onChange={set('num_people')} />
-            </label>
+              <input id="must-go-sites" name="must-go-sites" value={form.must_go_sites} onChange={set('must_go_sites')} placeholder="The Bund, Yu Garden…" />
+            </div>
+            <div className="constraint-field party-field">
+              <span>
+                <Users size={16} /> <label htmlFor="num-people">Travelers</label>
+                <FieldVoiceControls
+                  label="Travelers"
+                  readText="Travelers. Say how many people are going, including yourself."
+                  onText={fillTravelersByVoice}
+                />
+              </span>
+              <input id="num-people" name="num-people" type="number" min="1" max="100" value={form.num_people} onChange={set('num_people')} />
+            </div>
           </div>
         </div>
       )}

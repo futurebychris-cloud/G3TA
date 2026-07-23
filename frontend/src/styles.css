@@ -503,7 +503,7 @@ button { -webkit-tap-highlight-color: transparent; }
 }
 .field:first-child { padding-left: 0; }
 .field:last-child { border-right: 0; padding-right: 0; }
-.field-label { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 0.82rem; font-weight: 750; text-transform: uppercase; letter-spacing: 0.08em; }
+.field-label { display: flex; align-items: center; gap: 7px; width: 100%; min-height: 32px; color: var(--muted); font-size: 0.82rem; font-weight: 750; text-transform: uppercase; letter-spacing: 0.08em; }
 .field > input, .money-input input, .date-pair input {
   width: 100%;
   min-width: 0;
@@ -522,9 +522,21 @@ button { -webkit-tap-highlight-color: transparent; }
 .date-pair { display: flex; align-items: center; gap: 7px; }
 .date-pair input { font-size: 0.82rem; }
 .date-pair span { color: var(--coral); }
-.money-input { display: flex; align-items: center; gap: 7px; }
-.money-input .currency-input { width: 42px; color: var(--coral-deep); font-size: 0.78rem; letter-spacing: 0.04em; }
-.money-input input:last-child { font-size: 1.25rem; }
+.money-input { display: flex; align-items: center; gap: 8px; }
+.money-input .currency-select {
+  flex: 0 0 auto;
+  min-width: 74px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--white);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 750;
+  cursor: pointer;
+}
+.money-input input:last-child { font-size: 1.25rem; min-width: 0; }
 .preference-toggle {
   width: 100%;
   height: 55px;
@@ -555,31 +567,35 @@ button { -webkit-tap-highlight-color: transparent; }
 .preference-group { min-width: 0; border: 0; padding: 0; margin: 0; }
 .preference-group legend { display: flex; align-items: center; gap: 7px; margin-bottom: 13px; padding: 0; font-size: 0.85rem; font-weight: 750; width: 100%; }
 
-/* Per-field voice controls: listen (Ear) reads the field + its options aloud via
-   Piper; speak (Mic) records a few seconds, auto-detects + translates via
-   Whisper, and matches spoken words to this field's options. Same reserved
-   orange as every other voice affordance, so they're always recognizable. */
-.field-voice-controls { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
-.field-voice-btn {
-  width: 28px;
-  height: 28px;
+/* Per-field voice pair (travelvoice-setup-v2 pattern): listen (speaker icon)
+   reads the field title + options aloud via Piper; speak (mic icon) records a
+   few seconds, auto-detects + translates via Whisper, then fills the input or
+   selects the matching choices. Quiet, uniform buttons that sit together right
+   after the field label; the mic glows while recording — no status text, no
+   layout shift. */
+.field-voice-controls { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; flex: 0 0 auto; }
+.voice-pair-btn {
+  width: 30px;
+  height: 30px;
   display: grid;
   place-items: center;
-  border: 0;
-  border-radius: 50%;
-  background: var(--voice);
-  color: white;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--white);
+  color: var(--ink);
   cursor: pointer;
-  transition: 160ms ease;
+  transition: border-color 140ms ease, color 140ms ease, box-shadow 140ms ease;
 }
-.field-voice-btn:hover:not(:disabled) { background: var(--voice-deep); }
-.field-voice-btn:disabled { cursor: not-allowed; opacity: .5; }
-.field-voice-btn.listening { background: var(--voice-deep); box-shadow: 0 0 0 4px rgba(255, 138, 43, .3); }
-.field-voice-status:not(.sr-only) {
-  color: var(--voice-deep);
-  font-size: .74rem;
-  font-weight: 700;
+.voice-pair-btn:hover:not(:disabled) { border-color: var(--brand-blue); color: var(--brand-blue); }
+.voice-pair-btn:disabled { cursor: not-allowed; opacity: .45; }
+.voice-pair-btn.listening {
+  border-color: var(--brand-blue);
+  color: var(--brand-blue);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, .28);
+  animation: voice-glow 1.2s ease-in-out infinite;
 }
+@keyframes voice-glow { 50% { box-shadow: 0 0 0 7px rgba(37, 99, 235, .1); } }
+[data-reduced-motion="true"] .voice-pair-btn.listening { animation: none; }
 .preference-hint { margin: -5px 0 12px; color: var(--muted); font-size: .76rem; line-height: 1.4; }
 .choice-list { display: flex; flex-wrap: wrap; gap: 7px; }
 .choice-chip {
@@ -599,11 +615,22 @@ button { -webkit-tap-highlight-color: transparent; }
 .choice-chip.selected { background: var(--ink); border-color: var(--ink); color: white; }
 .choice-check { width: 7px; height: 7px; border: 1px solid currentColor; border-radius: 50%; }
 .choice-chip.selected .choice-check { background: var(--lime); border-color: var(--lime); }
-.constraint-row { grid-column: 1 / -1; display: grid; grid-template-columns: 1.3fr 1fr auto; gap: 24px; padding-top: 20px; border-top: 1px solid var(--line); }
-.constraint-field { display: flex; align-items: center; gap: 14px; }
-.constraint-field > span { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; font-size: 0.73rem; font-weight: 750; }
-.constraint-field input { flex: 1; min-width: 0; border: 0; border-bottom: 1px solid var(--line); padding: 7px 2px; outline: 0; background: transparent; color: var(--ink); font-size: 0.8rem; }
-.party-field input { width: 58px; flex: 0 0 58px; text-align: center; }
+/* Equal columns so Travelers matches Must-see places instead of spanning the page. */
+.constraint-row { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; padding-top: 20px; border-top: 1px solid var(--line); }
+.constraint-field { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.constraint-field > span { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; font-size: 0.78rem; font-weight: 750; }
+.constraint-field input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px 12px;
+  outline: 0;
+  background: var(--white);
+  color: var(--ink);
+  font-size: 0.85rem;
+}
+.constraint-field input:focus-visible { border-color: var(--brand-blue); }
 .planner-action { min-height: 88px; display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 16px 20px 16px 34px; }
 .agent-avatars { display: flex; align-items: center; }
 .agent-avatars > span { width: 29px; height: 29px; display: grid; place-items: center; margin-left: -5px; border: 2px solid var(--white); border-radius: 50%; background: hsl(calc(20 + var(--i) * 42) 70% 72%); color: var(--ink); font-size: 0.76rem; font-weight: 850; }
