@@ -574,11 +574,16 @@ button { -webkit-tap-highlight-color: transparent; }
    after the field label; the mic glows while recording — no status text, no
    layout shift. */
 .field-voice-controls { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; flex: 0 0 auto; }
-.voice-pair-btn {
+/* Voice assist buttons (va-btn) — fresh style built around react-icons Material
+   glyphs (MdVolumeUp / MdMic), which are filled and drawn dead-center on
+   Google's 24px grid, so no optical nudges are needed. The icon is sized by
+   font-size (react-icons renders at 1em) and centered with flex. */
+.va-btn {
   width: 36px;
   height: 36px;
-  display: grid;
-  place-items: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   padding: 0;
   border: 0;
   border-radius: 10px;
@@ -586,22 +591,22 @@ button { -webkit-tap-highlight-color: transparent; }
   background-size: 200% 100%;
   background-position: 0 50%;
   color: white;
+  font-size: 21px;
+  line-height: 0;
   cursor: pointer;
   box-shadow: 0 4px 12px rgba(79, 70, 229, .28);
   transition: background-position 260ms ease, box-shadow 140ms ease, transform 140ms ease;
 }
-.voice-pair-btn svg { display: block; }
-/* Lucide's Volume2 glyph is left-weighted in its viewBox — optically recenter. */
-.voice-pair-btn.listen svg { transform: translateX(1.5px); }
-.voice-pair-btn:hover:not(:disabled) { background-position: 100% 50%; transform: translateY(-1px); box-shadow: 0 6px 16px rgba(124, 58, 237, .36); }
-.voice-pair-btn:disabled { cursor: not-allowed; opacity: .45; }
-.voice-pair-btn.listening {
+.va-btn svg { display: block; flex: 0 0 auto; }
+.va-btn:hover:not(:disabled) { background-position: 100% 50%; transform: translateY(-1px); box-shadow: 0 6px 16px rgba(124, 58, 237, .36); }
+.va-btn:disabled { cursor: not-allowed; opacity: .45; }
+.va-btn.listening {
   background-position: 100% 50%;
   box-shadow: 0 0 0 4px rgba(124, 58, 237, .3);
   animation: voice-glow 1.2s ease-in-out infinite;
 }
 @keyframes voice-glow { 50% { box-shadow: 0 0 0 8px rgba(124, 58, 237, .12); } }
-[data-reduced-motion="true"] .voice-pair-btn.listening { animation: none; }
+[data-reduced-motion="true"] .va-btn.listening { animation: none; }
 .preference-hint { margin: -5px 0 12px; color: var(--muted); font-size: .76rem; line-height: 1.4; }
 .choice-list { display: flex; flex-wrap: wrap; gap: 7px; }
 .choice-chip {

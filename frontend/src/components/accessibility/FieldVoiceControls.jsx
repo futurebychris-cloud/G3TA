@@ -1,5 +1,5 @@
 import { useId, useState } from 'react'
-import { Mic, Volume2 } from 'lucide-react'
+import { MdMic, MdVolumeUp } from 'react-icons/md'
 import useTextToSpeech from '../../hooks/useTextToSpeech.js'
 import useAutoSpeechRecognition from '../../hooks/useAutoSpeechRecognition.js'
 
@@ -101,24 +101,24 @@ export default function FieldVoiceControls({
       {speech.supported && (
         <button
           type="button"
-          className="voice-pair-btn listen"
+          className="va-btn"
           onClick={handleListen}
           disabled={speech.state === 'loading'}
           aria-label={copy.listen(label)}
           title={copy.listen(label)}
         >
-          <Volume2 size={19} strokeWidth={2.2} aria-hidden="true" />
+          <MdVolumeUp aria-hidden="true" />
         </button>
       )}
       {recognition.supported && (
         <button
           type="button"
-          className={recognition.isListening ? 'voice-pair-btn listening' : 'voice-pair-btn'}
+          className={recognition.isListening ? 'va-btn listening' : 'va-btn'}
           onClick={handleSpeak}
           aria-label={recognition.isListening ? copy.stopSpeak : copy.speak(label)}
           title={recognition.isListening ? copy.stopSpeak : copy.speak(label)}
         >
-          <Mic size={19} strokeWidth={2.2} aria-hidden="true" />
+          <MdMic aria-hidden="true" />
         </button>
       )}
       <span className="sr-only" role="status" aria-live="polite">
