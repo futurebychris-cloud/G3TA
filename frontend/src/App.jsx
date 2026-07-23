@@ -111,7 +111,7 @@ function Landing({ onSubmit, intakeDraft, intakeNotice, onOpenTaskBot }) {
           <div className="eyebrow"><Sparkles size={15} /> Multi-agent AI trip design</div>
           <h1>
             You find the vibe.
-            <span>The Agents plan<br /><span className="slogan-indent">the journey.</span></span>
+            <span>The Agents plan<br /><span className="slogan-indent">the journey. Vibego!</span></span>
           </h1>
           <p className="hero-lede">
             Powered by a structured, multi-agent workflow, VibeGo deploys specialized

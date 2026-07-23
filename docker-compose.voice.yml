@@ -4,10 +4,10 @@ services:
     container_name: g3ta-whisper
     environment:
       ASR_ENGINE: faster_whisper
-      # "base" keeps voice answers responsive on CPU (~2s vs ~6s for "small"
-      # per clip in the Colima VM) while still auto-detecting major languages.
-      # Raise back to "small"/"medium" if running with real GPU/CPU headroom.
-      ASR_MODEL: base
+      # "small" for accuracy (multilingual detection noticeably better than
+      # "base"); kept responsive by running Colima with 6 CPUs. Drop to "base"
+      # only if the VM is CPU-constrained again.
+      ASR_MODEL: small
     ports:
       - "9000:9000"
     volumes:
