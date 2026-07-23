@@ -1,34 +1,10 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { beforeEach, vi } from 'vitest'
-import { synthesizeSpeech } from '../../api.js'
+import { vi } from 'vitest'
 import { ACCESSIBILITY_STORAGE_KEY, AccessibilityProvider } from '../../accessibility/AccessibilityContext.jsx'
 import { TextToSpeechProvider } from '../../hooks/useTextToSpeech.js'
 import ReadAloudButton from './ReadAloudButton.jsx'
 import VoiceInputButton from './VoiceInputButton.jsx'
-
-vi.mock('../../api.js', () => ({ synthesizeSpeech: vi.fn() }))
-
-let latestAudio
-
-function installPiperAudio() {
-  URL.createObjectURL = vi.fn(() => 'blob:piper-audio')
-  URL.revokeObjectURL = vi.fn()
-  window.Audio = class Audio {
-    constructor(src) {
-      this.src = src
-      latestAudio = this
-    }
-
-    play = vi.fn(async () => {
-      this.onplay?.()
-    })
-
-    pause = vi.fn()
-    removeAttribute = vi.fn()
-    load = vi.fn()
-  }
-}
 
 function renderSpeechButton() {
   localStorage.setItem(ACCESSIBILITY_STORAGE_KEY, JSON.stringify({ readAloud: true }))
@@ -66,7 +42,7 @@ describe('voice input', () => {
     await user.click(screen.getByRole('button', { name: 'Enter destination by voice' }))
     expect(screen.getByRole('status')).toHaveTextContent('Listening')
     recognition.onresult({ results: [[{ transcript: 'Shanghai' }]] })
-    expect(onTranscript).toHaveBeenCalledWith('Shanghai', { isFinal: true })
+    expect(onTranscript).toHaveBeenCalledWith('Shanghai')
     await user.click(screen.getByRole('button', { name: 'Stop voice input' }))
     expect(recognition.stop).toHaveBeenCalledOnce()
     expect(screen.getByRole('status')).toHaveTextContent('Voice input stopped')
@@ -74,30 +50,33 @@ describe('voice input', () => {
 })
 
 describe('read aloud', () => {
-  beforeEach(() => {
-    installPiperAudio()
-    synthesizeSpeech.mockResolvedValue(new Blob([new Uint8Array(64)], { type: 'audio/wav' }))
-  })
-
-  it('shows a useful message when audio playback is unsupported', () => {
-    delete window.Audio
+  it('shows a useful message when speech synthesis is unsupported', () => {
+    delete window.speechSynthesis
+    delete window.SpeechSynthesisUtterance
     renderSpeechButton()
     expect(screen.getByRole('status')).toHaveTextContent('Read aloud is unavailable')
   })
 
-  it('uses Piper and supports play, pause, resume, and stop', async () => {
+  it('supports play, pause, resume, and stop through the shared controller', async () => {
     const user = userEvent.setup()
+    const cancel = vi.fn()
+    const speak = vi.fn((utterance) => utterance.onstart?.())
+    const pause = vi.fn()
+    const resume = vi.fn()
+    window.speechSynthesis = { cancel, speak, pause, resume }
+    window.SpeechSynthesisUtterance = class SpeechSynthesisUtterance {
+      constructor(text) { this.text = text }
+    }
     renderSpeechButton()
 
     await user.click(screen.getByRole('button', { name: 'Read flight result aloud' }))
-    await waitFor(() => expect(synthesizeSpeech).toHaveBeenCalledOnce())
-    expect(synthesizeSpeech.mock.calls[0][0]).toContain('John F. Kennedy International Airport (JFK)')
-    expect(latestAudio.play).toHaveBeenCalledOnce()
+    expect(speak).toHaveBeenCalledOnce()
+    expect(speak.mock.calls[0][0].text).toContain('John F. Kennedy International Airport (JFK)')
     await user.click(screen.getByRole('button', { name: 'Pause reading flight result' }))
-    expect(latestAudio.pause).toHaveBeenCalledOnce()
+    expect(pause).toHaveBeenCalledOnce()
     await user.click(screen.getByRole('button', { name: 'Resume reading flight result' }))
-    expect(latestAudio.play).toHaveBeenCalledTimes(2)
+    expect(resume).toHaveBeenCalledOnce()
     await user.click(screen.getByRole('button', { name: 'Stop reading flight result' }))
-    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:piper-audio')
+    expect(cancel).toHaveBeenCalled()
   })
 })

@@ -22,11 +22,9 @@ const META = {
   orchestrator: { label: 'Lead orchestrator', note: 'Composing every idea into one plan', icon: BrainCircuit },
 }
 
-export default function ProgressTracker({ agents, statuses, events = [], trip, error, onRetry }) {
+export default function ProgressTracker({ agents, statuses, events, trip, error, onRetry }) {
   const visibleAgents = agents.filter((agent) => META[agent])
-  const statusFor = (agent) => (
-    error && statuses[agent] === 'running' ? 'paused' : (statuses[agent] || 'pending')
-  )
+  const statusFor = (agent) => error && statuses[agent] === 'running' ? 'paused' : (statuses[agent] || 'pending')
   const doneCount = visibleAgents.filter((agent) => statusFor(agent) === 'done').length
   const percentage = Math.round((doneCount / Math.max(visibleAgents.length, 1)) * 100)
   const activeAgents = error ? [] : visibleAgents.filter((agent) => statusFor(agent) === 'running')

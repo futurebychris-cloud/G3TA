@@ -20,12 +20,7 @@ export const ACCESSIBILITY_PRESETS = Object.freeze({
   standard: {},
   easyReading: {
     easyReading: true,
-    largerText: true,
-    reducedMotion: true,
-    dyslexiaFont: true,
     lineFocus: 'one',
-    readAloud: true,
-    readingSpeed: 0.95,
   },
   senior: {
     easyReading: true,

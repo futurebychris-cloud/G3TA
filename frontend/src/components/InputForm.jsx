@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import {
   ArrowRight,
   CalendarDays,
@@ -11,8 +11,6 @@ import {
   UtensilsCrossed,
   Waves,
   Check,
-  Landmark,
-  Users,
 } from 'lucide-react'
 import VoiceInputButton from './accessibility/VoiceInputButton.jsx'
 
@@ -31,17 +29,14 @@ const CUISINES = [
 const STYLES = ['cultural', 'adventure', 'relaxed']
 const TRANSPORT = ['flight', 'train', 'car']
 
-function dateInputValue(date) {
-  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000)
-  return local.toISOString().slice(0, 10)
-}
-
-function defaultTripDates() {
-  const start = new Date()
-  start.setDate(start.getDate() + 30)
-  const end = new Date(start)
-  end.setDate(end.getDate() + 4)
-  return { start: dateInputValue(start), end: dateInputValue(end) }
+function dateFromToday(offsetDays) {
+  const date = new Date()
+  date.setHours(12, 0, 0, 0)
+  date.setDate(date.getDate() + offsetDays)
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
 }
 
 const FIELD_META = {
@@ -77,47 +72,20 @@ function PreferenceGroup({ field, values, selected, onToggle }) {
   )
 }
 
-export default function InputForm({ onSubmit, intakeDraft, intakeNotice }) {
+export default function InputForm({ onSubmit }) {
   const [showPreferences, setShowPreferences] = useState(true)
-  const [form, setForm] = useState(() => ({
+  const [form, setForm] = useState({
     origin: 'New York',
     location: '',
-    ...defaultTripDates(),
+    start: dateFromToday(7),
+    end: dateFromToday(11),
     total: 2500,
     currency: 'USD',
     bites: [],
     transportation_type: ['flight'],
     activity_style: ['cultural', 'adventure'],
     time_constraints: 'fixed dates',
-    must_go_sites: '',
-    num_people: 1,
-  }))
-
-  useEffect(() => {
-    if (!intakeDraft) return
-    setForm({
-      origin: intakeDraft.origin || '',
-      location: intakeDraft.location || '',
-      start: intakeDraft.dates?.start || '',
-      end: intakeDraft.dates?.end || '',
-      total: intakeDraft.budget?.total || '',
-      currency: intakeDraft.budget?.currency || 'USD',
-      bites: intakeDraft.preferences?.bites || [],
-      transportation_type: intakeDraft.preferences?.transportation_type || [],
-      activity_style: intakeDraft.preferences?.activity_style || [],
-      time_constraints: intakeDraft.time_constraints || '',
-      must_go_sites: (intakeDraft.must_go_sites || []).join(', '),
-      num_people: intakeDraft.num_people || 1,
-    })
-    const hasPreferences = Boolean(
-      intakeDraft.preferences?.bites?.length
-      || intakeDraft.preferences?.transportation_type?.length
-      || intakeDraft.preferences?.activity_style?.length
-      || intakeDraft.time_constraints
-      || intakeDraft.must_go_sites?.length,
-    )
-    setShowPreferences(hasPreferences)
-  }, [intakeDraft])
+  })
 
   function toggle(field, value) {
     setForm((current) => {
@@ -142,12 +110,6 @@ export default function InputForm({ onSubmit, intakeDraft, intakeNotice }) {
         activity_style: form.activity_style,
       },
       time_constraints: form.time_constraints.trim(),
-      must_go_sites: form.must_go_sites
-        .split(/[,\n]/)
-        .map((site) => site.trim())
-        .filter(Boolean),
-      num_people: Number(form.num_people),
-      is_group: Number(form.num_people) >= 5,
     })
   }
 
@@ -155,16 +117,6 @@ export default function InputForm({ onSubmit, intakeDraft, intakeNotice }) {
 
   return (
     <form className="planner-card" onSubmit={submit}>
-      {intakeDraft && (
-        <div className="intake-draft-banner" role="status">
-          <Sparkles size={20} aria-hidden="true" />
-          <div>
-            <strong>Your guided draft is in the normal form</strong>
-            <p>{intakeNotice?.summary || 'Review every detail below, complete anything missing, then choose Design my journey.'}</p>
-            {intakeNotice?.missing?.length > 0 && <small>Some details still need your input. Empty required fields are shown below.</small>}
-          </div>
-        </div>
-      )}
       <div className="core-fields">
         <label className="field route-field">
           <span className="field-label"><PlaneTakeoff size={15} /> Flying from</span>
@@ -231,20 +183,10 @@ export default function InputForm({ onSubmit, intakeDraft, intakeNotice }) {
           <PreferenceGroup field="activity_style" values={STYLES} selected={form.activity_style} onToggle={toggle} />
           <PreferenceGroup field="transportation_type" values={TRANSPORT} selected={form.transportation_type} onToggle={toggle} />
 
-          <div className="constraint-row">
-            <label className="constraint-field">
-              <span><Clock3 size={16} /> Anything we should work around?</span>
-              <input name="time-constraints" value={form.time_constraints} onChange={set('time_constraints')} placeholder="Flexible dates, late arrival, accessibility needs…" />
-            </label>
-            <label className="constraint-field">
-              <span><Landmark size={16} /> Must-see places</span>
-              <input name="must-go-sites" value={form.must_go_sites} onChange={set('must_go_sites')} placeholder="The Bund, Yu Garden…" />
-            </label>
-            <label className="constraint-field party-field">
-              <span><Users size={16} /> Travelers</span>
-              <input name="num-people" type="number" min="1" max="100" value={form.num_people} onChange={set('num_people')} />
-            </label>
-          </div>
+          <label className="constraint-field">
+            <span><Clock3 size={16} /> Anything we should work around?</span>
+            <input name="time-constraints" value={form.time_constraints} onChange={set('time_constraints')} placeholder="Flexible dates, late arrival, accessibility needs…" />
+          </label>
         </div>
       )}
 

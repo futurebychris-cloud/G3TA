@@ -22,7 +22,7 @@ export default function AccessibleDialog({
     const previousOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
     const fallbackFocus = dialogRef.current?.querySelector(
-      'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
     )
     ;(initialFocusRef?.current || fallbackFocus)?.focus()
 
@@ -34,7 +34,7 @@ export default function AccessibleDialog({
       }
       if (event.key !== 'Tab') return
       const focusable = dialogRef.current?.querySelectorAll(
-        'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
       )
       if (!focusable?.length) return
       const first = focusable[0]
