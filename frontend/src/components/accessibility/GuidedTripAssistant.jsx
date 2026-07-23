@@ -483,16 +483,15 @@ export default function GuidedTripAssistant({ open, onClose, onComplete, returnF
 
       <div className="guided-trip-body" lang={language === 'zh' ? 'zh-CN' : 'en'}>
         <>
-          <div className="guided-progress" aria-label={`${copy.question} ${step + 1} ${copy.of} ${questions.length}`}>
-            <div>
-              <strong>{copy.question} {step + 1} {copy.of} {questions.length}</strong>
-              <span>{Math.round(((step + 1) / questions.length) * 100)}% {copy.complete}</span>
-            </div>
-            <progress max={questions.length} value={step + 1}>{step + 1} {copy.of} {questions.length}</progress>
-          </div>
-
           <section className="guided-question" aria-labelledby="guided-question-label">
-            <span className="section-index">{question.label}</span>
+            <span className="section-index">
+              {question.label}:{' '}
+              <span className="guided-progress-inline">
+                <span>{copy.question} {step + 1} {copy.of} {questions.length}</span>
+                {' — '}
+                <span>{Math.round(((step + 1) / questions.length) * 100)}% {copy.complete}</span>
+              </span>
+            </span>
             <h3 id="guided-question-label">{question.prompt}</h3>
             <p>{question.hint}</p>
           </section>
