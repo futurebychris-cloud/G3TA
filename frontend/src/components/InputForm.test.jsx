@@ -2,11 +2,23 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { vi } from 'vitest'
 import InputForm from './InputForm.jsx'
+import { TextToSpeechProvider } from '../hooks/useTextToSpeech.js'
+import { AccessibilityProvider } from '../accessibility/AccessibilityContext.jsx'
+
+function renderForm(props) {
+  return render(
+    <AccessibilityProvider>
+      <TextToSpeechProvider>
+        <InputForm {...props} />
+      </TextToSpeechProvider>
+    </AccessibilityProvider>,
+  )
+}
 
 describe('trip input accessibility', () => {
   it('provides labels and keyboard-operable preference controls', async () => {
     const user = userEvent.setup()
-    render(<InputForm onSubmit={vi.fn()} />)
+    renderForm({ onSubmit: vi.fn() })
 
     expect(screen.getByRole('textbox', { name: /Flying from/ })).toBeRequired()
     expect(screen.getByRole('textbox', { name: /Going to/ })).toBeRequired()
@@ -32,13 +44,11 @@ describe('trip input accessibility', () => {
       must_go_sites: ['Belém Tower'],
       num_people: 2,
     }
-    render(
-      <InputForm
-        onSubmit={vi.fn()}
-        intakeDraft={draft}
-        intakeNotice={{ summary: 'A relaxed Lisbon trip for two.', missing: [] }}
-      />,
-    )
+    renderForm({
+      onSubmit: vi.fn(),
+      intakeDraft: draft,
+      intakeNotice: { summary: 'A relaxed Lisbon trip for two.', missing: [] },
+    })
 
     expect(await screen.findByText('Your guided draft is in the normal form')).toBeVisible()
     await waitFor(() => expect(screen.getByRole('textbox', { name: /Flying from/ })).toHaveValue('Paris'))

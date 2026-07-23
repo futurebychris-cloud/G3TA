@@ -108,38 +108,53 @@
   cursor: pointer;
 }
 .preset-selector { margin: 0; padding: 0; border: 0; }
-.preset-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-.preset-option { position: relative; cursor: pointer; }
+.preset-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: stretch; }
+/* Every card is the same fixed height regardless of description length, and the
+   selected preset uses the same reserved orange as voice/accessibility controls
+   elsewhere — one unified, clearly-visible design instead of plain white boxes
+   in mismatched sizes. */
+.preset-option { position: relative; display: flex; cursor: pointer; }
 .preset-option input { position: absolute; opacity: 0; }
 .preset-option > span {
-  min-height: 78px;
+  flex: 1;
+  height: 96px;
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 5px;
-  padding: 13px 15px 13px 43px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--white);
+  gap: 6px;
+  padding: 14px 16px 14px 46px;
+  border: 2px solid var(--line);
+  border-radius: 14px;
+  background: var(--paper);
+  overflow: hidden;
+  transition: 160ms ease;
 }
 .preset-option > span::before {
   content: "";
   position: absolute;
-  left: 15px;
-  width: 16px;
-  height: 16px;
+  left: 17px;
+  width: 18px;
+  height: 18px;
   border: 2px solid var(--muted);
   border-radius: 50%;
+  background: var(--white);
+  transition: 160ms ease;
 }
-.preset-option strong { font-size: .78rem; }
-.preset-option small { color: var(--muted); font-size: .65rem; line-height: 1.4; }
-.preset-option input:checked + span { border: 2px solid var(--ink); background: var(--paper); }
-.preset-option input:checked + span::before { border: 5px solid var(--ink); background: var(--lime); }
-.preset-option input:focus-visible + span { outline: 3px solid var(--coral-deep); outline-offset: 3px; }
+.preset-option strong { font-size: .92rem; }
+.preset-option small { color: var(--muted); font-size: .78rem; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.preset-option:hover > span { border-color: var(--voice); }
+.preset-option input:checked + span {
+  border-color: var(--voice-deep);
+  background: var(--voice-gradient);
+  color: white;
+}
+.preset-option input:checked + span small { color: rgba(255, 255, 255, .88); }
+.preset-option input:checked + span::before { border: 5px solid white; background: var(--voice-deep); }
+.preset-option input:focus-visible + span { outline: 3px solid var(--voice-deep); outline-offset: 3px; }
 .preset-selector.compact .preset-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 9px 0 16px; }
-.preset-selector.compact .preset-option > span { min-height: 54px; padding: 10px 8px 10px 31px; }
-.preset-selector.compact .preset-option > span::before { left: 10px; width: 13px; height: 13px; }
-.preset-selector.compact .preset-option strong { font-size: .66rem; }
+.preset-selector.compact .preset-option > span { height: 64px; padding: 10px 10px 10px 34px; }
+.preset-selector.compact .preset-option > span::before { left: 12px; width: 14px; height: 14px; }
+.preset-selector.compact .preset-option strong { font-size: .8rem; }
 .onboarding-panel { width: min(720px, 100%); }
 .onboarding-head { padding: 30px 30px 21px; text-align: center; }
 .onboarding-icon { width: 52px; height: 52px; display: grid; place-items: center; margin: 0 auto 13px; border-radius: 50%; background: var(--lime); color: var(--ink); }
@@ -211,7 +226,8 @@
 .accessibility-panel-actions { display: flex; justify-content: space-between; gap: 14px; padding: 20px 30px 25px; }
 .accessibility-panel-actions button { min-height: 45px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; border-radius: 999px; padding: 0 19px; cursor: pointer; font-weight: 800; font-size: .73rem; }
 .reset-accessibility { border: 1px solid var(--line); background: transparent; }
-.done-accessibility { min-width: 120px; border: 1px solid var(--ink); background: var(--ink); color: white; }
+.done-accessibility { min-width: 120px; border: 0; background: var(--brand-gradient); background-size: 200% 100%; background-position: 0 50%; color: white; transition: background-position 320ms ease; }
+.done-accessibility:hover { background-position: 100% 50%; }
 
 .destination-input-row { min-width: 0; display: flex; align-items: center; gap: 7px; }
 .destination-input-row > input { width: 100%; min-width: 0; border: 0; padding: 0; outline: 0; background: transparent; color: var(--ink); font-size: 1.13rem; font-weight: 720; letter-spacing: -.02em; }

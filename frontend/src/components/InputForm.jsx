@@ -15,6 +15,7 @@ import {
   Users,
 } from 'lucide-react'
 import VoiceInputButton from './accessibility/VoiceInputButton.jsx'
+import FieldVoiceControls from './accessibility/FieldVoiceControls.jsx'
 
 const CUISINES = [
   'Japanese',
@@ -50,11 +51,19 @@ const FIELD_META = {
   transportation_type: { label: 'Preferred transport', icon: PlaneTakeoff },
 }
 
-function PreferenceGroup({ field, values, selected, onToggle }) {
+function PreferenceGroup({ field, values, selected, onToggle, onVoiceMatch }) {
   const { label, icon: Icon } = FIELD_META[field]
   return (
     <fieldset className="preference-group">
-      <legend><Icon size={17} /> {label}</legend>
+      <legend>
+        <Icon size={17} /> {label}
+        <FieldVoiceControls
+          label={label}
+          options={values}
+          maxListenSeconds={values.length > 5 ? 5 : 3}
+          onMatch={(matches) => onVoiceMatch(field, matches)}
+        />
+      </legend>
       {field === 'bites' && <p className="preference-hint">Choose in priority order. Your first choice is treated as primary.</p>}
       <div className="choice-list">
         {values.map((value) => (
@@ -129,6 +138,15 @@ export default function InputForm({ onSubmit, intakeDraft, intakeNotice }) {
     })
   }
 
+  // Voice adds to the existing selection rather than toggling, so repeating an
+  // already-selected option out loud never accidentally deselects it.
+  function selectByVoice(field, matchedValues) {
+    setForm((current) => ({
+      ...current,
+      [field]: Array.from(new Set([...current[field], ...matchedValues])),
+    }))
+  }
+
   function submit(event) {
     event.preventDefault()
     onSubmit({
@@ -168,7 +186,13 @@ export default function InputForm({ onSubmit, intakeDraft, intakeNotice }) {
       <div className="core-fields">
         <label className="field route-field">
           <span className="field-label"><PlaneTakeoff size={15} /> Flying from</span>
-          <input id="trip-origin" name="origin" autoComplete="address-level2" value={form.origin} onChange={set('origin')} placeholder="Your city" required />
+          <span className="destination-input-row">
+            <input id="trip-origin" name="origin" autoComplete="address-level2" value={form.origin} onChange={set('origin')} placeholder="Your city" required />
+            <VoiceInputButton
+              label="Enter departure city by voice"
+              onTranscript={(transcript) => setForm((current) => ({ ...current, origin: transcript }))}
+            />
+          </span>
           <small>Departure city</small>
         </label>
 
@@ -227,18 +251,30 @@ export default function InputForm({ onSubmit, intakeDraft, intakeNotice }) {
 
       {showPreferences && (
         <div className="preferences-panel" id="trip-preferences">
-          <PreferenceGroup field="bites" values={CUISINES} selected={form.bites} onToggle={toggle} />
-          <PreferenceGroup field="activity_style" values={STYLES} selected={form.activity_style} onToggle={toggle} />
-          <PreferenceGroup field="transportation_type" values={TRANSPORT} selected={form.transportation_type} onToggle={toggle} />
+          <PreferenceGroup field="bites" values={CUISINES} selected={form.bites} onToggle={toggle} onVoiceMatch={selectByVoice} />
+          <PreferenceGroup field="activity_style" values={STYLES} selected={form.activity_style} onToggle={toggle} onVoiceMatch={selectByVoice} />
+          <PreferenceGroup field="transportation_type" values={TRANSPORT} selected={form.transportation_type} onToggle={toggle} onVoiceMatch={selectByVoice} />
 
           <div className="constraint-row">
             <label className="constraint-field">
               <span><Clock3 size={16} /> Anything we should work around?</span>
-              <input name="time-constraints" value={form.time_constraints} onChange={set('time_constraints')} placeholder="Flexible dates, late arrival, accessibility needs…" />
+              <span className="destination-input-row">
+                <input name="time-constraints" value={form.time_constraints} onChange={set('time_constraints')} placeholder="Flexible dates, late arrival, accessibility needs…" />
+                <VoiceInputButton
+                  label="Describe timing or accessibility needs by voice"
+                  onTranscript={(transcript) => setForm((current) => ({ ...current, time_constraints: transcript }))}
+                />
+              </span>
             </label>
             <label className="constraint-field">
               <span><Landmark size={16} /> Must-see places</span>
-              <input name="must-go-sites" value={form.must_go_sites} onChange={set('must_go_sites')} placeholder="The Bund, Yu Garden…" />
+              <span className="destination-input-row">
+                <input name="must-go-sites" value={form.must_go_sites} onChange={set('must_go_sites')} placeholder="The Bund, Yu Garden…" />
+                <VoiceInputButton
+                  label="Name must-see places by voice"
+                  onTranscript={(transcript) => setForm((current) => ({ ...current, must_go_sites: transcript }))}
+                />
+              </span>
             </label>
             <label className="constraint-field party-field">
               <span><Users size={16} /> Travelers</span>

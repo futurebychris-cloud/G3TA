@@ -21,6 +21,7 @@
      distinct from general brand/CTA color. */
   --voice: #ff8a2b;
   --voice-deep: #e6650a;
+  --voice-gradient: linear-gradient(125deg, #ffab4a 0%, #ff8a2b 55%, #f2660d 100%);
   --radius-sm: 10px;
   --radius: 18px;
   --radius-lg: 28px;
@@ -201,7 +202,7 @@ button { -webkit-tap-highlight-color: transparent; }
   align-items: center;
   gap: 8px;
   margin-bottom: 30px;
-  color: var(--coral-deep);
+  color: var(--brand-purple);
   font-size: 0.72rem;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -218,11 +219,16 @@ button { -webkit-tap-highlight-color: transparent; }
 .hero h1 span {
   display: block;
   margin-top: 12px;
-  color: var(--coral);
   font-family: "Iowan Old Style", Baskerville, Georgia, serif;
   font-weight: 400;
   font-style: italic;
   letter-spacing: -0.06em;
+  background: var(--brand-gradient);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: var(--brand-purple);
 }
 .hero-lede {
   max-width: 590px;
@@ -362,6 +368,48 @@ button { -webkit-tap-highlight-color: transparent; }
 /* Planner */
 .planner-wrap { padding: 55px 0 100px; position: relative; }
 .planner-wrap::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 1px; background: var(--line); }
+/* Soft brand-tinted wash so the planner reads as its own section, not bare page. */
+.planner-wrap::after {
+  content: "";
+  position: absolute;
+  inset: 0 -100vw 0 -100vw;
+  z-index: -1;
+  background:
+    radial-gradient(circle at 12% 8%, rgba(37, 99, 235, 0.07), transparent 30rem),
+    radial-gradient(circle at 88% 85%, rgba(168, 85, 247, 0.07), transparent 32rem);
+}
+
+/* Prominent accessibility task-bot entry — the same reserved voice orange as
+   every listen/speak control, sized so people who need it can't miss it. */
+.taskbot-launch {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  margin-bottom: 26px;
+  padding: 18px 26px;
+  border: 0;
+  border-radius: var(--radius);
+  background: var(--voice-gradient);
+  color: white;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 0 14px 32px rgba(230, 101, 10, 0.28);
+  transition: 180ms ease;
+}
+.taskbot-launch:hover { transform: translateY(-2px); box-shadow: 0 18px 38px rgba(230, 101, 10, 0.36); }
+.taskbot-launch-icon {
+  flex: 0 0 auto;
+  width: 46px;
+  height: 46px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.22);
+}
+.taskbot-launch-copy { flex: 1; display: flex; flex-direction: column; gap: 4px; }
+.taskbot-launch-copy strong { font-size: 1.05rem; font-weight: 850; }
+.taskbot-launch-copy small { font-size: .85rem; line-height: 1.5; color: rgba(255, 255, 255, 0.92); }
 .planner-heading, .panel-heading {
   display: flex;
   align-items: flex-end;
@@ -465,7 +513,33 @@ button { -webkit-tap-highlight-color: transparent; }
 }
 @keyframes reveal-panel { from { opacity: 0; transform: translateY(-5px); } }
 .preference-group { min-width: 0; border: 0; padding: 0; margin: 0; }
-.preference-group legend { display: flex; align-items: center; gap: 7px; margin-bottom: 13px; padding: 0; font-size: 0.74rem; font-weight: 750; }
+.preference-group legend { display: flex; align-items: center; gap: 7px; margin-bottom: 13px; padding: 0; font-size: 0.85rem; font-weight: 750; width: 100%; }
+
+/* Per-field voice controls: listen (Ear) reads the field + its options aloud via
+   Piper; speak (Mic) records a few seconds, auto-detects + translates via
+   Whisper, and matches spoken words to this field's options. Same reserved
+   orange as every other voice affordance, so they're always recognizable. */
+.field-voice-controls { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
+.field-voice-btn {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: var(--voice);
+  color: white;
+  cursor: pointer;
+  transition: 160ms ease;
+}
+.field-voice-btn:hover:not(:disabled) { background: var(--voice-deep); }
+.field-voice-btn:disabled { cursor: not-allowed; opacity: .5; }
+.field-voice-btn.listening { background: var(--voice-deep); box-shadow: 0 0 0 4px rgba(255, 138, 43, .3); }
+.field-voice-status:not(.sr-only) {
+  color: var(--voice-deep);
+  font-size: .74rem;
+  font-weight: 700;
+}
 .preference-hint { margin: -5px 0 12px; color: var(--muted); font-size: .76rem; line-height: 1.4; }
 .choice-list { display: flex; flex-wrap: wrap; gap: 7px; }
 .choice-chip {
@@ -532,6 +606,7 @@ button { -webkit-tap-highlight-color: transparent; }
 .method-strip > div:last-child { border-right: 0; }
 .method-intro { display: flex; flex-direction: column; justify-content: space-between; background: var(--ink-2); }
 .method-intro h2 { margin: 0; font-size: 2.6rem; line-height: 1.02; letter-spacing: -0.05em; }
+.method-intro-lede { margin: 16px 0 0; color: rgba(255, 255, 255, 0.66); font-size: .88rem; line-height: 1.65; }
 .method-step { display: grid; grid-template-columns: 1fr auto; align-content: space-between; }
 .method-step > span { color: rgba(255,255,255,0.43); font-size: 0.8rem; letter-spacing: 0.1em; }
 .method-step > svg { color: var(--lime); }

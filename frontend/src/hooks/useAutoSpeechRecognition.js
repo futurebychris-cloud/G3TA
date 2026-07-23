@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { transcribeSpeech } from '../api.js'
 
-const MAX_LISTEN_MS = 8000
+const DEFAULT_MAX_LISTEN_MS = 8000
 
 function recordingSupport() {
   return typeof window !== 'undefined'
@@ -15,7 +15,9 @@ function preferredMimeType() {
   return candidates.find((type) => window.MediaRecorder.isTypeSupported?.(type)) || ''
 }
 
-export default function useAutoSpeechRecognition({ onTranscript, uiLanguage = 'en', translate = false } = {}) {
+export default function useAutoSpeechRecognition({
+  onTranscript, uiLanguage = 'en', translate = false, maxListenMs = DEFAULT_MAX_LISTEN_MS,
+} = {}) {
   const recorderRef = useRef(null)
   const streamRef = useRef(null)
   const timerRef = useRef(null)
@@ -105,13 +107,13 @@ export default function useAutoSpeechRecognition({ onTranscript, uiLanguage = 'e
           ? (isChineseUi ? '正在聆听…可以说任何语言，我们会显示中文' : "Listening… speak any language, we'll show it in English")
           : (isChineseUi ? '正在聆听…说任何语言' : 'Listening… speak in any language'),
       )
-      timerRef.current = window.setTimeout(stop, MAX_LISTEN_MS)
+      timerRef.current = window.setTimeout(stop, maxListenMs)
     } catch {
       release()
       setIsListening(false)
       setStatus(isChineseUi ? '无法使用麦克风，您可以继续打字。' : 'The microphone is unavailable. You can continue typing.')
     }
-  }, [isChineseUi, onTranscript, release, stop, supported, targetLanguage, translate])
+  }, [isChineseUi, maxListenMs, onTranscript, release, stop, supported, targetLanguage, translate])
 
   useEffect(() => () => {
     requestRef.current?.abort()

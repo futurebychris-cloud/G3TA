@@ -10,6 +10,8 @@ import {
   ListChecks,
   Luggage,
   Map,
+  Mic,
+  Volume2,
   Route,
   ShieldAlert,
   Sparkles,
@@ -102,19 +104,19 @@ function AppHeader({ step, onReset, onAccessibility, accessibilityButtonRef }) {
   )
 }
 
-function Landing({ onSubmit, intakeDraft, intakeNotice }) {
+function Landing({ onSubmit, intakeDraft, intakeNotice, onOpenTaskBot }) {
   return (
     <main className="landing" id="main-content" tabIndex="-1">
       <section className="hero">
         <div className="hero-copy">
           <div className="eyebrow"><Sparkles size={15} /> Multi-agent AI trip design</div>
           <h1>
-            The world is wide.
-            <span>Let go. We'll get you there.</span>
+            You find the vibe.
+            <span>AI task-bot will plan the journey.</span>
           </h1>
           <p className="hero-lede">
-            Tell us where you're dreaming of. Six AI specialists debate the routes, prices,
-            and trade-offs behind the scenes — so you get one confident plan, not forty open tabs.
+            VibeGo doesn't answer one question — it completes an entire travel-planning
+            task from start to finish through a structured, multi-agent workflow.
           </p>
           <div className="hero-proof">
             <div><strong>06</strong><span>Specialist agents</span></div>
@@ -135,13 +137,25 @@ function Landing({ onSubmit, intakeDraft, intakeNotice }) {
           </div>
           <p>Start with the essentials. Fine-tune the flavor below.</p>
         </div>
+        <button type="button" className="taskbot-launch" onClick={onOpenTaskBot}>
+          <span className="taskbot-launch-icon" aria-hidden="true"><Volume2 size={20} /></span>
+          <span className="taskbot-launch-copy">
+            <strong>Struggle with forms? Let the task-bot fill this in with you.</strong>
+            <small>It asks each question out loud, listens to your answer in any language, and completes the form for you.</small>
+          </span>
+          <Mic size={20} aria-hidden="true" />
+        </button>
         <InputForm onSubmit={onSubmit} intakeDraft={intakeDraft} intakeNotice={intakeNotice} />
       </section>
 
       <section className="method-strip" aria-label="How it works">
         <div className="method-intro">
           <span className="section-index">THE ENSEMBLE</span>
-          <h2>One journey.<br />Zero decision fatigue.</h2>
+          <h2>One request.<br />One complete plan.</h2>
+          <p className="method-intro-lede">
+            VibeGo collects everything it needs in a single conversation, then produces
+            one personalized itinerary — no tab-switching required.
+          </p>
         </div>
         <div className="method-step">
           <span>01</span><BrainCircuit size={22} />
@@ -397,6 +411,7 @@ export default function App() {
           onSubmit={handleSubmit}
           intakeDraft={intakeDraft}
           intakeNotice={intakeNotice}
+          onOpenTaskBot={openGuidedTrip}
         />
       )}
 
@@ -481,7 +496,7 @@ export default function App() {
 
       <footer className="site-footer">
         <Brand />
-        <p>Thoughtful journeys, composed by people and machines.</p>
+        <p>VibeGo combines specialized AI agents, intelligent validation, accessibility, and personalized planning into one seamless AI travel taskbot.</p>
         <span>DeepSeek-powered · vibego 2026</span>
       </footer>
     </div>
