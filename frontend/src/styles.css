@@ -231,6 +231,7 @@ button { -webkit-tap-highlight-color: transparent; }
 .hero h1 span {
   display: block;
   margin-top: 12px;
+  font-size: 0.96em;
   font-family: "Iowan Old Style", Baskerville, Georgia, serif;
   font-weight: 400;
   font-style: italic;
