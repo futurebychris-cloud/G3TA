@@ -223,9 +223,9 @@ button { -webkit-tap-highlight-color: transparent; }
 .hero h1 {
   max-width: 750px;
   margin: 0;
-  font-size: clamp(4rem, 6.35vw, 7.15rem);
-  line-height: 0.89;
-  letter-spacing: -0.068em;
+  font-size: clamp(3.3rem, 5.3vw, 5.9rem);
+  line-height: 0.92;
+  letter-spacing: -0.06em;
   font-weight: 760;
 }
 .hero h1 span {
