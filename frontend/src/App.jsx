@@ -116,8 +116,9 @@ function Landing({ onSubmit, intakeDraft, intakeNotice, onOpenTaskBot }) {
             <span>The Agents plan<br />the journey.</span>
           </h1>
           <p className="hero-lede">
-            VibeGo doesn't answer one question — it completes an entire travel-planning
-            task from start to finish through a structured, multi-agent workflow.
+            Powered by a structured, multi-agent workflow, VibeGo orchestrates specialized
+            AI agents that collaborate across every dimension of travel planning to deliver
+            one seamless journey.
           </p>
           <div className="hero-proof">
             <div><strong>06</strong><span>Specialist agents</span></div>
