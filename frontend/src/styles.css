@@ -509,6 +509,11 @@ button { -webkit-tap-highlight-color: transparent; }
   line-height: 1.55;
   font-size: 0.9rem;
 }
+/* Single-line hint next to "Where to next?" — allowed to wrap only on small screens. */
+.planner-heading p.planner-hint-line { max-width: none; white-space: nowrap; }
+@media (max-width: 1240px) {
+  .planner-heading p.planner-hint-line { white-space: normal; max-width: 420px; }
+}
 .planner-card {
   background: var(--white);
   border: 1px solid rgba(10, 32, 52, 0.08);
