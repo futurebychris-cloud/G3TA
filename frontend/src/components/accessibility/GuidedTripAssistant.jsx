@@ -532,7 +532,7 @@ export default function GuidedTripAssistant({ open, onClose, onComplete, returnF
               key={language}
               label={question.label}
               readText={`${question.prompt} ${question.hint}`}
-              listenSeconds={3}
+              listenSeconds={['start_date', 'end_date', 'budget'].includes(question.id) ? 5 : 3}
               language={language === 'zh' ? 'zh-CN' : 'en'}
               listenTrigger={autoListen}
               onSpeakStart={() => setAnswers((current) => ({ ...current, [question.id]: '' }))}
