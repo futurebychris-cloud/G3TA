@@ -733,7 +733,9 @@
 [data-accessibility-preset="senior"] .packing-grid { grid-template-columns: 1fr; gap: 12px; }
 [data-accessibility-preset="senior"] .packing-item { min-height: 76px; padding: 16px 18px; border-width: 2px; }
 [data-accessibility-preset="senior"] .packing-item > span:last-child { font-size: .88rem; }
-[data-accessibility-preset="senior"] .budget-amount { font-size: clamp(2.4rem, 7vw, 4.5rem); }
+/* Readable bump over the .7rem base — the old clamp(2.4rem, 7vw, 4.5rem)
+   blew every line item up to ~70px on top of senior's 145% global scale. */
+[data-accessibility-preset="senior"] .budget-amount { font-size: .95rem; }
 
 .confirmation-dialog,
 .next-step-dialog {
