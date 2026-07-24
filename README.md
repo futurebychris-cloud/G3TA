@@ -217,9 +217,13 @@ GitHub Actions runs the backend suite plus frontend tests and build.
 | `GET/PUT` | `/api/checklist/...` | read/update one trip’s packing state |
 
 Operator-only legacy routes under `/booking/confirm`, `/booking/mark_paid`,
-`/booking/routes`, and `/booking/auto/*` require both
-`BOOKING_AUTOMATION_ENABLED=1` and `X-G3TA-Booking-Token`. Unsupported booking
-types deliberately return `501` rather than pretending an order exists.
+`/booking/routes`, and `/booking/auto/*` require
+`BOOKING_AUTOMATION_ENABLED=1` (now **enabled by default** in this release) and
+`X-G3TA-Booking-Token`. When enabled, the `/booking/auto/*` endpoints run real
+Playwright browser flows: hotel drives to a `pending_payment` checkout
+checkpoint, while flight/train/restaurant select/prefill and return
+`manual_required` with a provider link to finish identity verification/payment.
+None of them fabricate an order or payment state.
 
 ## Optional provider cache and snapshots
 

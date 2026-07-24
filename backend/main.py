@@ -56,7 +56,11 @@ from booking.schemas import (  # noqa: E402
 )
 from booking.shared_db import init_shared_db, get_checklist_by_trip, set_checklist_packed  # noqa: E402
 from booking.auto_book import (  # noqa: E402
-    search_flights, search_trains,
+    search_flights,
+    search_trains,
+    auto_book_flight,
+    auto_book_train,
+    auto_book_restaurant,
 )
 from services import hotels_provider  # noqa: E402
 from services import piper_service  # noqa: E402
@@ -469,10 +473,18 @@ def auto_flight(
     req: AutoBookFlightRequest,
     _: None = Depends(require_booking_access),
 ):
-    """A provider-confirmed flight purchase is not implemented."""
-    raise HTTPException(
-        status_code=501,
-        detail="Flight results are for comparison only. Complete the purchase with the provider.",
+    """Drive a stealth Ctrip browser to select a flight and reach the provider
+    checkout. Returns ``manual_required`` with a Ctrip link when the provider
+    requires human payment/identity verification (never fabricates an order)."""
+    return auto_book_flight(
+        origin=req.origin,
+        destination=req.destination,
+        depart_date=req.depart_date,
+        return_date=req.return_date,
+        adults=req.adults,
+        preferred_flight=req.preferred_flight,
+        max_price=req.max_price,
+        payment_method=req.payment_method,
     )
 
 
@@ -481,10 +493,16 @@ def auto_train(
     req: AutoBookTrainRequest,
     _: None = Depends(require_booking_access),
 ):
-    """A provider-confirmed 12306 ticket purchase is not implemented."""
-    raise HTTPException(
-        status_code=501,
-        detail="Train results are for comparison only. Complete identity verification and purchase in 12306.",
+    """Drive a stealth Ctrip/12306 browser to select a train and reach the
+    provider checkout. Returns ``manual_required`` with a link when 12306
+    identity verification / payment is required (never fabricates a ticket)."""
+    return auto_book_train(
+        origin_station=req.origin_station,
+        dest_station=req.dest_station,
+        depart_date=req.depart_date,
+        preferred_train=req.preferred_train,
+        seat_class=req.seat_class,
+        adults=req.adults,
     )
 
 
@@ -493,10 +511,15 @@ def auto_restaurant(
     req: AutoBookRestaurantRequest,
     _: None = Depends(require_booking_access),
 ):
-    """A provider-confirmed restaurant reservation is not implemented."""
-    raise HTTPException(
-        status_code=501,
-        detail="Restaurant suggestions are for comparison only. Reserve with the restaurant or provider.",
+    """Drive a stealth Meituan browser to open the restaurant and prefill the
+    reservation form. Returns ``manual_required`` with a link when the provider
+    requires human confirmation/payment (never fabricates a reservation)."""
+    return auto_book_restaurant(
+        restaurant_name=req.restaurant_name,
+        date=req.date,
+        time_slot=req.time_slot,
+        party_size=req.party_size,
+        phone=req.phone,
     )
 
 

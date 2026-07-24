@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import re
+import urllib.parse
 import time
 from datetime import datetime
 from typing import Any
@@ -205,6 +206,43 @@ def _stealth_browser():
     return pw, browser, ctx.new_page()
 
 
+# Common Chinese city -> airport IATA code hints for Ctrip flight URLs.
+_FLIGHT_CITY_CODES = {
+    "北京": "bjs", "上海": "sha", "广州": "can", "深圳": "szx", "成都": "ctu",
+    "杭州": "hgh", "重庆": "ckg", "西安": "xia", "南京": "nkg", "武汉": "whn",
+    "天津": "tsn", "长沙": "csx", "青岛": "tao", "厦门": "xmn", "昆明": "kmg",
+    "大连": "dlc", "沈阳": "she", "哈尔滨": "hrb", "济南": "tao", "福州": "foc",
+    "郑州": "cgo", "贵阳": "kwe", "南宁": "nng", "兰州": "lhw", "太原": "tyn",
+    "三亚": "syx", "海口": "hak", "宁波": "ngb", "无锡": "wux", "珠海": "zuh",
+    "香港": "hkg", "澳门": "mac", "台北": "tpe",
+}
+
+
+def _flight_city_code(name: str) -> str:
+    """Resolve a Chinese city name to a Ctrip airport code (lowercase)."""
+    key = name.strip()
+    if key in _FLIGHT_CITY_CODES:
+        return _FLIGHT_CITY_CODES[key]
+    # Try the hotels city autocomplete endpoint as a fallback resolver.
+    try:
+        import urllib.parse
+        import urllib.request
+        url = (
+            "https://hotels.ctrip.com/api/domestic/citysearch?q="
+            + urllib.parse.quote(key)
+        )
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            data = json.loads(r.read().decode("utf-8"))
+        for item in data if isinstance(data, list) else data.get("data", []):
+            if isinstance(item, dict) and item.get("id"):
+                return str(item.get("pinyin", item.get("name", ""))).lower()[:3]
+    except Exception:
+        pass
+    # last resort: first 3 pinyin-ish letters
+    return key[:3].lower()
+
+
 def _search_ctrip_flights(
     origin: str,
     destination: str,
@@ -212,59 +250,74 @@ def _search_ctrip_flights(
     return_date: str = "",
     adults: int = 1,
 ) -> list[dict]:
-    """Search Ctrip flights via Playwright.
+    """Search Ctrip flights via Playwright (server-rendered itinerary page).
 
+    Uses the stable `itinerary/oneway/{src}-{dst}?date=` URL which returns
+    real flight cards (airline, flight number, times, price) in the DOM.
     Returns list of {flight_number, airline, depart_time, arrive_time,
                       price, currency, duration, stops}.
     """
     flights = []
     pw = None
     try:
-        pw, browser, page = _stealth_browser()
-
-        # Build Ctrip flight search URL
         from urllib.parse import quote
-        base = "https://flights.ctrip.com/international/search"
-        params = (
-            f"#/depart={quote(origin)}&arrive={quote(destination)}"
-            f"&depdate={depart_date}"
+        src = _flight_city_code(origin)
+        dst = _flight_city_code(destination)
+        # The itinerary page is the real SSR results page; ?date= triggers load.
+        url = (
+            f"https://flights.ctrip.com/itinerary/oneway/{src}-{dst}?date={depart_date}"
         )
-        if return_date:
-            params += f"&retdate={return_date}"
-        params += f"&adult={adults}&child=0&infant=0"
-
-        url = base + params
+        pw, browser, page = _stealth_browser()
         page.goto(url, timeout=30000, wait_until="domcontentloaded")
-        time.sleep(3)
+        # give the SPA time to hydrate the flight list
+        page.wait_for_timeout(5000)
 
-        # Try to extract flight data from __NEXT_DATA__ or page
-        content = page.content()
-        import re
-        m = re.search(r'<script[^>]*id="__NEXT_DATA__"[^>]*>(.*?)</script>', content)
-        if m:
-            data = json.loads(m.group(1))
-            flight_list = (
-                data.get("props", {})
-                .get("initialState", {})
-                .get("flight", {})
-                .get("list", [])
-            )
-            for f in flight_list:
+        cards = page.query_selector_all(".flight-item")
+        for card in cards:
+            try:
+                airline_el = card.query_selector(".airline-name span")
+                airline = airline_el.inner_text().strip() if airline_el else ""
+                plane_el = card.query_selector(".plane-No")
+                plane_text = plane_el.inner_text().strip() if plane_el else ""
+                # plane-No looks like "MU5185 空客321(中)" — keep only the code.
+                import re as _re
+                code_match = _re.search(r'([A-Z]{2}\d+)', plane_text)
+                flight_number = code_match.group(1) if code_match else plane_text
+
+                # departure / arrival times
+                dep_el = card.query_selector(".flight-departure .time, [class*='departure'] .time")
+                arr_el = card.query_selector(".flight-arrival .time, [class*='arrival'] .time")
+                depart_time = dep_el.inner_text().strip() if dep_el else ""
+                arrive_time = arr_el.inner_text().strip() if arr_el else ""
+
+                # price — first ¥ figure in the card
+                price_el = card.query_selector(".price, .flight-price, [class*='price']")
+                price_text = price_el.inner_text().strip() if price_el else ""
+                import re
+                price_match = re.search(r'[¥￥]\s*([\d,]+)', price_text)
+                price = float(price_match.group(1).replace(",", "")) if price_match else 0.0
+
+                # duration
+                dur_el = card.query_selector(".flight-duration, [class*='duration']")
+                duration = dur_el.inner_text().strip() if dur_el else ""
+
                 flights.append({
-                    "flight_number": f.get("flightNo", ""),
-                    "airline": f.get("airlineName", ""),
-                    "depart_time": f.get("departureDate", ""),
-                    "arrive_time": f.get("arrivalDate", ""),
-                    "price": f.get("adultPrice", 0),
+                    "flight_number": flight_number,
+                    "airline": airline,
+                    "depart_time": depart_time,
+                    "arrive_time": arrive_time,
+                    "price": price,
                     "currency": "CNY",
-                    "duration": f.get("duration", ""),
-                    "stops": f.get("stopCount", 0),
+                    "duration": duration,
+                    "stops": 0,
                 })
+            except Exception:
+                continue
 
-        # Fallback: scrape from rendered cards
+        # If the SSR page failed, fall back to a looser card scan.
         if not flights:
-            cards = page.query_selector_all(".flight-item, .flight-card, [class*='flight']")
-            for card in cards:
+            loose = page.query_selector_all("[class*='flight-item']")
+            for card in loose:
                 try:
                     text = card.inner_text()
                     nums = re.findall(r'([A-Z]{2}\d+)', text)
@@ -274,7 +327,7 @@ def _search_ctrip_flights(
                         "airline": "",
                         "depart_time": depart_date,
                         "arrive_time": depart_date,
-                        "price": float(prices[0].replace(",", "")) if prices else 0,
+                        "price": float(prices[0].replace(",", "")) if prices else 0.0,
                         "currency": "CNY",
                         "duration": "",
                         "stops": 0,
@@ -312,11 +365,20 @@ def auto_book_flight(
     flights = _search_ctrip_flights(origin, destination, depart_date, return_date, adults)
 
     if not flights:
+        provider_url = (
+            "https://flights.ctrip.com/itinerary/oneway/"
+            f"{_flight_city_code(origin)}-{_flight_city_code(destination)}?date={depart_date}"
+        )
         return {
-            "status": "failed",
+            "status": "manual_required",
             "order_no": None,
-            "message": f"No flights found for {origin} → {destination} on {depart_date}.",
+            "message": (
+                f"No flights returned for {origin} → {destination} on {depart_date}. "
+                f"The Ctrip session may need login or the route/date may have no service. "
+                f"Please verify in the Ctrip app or the link below. G3TA did not submit an order."
+            ),
             "provider": "ctrip",
+            "provider_url": provider_url,
             "type": "flight",
         }
 
@@ -342,15 +404,9 @@ def auto_book_flight(
     else:
         selected = min(flights, key=lambda f: f["price"])
 
-    import urllib.parse
-
     provider_url = (
-        "https://flights.ctrip.com/international/search?"
-        + urllib.parse.urlencode({
-            "origin": origin,
-            "destination": destination,
-            "depart_date": depart_date,
-        })
+        "https://flights.ctrip.com/itinerary/oneway/"
+        f"{_flight_city_code(origin)}-{_flight_city_code(destination)}?date={depart_date}"
     )
     return {
         "status": "manual_required",
@@ -388,6 +444,8 @@ def _search_12306_trains(
     import urllib.parse
     trains = []
     pw = None
+    url = ""
+    blocked_info = {"blocked": False}
     try:
         pw, browser, page = _stealth_browser()
 
@@ -400,7 +458,30 @@ def _search_12306_trains(
         page.goto(url, timeout=30000, wait_until="domcontentloaded")
         time.sleep(5)
 
+        current_url = page.url
         content = page.content()
+
+        # Detect a login / anti-bot verification wall (Ctrip / 12306 reskin).
+        # The search cannot return data until a human logs in and/or solves the
+        # CAPTCHA, so we hand the task back to the user instead of failing silently.
+        # We only treat it as a hard block when NO trains were extracted, since a
+        # stray login link in a normal results page must not mask real data.
+        _url_lower = current_url.lower()
+        _is_login_redirect = (
+            "login" in _url_lower
+            or "passport" in _url_lower
+            or "verify" in _url_lower
+            or "safe.ctrip" in _url_lower
+        )
+        _login_signals = [
+            "请登录", "登录后查看", "登录账号", "账号登录",
+            "验证码", "滑动验证", "拖动滑块", "人机验证",
+            "安全验证", "whaleguard", "请完成验证",
+        ]
+        _content_lower = content.lower()
+        _login_wall = _is_login_redirect or any(
+            s in _content_lower for s in _login_signals
+        )
 
         # --- Strategy 1: JSON state extraction ---
         for pattern in [
@@ -485,8 +566,24 @@ def _search_12306_trains(
 
         print(f"[auto_book] Ctrip trains: {len(trains)} results with real prices")
 
+        # Only flag a hard block when we actually got zero trains AND a login /
+        # verification wall is present. A known route (e.g. 上海→北京) returning
+        # zero results almost always means the session is not logged in.
+        if not trains and _login_wall:
+            blocked_info = {
+                "blocked": True,
+                "reason": "login_or_verification_required",
+                "url": current_url,
+            }
+            print(f"[auto_book] Ctrip trains blocked by login/verification wall: {current_url}")
+
     except Exception as e:
         print(f"[auto_book] Ctrip trains search failed: {e}")
+        blocked_info = {
+            "blocked": True,
+            "reason": "scrape_error",
+            "url": url,
+        }
     finally:
         if pw:
             try:
@@ -494,7 +591,7 @@ def _search_12306_trains(
             except Exception:
                 pass
 
-    return trains
+    return trains, blocked_info
 
 
 def auto_book_train(
@@ -519,17 +616,59 @@ def auto_book_train(
         f"{origin_station}{dest_station}{depart_date}".encode()
     ).hexdigest()[:12]
 
-    trains = _search_12306_trains(origin_station, dest_station, depart_date)
+    trains, train_block = _search_12306_trains(origin_station, dest_station, depart_date)
+
+    if train_block.get("blocked"):
+        provider_url = (
+            "https://trains.ctrip.com/trainbooking/search?"
+            + urllib.parse.urlencode({
+                "from": origin_station,
+                "to": dest_station,
+                "date": depart_date,
+            })
+        )
+        if train_block.get("reason") == "login_or_verification_required":
+            msg = (
+                f"Train search for {origin_station} → {dest_station} on {depart_date} "
+                f"was blocked by Ctrip's login/verification wall. Please log into Ctrip "
+                f"(re-run `python scripts/save_ctrip_cookies.py` to refresh cookies) and "
+                f"retry, or complete the booking in the 12306 app. G3TA did not submit an order."
+            )
+        else:
+            msg = (
+                f"Train search for {origin_station} → {dest_station} on {depart_date} "
+                f"could not be completed (provider page blocked or changed). Please finish "
+                f"the purchase in the 12306 app or the Ctrip trains page. G3TA did not submit an order."
+            )
+        return {
+            "status": "manual_required",
+            "order_no": None,
+            "message": msg,
+            "provider": "ctrip",
+            "provider_url": provider_url,
+            "type": "train",
+        }
 
     if not trains:
+        provider_url = (
+            "https://trains.ctrip.com/trainbooking/search?"
+            + urllib.parse.urlencode({
+                "from": origin_station,
+                "to": dest_station,
+                "date": depart_date,
+            })
+        )
         return {
-            "status": "failed",
+            "status": "no_results",
             "order_no": None,
             "message": (
-                f"No trains found for {origin_station} → {dest_station} "
-                f"on {depart_date}. 12306 may require manual login — try the app."
+                f"No trains returned for {origin_station} → {dest_station} "
+                f"on {depart_date}. The Ctrip/12306 session may need login or the "
+                f"route/date may have no service. Please verify in the 12306 app or "
+                f"the Ctrip trains page (link below). G3TA did not submit an order."
             ),
-            "provider": "12306",
+            "provider": "ctrip",
+            "provider_url": provider_url,
             "type": "train",
         }
 
@@ -825,17 +964,58 @@ def search_trains(
 
     Returns: {status, results: [{...train details...}], provider, type}
     """
-    trains = _search_12306_trains(origin_station, dest_station, depart_date)
+    trains, train_block = _search_12306_trains(origin_station, dest_station, depart_date)
+
+    if train_block.get("blocked"):
+        provider_url = (
+            "https://trains.ctrip.com/trainbooking/search?"
+            + urllib.parse.urlencode({
+                "from": origin_station,
+                "to": dest_station,
+                "date": depart_date,
+            })
+        )
+        if train_block.get("reason") == "login_or_verification_required":
+            msg = (
+                f"Train search for {origin_station} → {dest_station} on {depart_date} "
+                f"was blocked by Ctrip's login/verification wall. Log into Ctrip "
+                f"(re-run `python scripts/save_ctrip_cookies.py`) and retry, or book "
+                f"directly in the 12306 app. G3TA did not submit an order."
+            )
+        else:
+            msg = (
+                f"Train search for {origin_station} → {dest_station} on {depart_date} "
+                f"could not be completed. Please search or book in the 12306 app or the "
+                f"Ctrip trains page. G3TA did not submit an order."
+            )
+        return {
+            "status": "manual_required",
+            "results": [],
+            "message": msg,
+            "provider": "ctrip",
+            "provider_url": provider_url,
+            "type": "train",
+        }
 
     if not trains:
+        provider_url = (
+            "https://trains.ctrip.com/trainbooking/search?"
+            + urllib.parse.urlencode({
+                "from": origin_station,
+                "to": dest_station,
+                "date": depart_date,
+            })
+        )
         return {
             "status": "no_results",
             "results": [],
             "message": (
-                f"No trains found for {origin_station} → {dest_station} on {depart_date}. "
-                f"12306 may require manual login — try the 12306 App directly."
+                f"No trains returned for {origin_station} → {dest_station} on {depart_date}. "
+                f"The Ctrip/12306 session may need login or the route/date may have no "
+                f"service. Please verify in the 12306 app or the Ctrip trains page (link below)."
             ),
-            "provider": "12306",
+            "provider": "ctrip",
+            "provider_url": provider_url,
             "type": "train",
         }
 

@@ -67,8 +67,11 @@ browser reaches a verifiable provider payment checkpoint. The status remains
 `pending_payment` or `payment_reported`; only a real provider callback or
 verified provider lookup could set `confirmed`, and neither is implemented.
 
-The flight, train, restaurant, and shortcut auto-booking endpoints return
-`501 Not Implemented`. This is intentional.
+The flight, train, and restaurant auto-booking endpoints now run real Playwright
+browser flows (search/select/prefill) and return `manual_required` with a
+provider link so the human can finish identity verification and payment. The
+shortcut endpoint remains unimplemented. None fabricate an order or payment
+state.
 
 ## Files
 
