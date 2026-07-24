@@ -12,7 +12,8 @@ Run from the backend/ directory:
     uvicorn main:app --reload
 """
 import json
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 
 from dotenv import find_dotenv, load_dotenv
 from fastapi import FastAPI, HTTPException, Request
@@ -484,34 +485,55 @@ def plan_stream(trip: TripInput):
     """Run agents one at a time and stream progress so the UI can show a live checklist."""
     trip_input = orchestrator.prepare_trip_input(trip.model_dump())
 
+    # Agents can be silent for minutes while a DeepSeek call runs. Proxies with
+    # idle timeouts (Cloudflare tunnels cut streams after ~100s without data)
+    # drop the connection mid-plan, so emit an SSE comment while blocked —
+    # browsers and our frontend parser ignore comment chunks.
+    KEEPALIVE_SECS = 15
+
+    def _await_with_keepalive(future):
+        while True:
+            try:
+                return future.result(timeout=KEEPALIVE_SECS)
+            except FuturesTimeoutError:
+                yield ": keepalive\n\n"
+
     def generate():
         outputs = {}
         try:
-            # Budget must finish first so every recommendation agent receives the
-            # category limits it is expected to respect.
-            yield _sse({"type": "agent_start", "agent": "budget"})
-            outputs["budget"] = orchestrator.run_single_agent("budget", trip_input)
-            yield _sse({"type": "agent_done", "agent": "budget", "output": outputs["budget"]})
+            with ThreadPoolExecutor(max_workers=len(AGENT_ORDER)) as executor:
+                # Budget must finish first so every recommendation agent receives
+                # the category limits it is expected to respect.
+                yield _sse({"type": "agent_start", "agent": "budget"})
+                budget_future = executor.submit(orchestrator.run_single_agent, "budget", trip_input)
+                outputs["budget"] = yield from _await_with_keepalive(budget_future)
+                yield _sse({"type": "agent_done", "agent": "budget", "output": outputs["budget"]})
 
-            guided_input = orchestrator.with_budget_guidance(trip_input, outputs["budget"])
-            remaining_agents = [name for name in AGENT_ORDER if name != "budget"]
-            for name in remaining_agents:
-                yield _sse({"type": "agent_start", "agent": name})
-            with ThreadPoolExecutor(max_workers=len(remaining_agents)) as executor:
+                guided_input = orchestrator.with_budget_guidance(trip_input, outputs["budget"])
+                remaining_agents = [name for name in AGENT_ORDER if name != "budget"]
+                for name in remaining_agents:
+                    yield _sse({"type": "agent_start", "agent": name})
                 futures = {
                     executor.submit(orchestrator.run_single_agent, name, guided_input): name
                     for name in remaining_agents
                 }
-                for future in as_completed(futures):
-                    name = futures[future]
-                    outputs[name] = future.result()
-                    yield _sse({"type": "agent_done", "agent": name, "output": outputs[name]})
+                pending = set(futures)
+                while pending:
+                    done, pending = wait(pending, timeout=KEEPALIVE_SECS, return_when=FIRST_COMPLETED)
+                    if not done:
+                        yield ": keepalive\n\n"
+                        continue
+                    for future in done:
+                        name = futures[future]
+                        outputs[name] = future.result()
+                        yield _sse({"type": "agent_done", "agent": name, "output": outputs[name]})
 
-            yield _sse({"type": "agent_start", "agent": "orchestrator"})
-            result = orchestrator.reconcile_and_synthesize(trip_input, outputs)
-            result["trip_id"] = trip_input["trip_id"]
-            yield _sse({"type": "agent_done", "agent": "orchestrator"})
-            yield _sse({"type": "complete", "result": result})
+                yield _sse({"type": "agent_start", "agent": "orchestrator"})
+                synth_future = executor.submit(orchestrator.reconcile_and_synthesize, trip_input, outputs)
+                result = yield from _await_with_keepalive(synth_future)
+                result["trip_id"] = trip_input["trip_id"]
+                yield _sse({"type": "agent_done", "agent": "orchestrator"})
+                yield _sse({"type": "complete", "result": result})
         except RuntimeError as e:
             yield _sse({"type": "error", "message": str(e)})
         except Exception as e:  # noqa: BLE001 — surface anything else to the UI
