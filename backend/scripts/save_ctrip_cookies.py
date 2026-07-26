@@ -143,8 +143,8 @@ def save_cookies():
     }
 
     COOKIE_FILE.write_text(json.dumps(cookie_data, ensure_ascii=False, indent=2))
+    COOKIE_FILE.chmod(0o600)
     print(f"\n💾 {len(ctrip_cookies)} cookies saved to: {COOKIE_FILE}")
-    print(f"   Cookie string: {cookie_data['cookie_string'][:120]}...")
     print()
     print("✅ Done! The headless pipeline will now use these cookies.")
     print("   Cookies typically expire after a few hours/days.")

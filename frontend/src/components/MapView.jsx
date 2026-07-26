@@ -14,13 +14,10 @@ import {
   uniqueMarkerStops,
 } from '../utils/routePlan.js'
 
-// Public browser-demo credentials keep a fresh clone usable without a local
-// environment file. Production deployments should override both values through
-// VITE_AMAP_* and restrict the demo key by domain and quota in the AMap console.
-const AMAP_DEMO_KEY = '0aca2891dd9c7a1123047be9ece54bfb'
-const AMAP_DEMO_SECURITY_CODE = 'ecae3007884963fb215c7b03b1fad1d7'
-const AMAP_KEY = import.meta.env.VITE_AMAP_KEY || AMAP_DEMO_KEY
-const AMAP_SECURITY_CODE = import.meta.env.VITE_AMAP_SECURITY_CODE || AMAP_DEMO_SECURITY_CODE
+// Browser map credentials are configured locally and are never bundled as
+// repository fallbacks. Restrict the Web JS key to the deployed domains.
+const AMAP_KEY = import.meta.env.VITE_AMAP_KEY || ''
+const AMAP_SECURITY_CODE = import.meta.env.VITE_AMAP_SECURITY_CODE || ''
 const AMAP_CONFIGURED = hasAmapCredentials(AMAP_KEY, AMAP_SECURITY_CODE)
 const EMPTY_POINTS = []
 

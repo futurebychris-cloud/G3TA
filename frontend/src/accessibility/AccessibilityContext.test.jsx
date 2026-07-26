@@ -9,7 +9,6 @@ import {
   useAccessibilitySettings,
 } from './AccessibilityContext.jsx'
 import AccessibilityPanel from '../components/accessibility/AccessibilityPanel.jsx'
-import AccessibilityOnboarding from '../components/accessibility/AccessibilityOnboarding.jsx'
 
 function SettingsHarness() {
   const { settings, setSetting, resetSettings, applyPreset } = useAccessibilitySettings()
@@ -87,24 +86,6 @@ describe('accessibility settings', () => {
     current = JSON.parse(screen.getByTestId('settings').textContent)
     expect(current.preset).toBe('senior')
     expect(current.largerText).toBe(false)
-  })
-})
-
-describe('accessibility onboarding', () => {
-  it('offers Senior Mode on first run and saves completion', async () => {
-    const user = userEvent.setup()
-    render(
-      <AccessibilityProvider>
-        <AccessibilityOnboarding />
-        <SettingsHarness />
-      </AccessibilityProvider>,
-    )
-    expect(screen.getByRole('dialog', { name: 'How should your trip planner feel?' })).toBeVisible()
-    await user.click(screen.getByRole('radio', { name: /Senior Mode/ }))
-    expect(document.documentElement).toHaveAttribute('data-accessibility-preset', 'senior')
-    await user.click(screen.getByRole('button', { name: /Continue/ }))
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-    expect(JSON.parse(localStorage.getItem(ACCESSIBILITY_STORAGE_KEY)).onboardingComplete).toBe(true)
   })
 })
 

@@ -1326,36 +1326,7 @@ html[data-reduced-motion="true"] .route-animation-dot.active { animation: none; 
 }
 .source-note strong { color: var(--ink); }
 
-/* Ctrip session cookies + auto-book + real photos */
-.ctrip-cookies {
-  background: var(--paper-2);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  padding: 10px 14px;
-  margin-bottom: 18px;
-  font-size: .82rem;
-}
-.ctrip-cookies summary {
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-weight: 600;
-  color: var(--ink-2);
-}
-.ctrip-cookies p { color: var(--muted); margin: 10px 0; }
-.ctrip-cookies textarea {
-  width: 100%;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  padding: 8px 10px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: .76rem;
-  resize: vertical;
-}
-.ctrip-cookies-actions { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
-.cookie-msg { color: var(--ink-2); font-size: .78rem; }
-
+/* Real provider photos */
 .photo-btn {
   align-self: flex-start;
   display: inline-flex;
@@ -1384,32 +1355,6 @@ html[data-reduced-motion="true"] .route-animation-dot.active { animation: none; 
   border-radius: var(--radius-sm);
   border: 1px solid var(--line);
 }
-
-.auto-book {
-  margin-top: 14px;
-  border-top: 1px dashed var(--line);
-  padding-top: 12px;
-}
-.auto-book summary {
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-weight: 600;
-  color: var(--ink-2);
-}
-.auto-book .honest-note { font-size: .78rem; color: var(--muted); margin: 8px 0; }
-.auto-book-fields { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
-.auto-book-fields input {
-  flex: 1 1 120px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  padding: 8px 10px;
-  font-size: .82rem;
-}
-.auto-book-btn { background: var(--coral); color: #fff; border: none; }
-.auto-book-btn:disabled { opacity: .6; cursor: default; }
-.auto-book-status { font-size: .8rem; color: var(--ink-2); margin: 8px 0 0; }
 
 /* Saved plan callout on the landing screen */
 .saved-plan-callout {

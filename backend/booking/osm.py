@@ -165,7 +165,6 @@ def search_osm_hotels(
     if not data.get("elements"):
         raise RuntimeError("OpenStreetMap returned no lodging for this area")
 
-    prefs = {p.lower() for p in (preferences or [])}
     out = []
     for el in data.get("elements", []):
         tags = el.get("tags", {})

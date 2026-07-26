@@ -2,7 +2,14 @@
 .env
 .env.local
 *.env.local
+.env.*
+!.env.example
 cookies.json
+backend/cookies*.json
+backend/booking/cookies_*.json
+backend/data/results/
+*.pem
+*.p12
 
 # Databases (may contain PII: id_number, phone in booking.db users table)
 *.db
@@ -17,6 +24,7 @@ backend/agents/planning_openweather/data/
 __pycache__/
 *.py[cod]
 .venv/
+.venv*/
 venv/
 *.egg-info/
 .pytest_cache/

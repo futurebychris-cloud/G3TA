@@ -218,12 +218,18 @@ GitHub Actions runs the backend suite plus frontend tests and build.
 
 Operator-only legacy routes under `/booking/confirm`, `/booking/mark_paid`,
 `/booking/routes`, and `/booking/auto/*` require
-`BOOKING_AUTOMATION_ENABLED=1` (now **enabled by default** in this release) and
-`X-G3TA-Booking-Token`. When enabled, the `/booking/auto/*` endpoints run real
+`BOOKING_AUTOMATION_ENABLED=1` (disabled by default) and a random
+`BOOKING_API_TOKEN` sent only in the `X-G3TA-Booking-Token` header. Never place
+that token in frontend code or a `VITE_*` variable. When enabled, the
+`/booking/auto/*` endpoints run real
 Playwright browser flows: hotel drives to a `pending_payment` checkout
 checkpoint, while flight/train/restaurant select/prefill and return
 `manual_required` with a provider link to finish identity verification/payment.
 None of them fabricate an order or payment state.
+
+The shipped frontend intentionally exposes only comparison and provider
+handoff. Operator cookie/identity tools are API-only. See
+[`SECURITY.md`](SECURITY.md) before enabling them.
 
 ## Optional provider cache and snapshots
 

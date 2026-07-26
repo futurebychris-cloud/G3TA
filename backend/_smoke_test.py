@@ -44,7 +44,6 @@ orchestrator.chat_json = _offline
 budget_agent._playwright_web_search_costs = lambda _destination: {}
 transportation_agent._scrape_ctrip_flights = lambda *_args: ([], "offline smoke test")
 food_agent._search_google_maps_restaurants = lambda *_args: []
-food_agent._scrape_restaurant_menu = lambda *_args: []
 activity_agent._search_ctrip_attractions = lambda *_args: []
 activity_agent._search_web_attractions = lambda *_args: []
 housing_agent.resolve_hotels = lambda location, *_args, **_kwargs: [

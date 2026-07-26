@@ -14,6 +14,8 @@ const apiMocks = vi.hoisted(() => ({
 
 vi.mock('./api.js', () => ({
   getHealth: vi.fn().mockResolvedValue({ status: 'ok', dependencies: {} }),
+  loadLatestResult: vi.fn().mockRejectedValue(new Error('No saved result')),
+  saveResult: vi.fn().mockResolvedValue({ trip_id: 'test-saved-trip-123456' }),
   cancelPlan: apiMocks.cancelPlan,
   streamPlan: apiMocks.streamPlan,
   finalizePlan: apiMocks.finalizePlan,

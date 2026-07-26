@@ -9,11 +9,6 @@ Replaces the placeholder comments in activity_agent_v2.py with real logic.
 """
 from __future__ import annotations
 
-import json
-import urllib.parse
-import urllib.request
-from datetime import datetime, time
-from functools import lru_cache
 
 # Crowd level by hour (0.0 = empty, 1.0 = peak) for different attraction types
 # Based on real tourist behavior patterns

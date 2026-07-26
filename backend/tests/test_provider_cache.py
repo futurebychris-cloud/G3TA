@@ -80,15 +80,6 @@ class ProviderCacheTests(unittest.TestCase):
 
     def test_repository_snapshot_can_avoid_loader_and_database(self):
         query = ("Shanghai", {"start": "2026-08-01", "end": "2026-08-02"})
-        query_json = json.dumps(
-            query,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        import hashlib
-
-        key_digest = hashlib.sha256(query_json.encode("utf-8")).hexdigest()
         snapshot_path = Path(self.temp_dir.name) / "provider_snapshots.json"
         snapshot_path.write_text(
             json.dumps(

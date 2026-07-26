@@ -17,25 +17,12 @@ Output: {
 }
 """
 from __future__ import annotations
-import hashlib, json, re, time, urllib.parse
+
+import hashlib
+
 from .base import report_progress, trip_days
 from services.food_service import get_food_options, matches_cuisine_preferences
 from services.runtime_cache import cached_call
-
-FOOD_DISCOVERY_PROMPT = (
-    "You are the Food Agent (Taste Editor) in a multi-agent trip planner. "
-    "Given restaurant search results and user preferences (cuisine type, taste profile, "
-    "budget), select the best restaurants and specific dishes for each meal slot. "
-    "Rules: 1 dish per meal slot per day, balanced within the daily food budget. "
-    "Return ONLY JSON: {selections: [{day, date, slot, restaurant_name, dish_name, dish_category, price}]}"
-)
-
-MENU_DISH_PROMPT = (
-    "You are analyzing restaurant menus. From the provided menu text, extract the top "
-    "dishes categorized as: main, starter, dessert, drink. For each dish provide: "
-    "name, category, estimated_price, popularity_score (0-10 based on menu prominence). "
-    "Return ONLY JSON: {dishes: [{name, category, price, popularity}]}"
-)
 
 TASTE_PROFILES = {
     "spicy": {"辣", "spicy", "hot", "chili", "pepper", "mala"},
@@ -49,79 +36,6 @@ TASTE_PROFILES = {
 
 _SLOTS = ["breakfast", "lunch", "dinner"]
 _SLOT_WEIGHTS = {"breakfast": 0.25, "lunch": 0.35, "dinner": 0.40}
-
-# ---- Playwright browser ----
-
-def _stealth_browser():
-    from playwright.sync_api import sync_playwright
-    pw = sync_playwright().start()
-    browser = None
-    for s in ["chrome", "chromium", None]:
-        try:
-            kw = {"channel": s, "headless": True} if s else {"headless": True}
-            kw["args"] = ["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-gpu"]
-            browser = pw.chromium.launch(**kw)
-            break
-        except Exception:
-            continue
-    if not browser:
-        pw.stop()
-        raise RuntimeError("No browser")
-    ctx = browser.new_context(
-        user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/131.0.0.0 Safari/537.36",
-        viewport={"width": 1920, "height": 1080},
-        locale="zh-CN",
-    )
-    page = ctx.new_page()
-    page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
-    return pw, browser, page
-
-
-# ---- Menu scraping ----
-
-def _scrape_restaurant_menu(restaurant_name: str, city: str) -> list[dict]:
-    """Try to find and scrape a restaurant's menu online."""
-    try:
-        pw, browser, page = _stealth_browser()
-        query = f"{restaurant_name} {city} menu 菜单 推荐菜"
-        url = f"https://www.google.com/search?q={urllib.parse.quote(query)}"
-        page.goto(url, timeout=20000, wait_until="domcontentloaded")
-        page.wait_for_timeout(2000)
-
-        # Extract text snippets that look like menu items
-        text = page.inner_text("body") or ""
-        # Look for dish-like patterns
-        dish_patterns = re.findall(
-            r'([^。！？\n]{2,20}(?:鱼|肉|鸡|鸭|牛|羊|虾|蟹|面|饭|汤|菜|锅|堡|烤|蒸|炒|炸|煮|炖|烧)[^。！？\n]{0,10})',
-            text,
-        )
-        # Also look for price patterns like ¥XX or $XX
-        price_matches = re.findall(r'[¥$](\d+)', text)
-
-        dishes = []
-        seen = set()
-        for d in dish_patterns[:12]:
-            clean = re.sub(r'<[^>]+>', '', d).strip()
-            if clean and clean not in seen and len(clean) >= 2:
-                seen.add(clean)
-                dishes.append({"name": clean, "category": "main", "price": 0, "popularity": 5})
-
-        browser.close()
-        pw.stop()
-
-        # Try LLM classification of scraped dishes
-        if dishes:
-            result = llm_reason(MENU_DISH_PROMPT, {
-                "restaurant": restaurant_name,
-                "raw_dishes": dishes,
-            })
-            if result and result.get("dishes"):
-                return result["dishes"]
-
-        return dishes
-    except Exception as e:
-        print(f"[food_agent] Menu scrape failed: {e}")
-        return []
 
 
 # ---- Dish classification ----

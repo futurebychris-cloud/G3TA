@@ -24,7 +24,7 @@ from concurrent.futures import (
 )
 
 from dotenv import find_dotenv, load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -69,6 +69,7 @@ from security import (  # noqa: E402
     booking_automation_enabled,
     cors_allowed_origins,
     require_booking_access,
+    validate_ctrip_hotel_url,
 )
 from plan_runtime import (  # noqa: E402
     PlanningCancelled,
@@ -104,8 +105,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_allowed_origins(),
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT"],
+    allow_headers=["Content-Type", "X-G3TA-Booking-Token"],
 )
 
 
@@ -355,18 +356,18 @@ def booking_routes(_: None = Depends(require_booking_access)):
 
 
 class AutoBookHotelRequest(BaseModel):
-    hotel_id: str
-    hotel_name: str
-    hotel_url: str = ""
-    check_in: str
-    check_out: str
-    rooms: int = 1
-    adults: int = 1
-    children: int = 0
-    room_type: str | None = None
-    price_total: float | None = None
-    currency: str = "CNY"
-    payment_method: str = "wechat"
+    hotel_id: str = Field(min_length=1, max_length=100)
+    hotel_name: str = Field(min_length=1, max_length=300)
+    hotel_url: str = Field(default="", max_length=2048)
+    check_in: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    check_out: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    rooms: int = Field(default=1, ge=1, le=20)
+    adults: int = Field(default=1, ge=1, le=100)
+    children: int = Field(default=0, ge=0, le=100)
+    room_type: str | None = Field(default=None, max_length=200)
+    price_total: float | None = Field(default=None, ge=0)
+    currency: str = Field(default="CNY", pattern=r"^[A-Za-z]{3}$")
+    payment_method: str = Field(default="wechat", pattern=r"^(wechat|alipay)$")
     # One-time traveler identity for the provider request (never persisted).
     id_number: str = ""
     name: str | None = None
@@ -543,62 +544,93 @@ def save_credentials(
 # --------------------------------------------------------------------------- #
 
 RESULTS_DIR = Path(__file__).resolve().parent / "data" / "results"
+MAX_SAVED_RESULT_BYTES = 2 * 1024 * 1024
 
 
 class SaveResultRequest(BaseModel):
     result: dict
     input: dict | None = None
-    trip_id: str | None = None
+    trip_id: str | None = Field(
+        default=None,
+        min_length=16,
+        max_length=100,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    )
+
+
+def _result_path(trip_id: str) -> Path:
+    """Resolve an opaque result id without allowing filesystem traversal."""
+    if not (16 <= len(trip_id) <= 100) or not all(
+        character.isalnum() or character in "_-" for character in trip_id
+    ):
+        raise HTTPException(status_code=400, detail="Invalid trip_id.")
+    return RESULTS_DIR / f"{trip_id}.json"
 
 
 @app.post("/api/results/save")
-async def save_result(payload: SaveResultRequest, response: Response):
+def save_result(payload: SaveResultRequest, response: Response):
     """Persist a generated plan so it can be reopened from the landing page.
 
     Returns a ``trip_id`` and sets a ``g3ta_trip_id`` cookie so the next visit
     shows the previous plan unless the user regenerates a new one.
     """
     trip_id = payload.trip_id or uuid4().hex
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    path = RESULTS_DIR / f"{trip_id}.json"
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    _os.chmod(RESULTS_DIR, 0o700)
+    path = _result_path(trip_id)
     data = {
         "trip_id": trip_id,
-        "saved_at": datetime.now().isoformat(timespec="seconds"),
+        "saved_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "input": payload.input,
         "result": payload.result,
     }
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    temporary = path.with_suffix(".tmp")
+    encoded = json.dumps(data, ensure_ascii=False, indent=2)
+    if len(encoded.encode("utf-8")) > MAX_SAVED_RESULT_BYTES:
+        raise HTTPException(status_code=413, detail="Saved result is too large.")
+    temporary.write_text(encoded, encoding="utf-8")
+    _os.chmod(temporary, 0o600)
+    temporary.replace(path)
     response.set_cookie(
         key="g3ta_trip_id",
         value=trip_id,
         max_age=60 * 60 * 24 * 30,
-        httponly=False,
-        samesite="lax",
+        httponly=True,
+        secure=_os.getenv("COOKIE_SECURE", "").strip().casefold() in {"1", "true", "yes", "on"},
+        samesite="strict",
     )
     return {"trip_id": trip_id, "saved": True}
 
 
 @app.get("/api/results/load")
-async def load_result(trip_id: str = Query(...)):
+def load_result(
+    request: Request,
+    trip_id: str = Query(
+        ...,
+        min_length=16,
+        max_length=100,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    ),
+):
     """Load a previously saved plan by its trip_id."""
-    path = RESULTS_DIR / f"{trip_id}.json"
+    if request.cookies.get("g3ta_trip_id") != trip_id:
+        raise HTTPException(status_code=404, detail="No saved result for this browser.")
+    path = _result_path(trip_id)
     if not path.exists():
         raise HTTPException(status_code=404, detail="No saved result for this trip_id.")
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 @app.get("/api/results/latest")
-async def latest_result():
-    """Return the most recently saved plan (for the landing page)."""
-    if not RESULTS_DIR.exists():
-        raise HTTPException(status_code=404, detail="No saved results yet.")
-    files = sorted(RESULTS_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-    if not files:
-        raise HTTPException(status_code=404, detail="No saved results yet.")
-    with open(files[0], encoding="utf-8") as f:
-        return json.load(f)
+def latest_result(request: Request):
+    """Return only the plan referenced by this browser's HttpOnly cookie."""
+    trip_id = request.cookies.get("g3ta_trip_id", "")
+    if not trip_id:
+        raise HTTPException(status_code=404, detail="No saved result for this browser.")
+    path = _result_path(trip_id)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="No saved result for this browser.")
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 # --------------------------------------------------------------------------- #
@@ -629,9 +661,9 @@ def save_cookies(
 
 
 class HotelImagesRequest(BaseModel):
-    url: str = ""
-    hotel_id: str = ""
-    max_images: int = 6
+    url: str = Field(default="", max_length=2048)
+    hotel_id: str = Field(default="", pattern=r"^\d{0,20}$")
+    max_images: int = Field(default=6, ge=1, le=8)
 
 
 @app.post("/booking/hotel-images")
@@ -642,6 +674,10 @@ def hotel_images(payload: HotelImagesRequest):
         url = f"https://hotels.ctrip.com/hotels/{payload.hotel_id}.html"
     if not url:
         raise HTTPException(status_code=400, detail="url or hotel_id required")
+    try:
+        url = validate_ctrip_hotel_url(url)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     images = ctrip.scrape_hotel_images(url, headless=True, max_images=payload.max_images)
     return {"url": url, "images": images, "count": len(images)}
 

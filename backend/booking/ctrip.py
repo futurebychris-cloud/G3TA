@@ -23,9 +23,9 @@ import hashlib
 import json
 import os
 import re
-import time
-from datetime import date
 from pathlib import Path
+
+from security import validate_ctrip_hotel_url
 
 # --------------------------------------------------------------------------- #
 # Strict (no-mock) mode
@@ -36,6 +36,7 @@ from pathlib import Path
 # fake order number — a live failure raises a clear error instead.
 ALLOW_MOCK = os.environ.get("ALLOW_MOCK_RESULTS", "").lower() in ("1", "true", "yes")
 print(f"[ctrip] mock fallback is {'ENABLED' if ALLOW_MOCK else 'DISABLED (strict / real-data only)'}")
+COOKIES_FILE = Path(__file__).resolve().parent.parent / "cookies.json"
 
 # --- static city-id hints (Ctrip domestic codes); autocomplete is tried first ---
 _CITY_HINTS = {
@@ -135,25 +136,7 @@ def _search_via_ctrip_api(city_id: int, check_in: str, check_out: str,
     }
 
     # Inject Ctrip cookies into the API request if provided
-    ctrip_cookie = os.environ.get("CTRIP_COOKIE", "").strip()
-    # If no env var, try persisted cookie file
-    if not ctrip_cookie:
-        from pathlib import Path as _P
-        cf = _P(__file__).resolve().parent.parent / "cookies.json"
-        if cf.exists():
-            try:
-                saved = json.loads(cf.read_text())
-                ctrip_cookie = saved.get("cookie_string", "")
-                # Check for auth cookies
-                cookie_names = set()
-                for pair in ctrip_cookie.split(";"):
-                    if "=" in pair:
-                        cookie_names.add(pair.split("=", 1)[0].strip())
-                auth_found = cookie_names & {"cticket", "ctoken", "eid", "UID", "LOGIN_TOKEN", "_login", "Uid"}
-                print(f"[ctrip] API: loaded {len(cookie_names)} cookie names from cookies.json "
-                      f"(auth cookies present: {auth_found if auth_found else 'NONE — not authenticated'})")
-            except Exception:
-                pass
+    ctrip_cookie = _load_ctrip_cookie_string()
     if ctrip_cookie:
         headers["Cookie"] = ctrip_cookie
 
@@ -247,6 +230,8 @@ def scrape_hotel_images(hotel_url: str, headless: bool = True, max_images: int =
     """
     if not hotel_url:
         return []
+    hotel_url = validate_ctrip_hotel_url(hotel_url)
+    max_images = max(1, min(int(max_images), 8))
     images: list[str] = []
     try:
         with _stealth_browser(headless=headless) as pw:
@@ -306,12 +291,25 @@ def save_ctrip_cookies(cookie_input) -> dict:
     cookies = _normalize_cookies(cookie_input)
     if not cookies:
         raise ValueError("No valid cookies found in the provided input.")
+    cookie_string = "; ".join(
+        f"{cookie['name']}={cookie['value']}" for cookie in cookies
+    )
+    document = {
+        "cookie_string": cookie_string,
+        "cookies": cookies,
+    }
+    temporary = COOKIES_FILE.with_suffix(".tmp")
     try:
-        with open(COOKIES_FILE, "w", encoding="utf-8") as f:
-            json.dump(cookies, f, ensure_ascii=False, indent=2)
+        temporary.write_text(
+            json.dumps(document, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        os.chmod(temporary, 0o600)
+        temporary.replace(COOKIES_FILE)
     except Exception as exc:  # noqa: BLE001
+        temporary.unlink(missing_ok=True)
         raise RuntimeError(f"Could not write cookies file: {exc}") from exc
-    return {"saved": len(cookies), "file": COOKIES_FILE}
+    return {"saved": len(cookies)}
 
 
 def _normalize_cookies(cookie_input) -> list[dict]:
@@ -320,10 +318,13 @@ def _normalize_cookies(cookie_input) -> list[dict]:
         out = []
         for c in cookie_input:
             if isinstance(c, dict) and c.get("name"):
+                domain = str(c.get("domain") or ".ctrip.com").casefold().rstrip(".")
+                if not (domain == "ctrip.com" or domain.endswith(".ctrip.com")):
+                    continue
                 out.append({
-                    "name": c.get("name", ""),
-                    "value": c.get("value", ""),
-                    "domain": c.get("domain", ".ctrip.com"),
+                    "name": str(c.get("name", "")).strip(),
+                    "value": str(c.get("value", "")),
+                    "domain": domain,
                     "path": c.get("path", "/"),
                 })
         return out
@@ -377,11 +378,21 @@ def _load_ctrip_cookie_string() -> str:
     value = os.environ.get("CTRIP_COOKIE", "").strip()
     if value:
         return value
-    cookie_file = Path(__file__).resolve().parent.parent / "cookies.json"
-    if not cookie_file.exists():
+    if not COOKIES_FILE.exists():
         return ""
     try:
-        return str(json.loads(cookie_file.read_text()).get("cookie_string", "")).strip()
+        saved = json.loads(COOKIES_FILE.read_text(encoding="utf-8"))
+        if isinstance(saved, dict):
+            cookie_string = str(saved.get("cookie_string", "")).strip()
+            if cookie_string:
+                return cookie_string
+            saved = saved.get("cookies", [])
+        if isinstance(saved, list):
+            cookies = _normalize_cookies(saved)
+            return "; ".join(
+                f"{cookie['name']}={cookie['value']}" for cookie in cookies
+            )
+        return ""
     except Exception:
         return ""
 
@@ -959,10 +970,11 @@ def book_hotel(selection, contact: dict, dates: dict, guests: dict,
 def _book_hotel_live(selection, contact, dates, guests, payment_method) -> dict:
     if not selection.url:
         raise RuntimeError("no hotel url to open")
+    hotel_url = validate_ctrip_hotel_url(selection.url)
 
     pw, browser, page = _stealth_browser()
     try:
-        page.goto(selection.url, timeout=30000, wait_until="domcontentloaded")
+        page.goto(hotel_url, timeout=30000, wait_until="domcontentloaded")
         page.wait_for_timeout(2500)
 
         # 1) Select the room if a type was specified, else take the first bookable.

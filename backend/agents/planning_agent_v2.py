@@ -527,7 +527,6 @@ def run(trip_input: dict) -> dict:
     # ---- NEW: Shopping budget from budget leftover ----
     shopping_budget = 0.0
     budget_allocations = trip_input.get("_budget_allocations", {})
-    budget_ratios = trip_input.get("_budget_ratios", {})
     total_budget = float(trip_input.get("budget", {}).get("total", 0))
     currency = trip_input.get("budget", {}).get("currency", "CNY")
     
