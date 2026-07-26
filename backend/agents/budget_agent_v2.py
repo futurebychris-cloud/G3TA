@@ -16,7 +16,6 @@ Output: {"daily_caps": {...}, "warnings": [...], "pie_data": [...],
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import re
 import time

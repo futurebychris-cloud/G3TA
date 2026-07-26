@@ -1,4 +1,6 @@
+import json
 import os
+from pathlib import Path
 import tempfile
 import unittest
 from types import SimpleNamespace
@@ -10,10 +12,10 @@ import main
 import orchestrator
 from agents import activity_agent_v2, budget_agent_v2, planning_agent_v2
 from booking import auto_book, ctrip
-from booking.schemas import HotelSearchRequest
+from booking.schemas import HotelSearchRequest, HotelSelection
 from booking import shared_db
 from plan_runtime import finish_plan, register_plan
-from security import cors_allowed_origins
+from security import cors_allowed_origins, validate_ctrip_hotel_url
 
 
 TRIP = {
@@ -50,26 +52,67 @@ class SecurityBoundaryTests(unittest.TestCase):
         self.assertEqual(response.status_code, 503)
         self.assertIn("disabled", response.json()["detail"].lower())
 
-    def test_legacy_auto_booking_is_honest_even_with_operator_token(self):
+    def test_legacy_booking_shortcut_is_honest_even_with_operator_token(self):
         with patch.dict(
             os.environ,
             {
                 "BOOKING_AUTOMATION_ENABLED": "1",
-                "BOOKING_API_TOKEN": "operator-secret",
+                "BOOKING_API_TOKEN": "test-operator-secret-at-least-32-chars",
             },
             clear=False,
         ):
             response = self.client.post(
-                "/booking/auto/flight",
-                headers={"X-G3TA-Booking-Token": "operator-secret"},
+                "/booking/book-flight-by-index",
+                headers={"X-G3TA-Booking-Token": "test-operator-secret-at-least-32-chars"},
+                json={
+                    "origin": "Hangzhou",
+                    "destination": "Shanghai",
+                    "depart_date": "2026-08-01",
+                    "result_index": 0,
+                },
+            )
+        self.assertEqual(response.status_code, 501)
+        self.assertIn("complete the purchase with the provider", response.json()["detail"])
+
+    def test_booking_token_is_never_accepted_from_the_url(self):
+        with patch.dict(
+            os.environ,
+            {
+                "BOOKING_AUTOMATION_ENABLED": "1",
+                "BOOKING_API_TOKEN": "test-operator-secret-at-least-32-chars",
+            },
+            clear=False,
+        ):
+            response = self.client.post(
+                "/booking/auto/flight?token=test-operator-secret-at-least-32-chars",
                 json={
                     "origin": "Hangzhou",
                     "destination": "Shanghai",
                     "depart_date": "2026-08-01",
                 },
             )
-        self.assertEqual(response.status_code, 501)
-        self.assertIn("comparison only", response.json()["detail"])
+        self.assertEqual(response.status_code, 401)
+
+    def test_tokenless_local_booking_requires_explicit_override(self):
+        with patch.dict(
+            os.environ,
+            {
+                "BOOKING_AUTOMATION_ENABLED": "1",
+                "BOOKING_API_TOKEN": "",
+                "ALLOW_LOCAL_BOOKING_WITHOUT_TOKEN": "0",
+            },
+            clear=False,
+        ):
+            response = self.client.post(
+                "/booking/auto/flight",
+                json={
+                    "origin": "Hangzhou",
+                    "destination": "Shanghai",
+                    "depart_date": "2026-08-01",
+                },
+            )
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("requires BOOKING_API_TOKEN", response.json()["detail"])
 
     def test_booking_module_cannot_bypass_disabled_server_boundary(self):
         with patch.dict(os.environ, {"BOOKING_AUTOMATION_ENABLED": "0"}, clear=False):
@@ -123,6 +166,79 @@ class SecurityBoundaryTests(unittest.TestCase):
         self.assertEqual(body["dependencies"]["amap_web_service"], "configured")
         self.assertNotIn("never-return-me", response.text)
         self.assertNotIn("also-secret", response.text)
+
+    def test_hotel_browser_rejects_non_ctrip_urls_before_navigation(self):
+        for unsafe_url in (
+            "http://hotels.ctrip.com/hotels/1.html",
+            "https://ctrip.com.evil.example/hotels/1.html",
+            "https://127.0.0.1/internal",
+            "file:///etc/passwd",
+        ):
+            with self.subTest(url=unsafe_url):
+                with self.assertRaisesRegex(ValueError, "ctrip.com"):
+                    validate_ctrip_hotel_url(unsafe_url)
+                with self.assertRaises(ValueError):
+                    HotelSelection(id="1", name="Hotel", url=unsafe_url)
+
+        valid = "https://hotels.ctrip.com/hotels/123.html"
+        self.assertEqual(validate_ctrip_hotel_url(valid), valid)
+
+    def test_result_persistence_blocks_traversal_and_cross_browser_latest(self):
+        with tempfile.TemporaryDirectory() as temp_dir, patch.object(
+            main,
+            "RESULTS_DIR",
+            Path(temp_dir),
+        ):
+            invalid = self.client.post(
+                "/api/results/save",
+                json={
+                    "trip_id": "../../outside",
+                    "result": {"summary": "unsafe"},
+                },
+            )
+            self.assertEqual(invalid.status_code, 422)
+
+            oversized = self.client.post(
+                "/api/results/save",
+                json={"result": {"blob": "x" * (main.MAX_SAVED_RESULT_BYTES + 1)}},
+            )
+            self.assertEqual(oversized.status_code, 413)
+
+            saved = self.client.post(
+                "/api/results/save",
+                json={"result": {"summary": "private plan"}},
+            )
+            self.assertEqual(saved.status_code, 200)
+            trip_id = saved.json()["trip_id"]
+            self.assertRegex(trip_id, r"^[A-Za-z0-9_-]{16,100}$")
+
+            latest = self.client.get("/api/results/latest")
+            self.assertEqual(latest.status_code, 200)
+            self.assertEqual(latest.json()["result"]["summary"], "private plan")
+
+            other_browser = TestClient(main.app)
+            self.assertEqual(other_browser.get("/api/results/latest").status_code, 404)
+            self.assertEqual(
+                other_browser.get(
+                    "/api/results/load",
+                    params={"trip_id": trip_id},
+                ).status_code,
+                404,
+            )
+
+    def test_ctrip_cookie_file_is_private_and_uses_one_consistent_schema(self):
+        with tempfile.TemporaryDirectory() as temp_dir, patch.object(
+            ctrip,
+            "COOKIES_FILE",
+            Path(temp_dir) / "cookies.json",
+        ):
+            summary = ctrip.save_ctrip_cookies("cticket=test-cookie; other=value")
+            document = json.loads(ctrip.COOKIES_FILE.read_text(encoding="utf-8"))
+
+            self.assertEqual(summary, {"saved": 2})
+            self.assertIn("cookie_string", document)
+            self.assertEqual(len(document["cookies"]), 2)
+            self.assertEqual(ctrip.COOKIES_FILE.stat().st_mode & 0o777, 0o600)
 
 
 class PlanningLifecycleTests(unittest.TestCase):
@@ -184,20 +300,24 @@ class PlanningLifecycleTests(unittest.TestCase):
         self.assertIn("deepseek_estimate", summary["estimated_or_unverified_sources"])
 
     def test_provider_place_guard_rejects_a_different_city(self):
-        with self.assertRaisesRegex(ValueError, "out-of-city"):
-            orchestrator._selected_place_guard(
-                "Food",
-                "food.daily_meals[0].meals[0]",
-                {
-                    "source": "gaode_poi",
-                    "lat": 39.9042,
-                    "lng": 116.4074,
-                    "area": "北京",
-                },
-                "Shanghai",
-                "Hangzhou → Shanghai",
-                include_name=False,
-            )
+        with patch(
+            "services.gaode_service.geocode_city",
+            return_value=(31.2304, 121.4737),
+        ):
+            with self.assertRaisesRegex(ValueError, "out-of-city"):
+                orchestrator._selected_place_guard(
+                    "Food",
+                    "food.daily_meals[0].meals[0]",
+                    {
+                        "source": "gaode_poi",
+                        "lat": 39.9042,
+                        "lng": 116.4074,
+                        "area": "北京",
+                    },
+                    "Shanghai",
+                    "Hangzhou → Shanghai",
+                    include_name=False,
+                )
 
     def test_fallback_schedule_uses_the_selected_transport_mode(self):
         outputs = {

@@ -52,14 +52,18 @@ unless both conditions are met:
 
 ```dotenv
 BOOKING_AUTOMATION_ENABLED=1
-BOOKING_API_TOKEN=a-long-operator-secret
+BOOKING_API_TOKEN=<generate-random-value>
 ```
 
 The caller must send:
 
 ```http
-X-G3TA-Booking-Token: a-long-operator-secret
+X-G3TA-Booking-Token: <generate-random-value>
 ```
+
+The token is never accepted from a query parameter and must not be compiled
+into the public frontend. For an isolated localhost-only demo, a tokenless
+override additionally requires `ALLOW_LOCAL_BOOKING_WITHOUT_TOKEN=1`.
 
 If enabled, the experiment uses one-time identity fields for that provider
 request and does not persist them in G3TA. A record is written only when the

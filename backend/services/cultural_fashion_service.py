@@ -10,11 +10,6 @@ Replaces the temperature-only _clothing_by_temperature() with rich cultural cont
 """
 from __future__ import annotations
 
-import json
-import re
-import urllib.parse
-import urllib.request
-from functools import lru_cache
 
 # Cultural dress codes by destination type
 _CULTURAL_DRESS_CODES: dict[str, dict] = {
@@ -168,7 +163,6 @@ def get_cultural_clothing(destination: str) -> dict:
 
 def get_fashion_search_query(destination: str, season: str = "") -> str:
     """Generate a Google/web search query for local fashion and what to wear."""
-    culture = _get_country_culture(destination)
     country = _DESTINATION_COUNTRY_MAP.get(destination.lower().strip().split(",")[0].strip(), destination)
     season_str = f" {season}" if season else ""
     return f"what to wear in {destination}{season_str} fashion tips traditional clothing {country} travel guide"

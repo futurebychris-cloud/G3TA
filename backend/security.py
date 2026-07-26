@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import os
 import secrets
+from urllib.parse import urlsplit
 
-from fastapi import Header, HTTPException, Request
+from fastapi import HTTPException, Request
 
 
 TRUE_VALUES = {"1", "true", "yes", "on"}
@@ -49,10 +50,12 @@ def booking_automation_enabled() -> bool:
 def require_booking_access(request: Request) -> None:
     """Protect provider automation and traveler/booking records.
 
-    When ``BOOKING_AUTOMATION_ENABLED`` is on and a ``BOOKING_API_TOKEN`` is
-    configured, every call must present that token. When no token is configured
-    (local demo), access is allowed only from localhost so the UI auto-book
-    button works out of the box without exposing automation to the network.
+    A configured ``BOOKING_API_TOKEN`` must be sent in the request header. Query
+    parameters are deliberately rejected because URLs are commonly persisted in
+    browser history, reverse-proxy logs, and monitoring systems.
+
+    A tokenless localhost demo is available only through the explicit
+    ``ALLOW_LOCAL_BOOKING_WITHOUT_TOKEN=1`` opt-in. It is never the default.
     """
     if not booking_automation_enabled():
         raise HTTPException(
@@ -62,15 +65,29 @@ def require_booking_access(request: Request) -> None:
                 "then complete the purchase on the provider."
             ),
         )
-    expected = os.getenv("BOOKING_API_TOKEN", "")
+    expected = os.getenv("BOOKING_API_TOKEN", "").strip()
     if expected:
-        token = None
-        if request is not None:
-            token = request.headers.get("x-g3ta-booking-token") or request.query_params.get("token")
+        if len(expected) < 32:
+            raise HTTPException(
+                status_code=503,
+                detail="BOOKING_API_TOKEN must contain at least 32 characters.",
+            )
+        token = request.headers.get("x-g3ta-booking-token") if request is not None else None
         if not token or not secrets.compare_digest(token, expected):
             raise HTTPException(status_code=401, detail="Invalid booking access token.")
         return
-    # No token configured: allow only trusted localhost clients (local demo).
+
+    if not env_enabled("ALLOW_LOCAL_BOOKING_WITHOUT_TOKEN"):
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Booking automation requires BOOKING_API_TOKEN. For an isolated "
+                "localhost demo only, explicitly set "
+                "ALLOW_LOCAL_BOOKING_WITHOUT_TOKEN=1."
+            ),
+        )
+
+    # Explicit local-demo override: still reject non-loopback clients.
     client = request.client.host if request is not None and request.client else None
     if client in ("127.0.0.1", "::1", "localhost"):
         return
@@ -78,6 +95,29 @@ def require_booking_access(request: Request) -> None:
         status_code=401,
         detail=(
             "BOOKING_API_TOKEN is not configured and this request did not come from "
-            "localhost. Set BOOKING_API_TOKEN or run G3TA locally to use auto-booking."
+            "localhost. Set BOOKING_API_TOKEN; the tokenless override is localhost-only."
         ),
     )
+
+
+def validate_ctrip_hotel_url(value: str) -> str:
+    """Allow only HTTPS Ctrip hotel URLs before a browser navigates to them."""
+    value = (value or "").strip()
+    if not value:
+        return ""
+    try:
+        parsed = urlsplit(value)
+        hostname = (parsed.hostname or "").casefold().rstrip(".")
+        valid_host = hostname == "ctrip.com" or hostname.endswith(".ctrip.com")
+        valid_port = parsed.port in (None, 443)
+    except ValueError as exc:
+        raise ValueError("Invalid Ctrip hotel URL.") from exc
+    if (
+        parsed.scheme.casefold() != "https"
+        or not valid_host
+        or not valid_port
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise ValueError("Hotel URL must be an HTTPS URL on ctrip.com.")
+    return value

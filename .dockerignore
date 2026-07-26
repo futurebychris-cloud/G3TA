@@ -3,9 +3,14 @@
 .env
 .env.local
 *.env.local
+.env.*
+backend/cookies*.json
+backend/booking/cookies_*.json
+backend/data/results/
 **/__pycache__
 **/.pytest_cache
 backend/.venv
+.venv*
 frontend/node_modules
 frontend/dist
 backend/booking/*.db

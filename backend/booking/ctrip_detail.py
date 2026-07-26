@@ -15,9 +15,10 @@ from __future__ import annotations
 
 import json
 import re
-import time
 import random as _rnd
 from typing import Any
+
+from security import validate_ctrip_hotel_url
 
 
 def _stealth_browser_for_detail():
@@ -26,7 +27,6 @@ def _stealth_browser_for_detail():
     This is intentionally duplicated (not imported) so the detail scraper
     is a self-contained module that can be used independently.
     """
-    import os
     from playwright.sync_api import sync_playwright
 
     pw = sync_playwright().start()
@@ -74,16 +74,8 @@ def _stealth_browser_for_detail():
     page = context.new_page()
 
     # --- Cookie loading (same logic as ctrip.py) ---
-    ctrip_cookie = os.environ.get("CTRIP_COOKIE", "").strip()
-    if not ctrip_cookie:
-        from pathlib import Path as _Path
-        cookie_file = _Path(__file__).resolve().parent.parent / "cookies.json"
-        if cookie_file.exists():
-            try:
-                saved = json.loads(cookie_file.read_text())
-                ctrip_cookie = saved.get("cookie_string", "")
-            except Exception:
-                pass
+    from .ctrip import _load_ctrip_cookie_string
+    ctrip_cookie = _load_ctrip_cookie_string()
 
     if ctrip_cookie:
         cookies = []
@@ -183,6 +175,7 @@ def scrape_hotel_detail(
 
     if not hotel_url:
         return result
+    hotel_url = validate_ctrip_hotel_url(hotel_url)
 
     # If dates are provided, append them to the URL so the page loads with pricing
     url = hotel_url

@@ -3,16 +3,6 @@
 
 const API_BASE = import.meta.env.VITE_API_BASE || ''
 
-// Shared secret required by the backend for any booking write (configured via
-// BOOKING_API_TOKEN). Sent as the X-G3TA-Booking-Token header. Leave it blank
-// only for a trusted localhost demo where the backend allows localhost.
-const BOOKING_TOKEN = import.meta.env.VITE_G3TA_BOOKING_TOKEN || ''
-function bookingHeaders() {
-  const headers = { 'Content-Type': 'application/json' }
-  if (BOOKING_TOKEN) headers['X-G3TA-Booking-Token'] = BOOKING_TOKEN
-  return headers
-}
-
 export async function getHealth() {
   const resp = await fetch(`${API_BASE}/health`)
   if (!resp.ok) throw new Error(`Health check failed (${resp.status})`)
@@ -207,21 +197,7 @@ export async function loadLatestResult() {
   return resp.json()
 }
 
-// --- Ctrip session cookies + real hotel images ----------------------------- //
-
-export async function saveCookies(cookieString) {
-  const resp = await fetch(`${API_BASE}/booking/cookies`, {
-    method: 'POST',
-    headers: bookingHeaders(),
-    credentials: 'include',
-    body: JSON.stringify({ cookie_string: cookieString }),
-  })
-  if (!resp.ok) {
-    const detail = await resp.json().catch(() => ({}))
-    throw new Error(detail.detail || `Save cookies failed (${resp.status})`)
-  }
-  return resp.json()
-}
+// --- Provider-hosted hotel images ----------------------------------------- //
 
 export async function fetchHotelImages({ url = '', hotel_id = '', max_images = 6 }) {
   const resp = await fetch(`${API_BASE}/booking/hotel-images`, {
@@ -233,20 +209,6 @@ export async function fetchHotelImages({ url = '', hotel_id = '', max_images = 6
   if (!resp.ok) {
     const detail = await resp.json().catch(() => ({}))
     throw new Error(detail.detail || `Image scrape failed (${resp.status})`)
-  }
-  return resp.json()
-}
-
-export async function autoBookHotel(payload) {
-  const resp = await fetch(`${API_BASE}/booking/auto/hotel`, {
-    method: 'POST',
-    headers: bookingHeaders(),
-    credentials: 'include',
-    body: JSON.stringify(payload),
-  })
-  if (!resp.ok) {
-    const detail = await resp.json().catch(() => ({}))
-    throw new Error(detail.detail || `Auto-book failed (${resp.status})`)
   }
   return resp.json()
 }

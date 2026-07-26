@@ -19,7 +19,7 @@ lat/lng, room types, amenities) via the ctrip_detail scraper.
 from __future__ import annotations
 
 from services.hotels_service import get_hotel_options
-from booking.pipeline import search_and_filter, filter_results
+from booking.pipeline import search_and_filter
 from booking.schemas import HotelSearchRequest
 from booking import ctrip, osm
 from booking.ctrip_detail import enrich_hotels_batch

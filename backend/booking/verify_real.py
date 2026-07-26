@@ -33,7 +33,7 @@ if os.environ.get("ALLOW_MOCK_RESULTS"):
     sys.exit(1)
 
 from booking import ctrip, db
-from booking.schemas import HotelSearchRequest, HotelSelection, BookingConfirmRequest
+from booking.schemas import HotelSearchRequest
 from booking import pipeline
 
 

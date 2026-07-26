@@ -8,7 +8,6 @@ Usage:
        flight_reference, reasoning, source, verification_required}
 """
 from services.numbeo_service import get_cost_index as numbeo_get_cost_index
-from services.neural_budget import neural_budget_allocation
 
 
 def get_cost_index(
@@ -22,8 +21,6 @@ def get_cost_index(
     Returns shopping budget as an additional daily category.
     """
     dates = dates or {}
-    start = dates.get("start", "")
-    end = dates.get("end", "")
 
     # Primary: current Numbeo page data; the service labels static fallbacks.
     result = numbeo_get_cost_index(destination, origin, dates, currency)

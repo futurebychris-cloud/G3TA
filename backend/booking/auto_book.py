@@ -16,8 +16,6 @@ import os
 import re
 import urllib.parse
 import time
-from datetime import datetime
-from typing import Any
 
 
 def _require_booking_automation() -> None:
@@ -260,7 +258,6 @@ def _search_ctrip_flights(
     flights = []
     pw = None
     try:
-        from urllib.parse import quote
         src = _flight_city_code(origin)
         dst = _flight_city_code(destination)
         # The itinerary page is the real SSR results page; ?date= triggers load.
@@ -611,7 +608,6 @@ def auto_book_train(
     booking drive to payment, the order is recorded in shared_transport.
     """
     _require_booking_automation()
-    creds = get_stored_credentials("12306", user_id)
     trip_id = hashlib.sha256(
         f"{origin_station}{dest_station}{depart_date}".encode()
     ).hexdigest()[:12]
@@ -749,9 +745,6 @@ def auto_book_restaurant(
         get_stored_credentials("meituan", user_id)
         or get_stored_credentials("ctrip", user_id)
     )
-    trip_id = hashlib.sha256(
-        f"{restaurant_name}{date}{time_slot}".encode()
-    ).hexdigest()[:12]
 
     if not phone and creds:
         phone = creds.get("phone", "")

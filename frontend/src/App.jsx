@@ -14,7 +14,6 @@ import {
   Sparkles,
 } from 'lucide-react'
 import { cancelPlan, finalizePlan, getHealth, loadLatestResult, saveResult, streamPlan } from './api.js'
-import { getCookie, setCookie } from './utils/cookie.js'
 import { useAccessibilitySettings } from './accessibility/AccessibilityContext.jsx'
 import InputForm from './components/InputForm.jsx'
 import ProgressTracker from './components/ProgressTracker.jsx'
@@ -244,8 +243,6 @@ export default function App() {
   // the user can reopen a previous result without regenerating it.
   useEffect(() => {
     if (step !== 'input' || savedPlan) return
-    const tripId = getCookie('g3ta_trip_id')
-    if (!tripId) return
     loadLatestResult()
       .then((data) => setSavedPlan(data))
       .catch(() => {})
@@ -255,7 +252,6 @@ export default function App() {
     try {
       const data = await saveResult(planResult, input)
       if (data?.trip_id) {
-        setCookie('g3ta_trip_id', data.trip_id)
         setSavedPlan({
           trip_id: data.trip_id,
           saved_at: new Date().toISOString(),

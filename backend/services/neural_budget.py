@@ -14,8 +14,6 @@ Training data: simulated from real Numbeo cost distributions.
 from __future__ import annotations
 
 import math
-import os
-import random
 
 
 class BudgetNeuralNet:

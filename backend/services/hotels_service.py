@@ -71,10 +71,7 @@ def get_hotel_options(
         "calls failed). Caller should fall back to the Playwright Ctrip pipeline."
     )
 
-
-_DISPATCH = {
-    "hotelbeds": _hotelbeds if False else None,  # placeholder, wired below
-}
+_DISPATCH = {}
 
 
 # --------------------------------------------------------------------------- #
@@ -244,26 +241,15 @@ def _hotelbeds(destination, dates, max_price_per_night):
 
     url = f"{base}/hotel-api/1.0/hotels"
     print(f"[hotelbeds] request: dest={destination}, city={city}, lat={lat}, lng={lng}")
-    print(f"[hotelbeds] key={key[:8]}..., ts={ts}, sig={sig[:16]}...")
     print(f"[hotelbeds] body={json.dumps(body)}")
 
     try:
         resp = _http_json(url, headers=headers, data=body, method="POST")
         print(f"[hotelbeds] success: got response keys={list(resp.keys()) if isinstance(resp, dict) else 'N/A'}")
-    except Exception as exc:
-        # Try to get the response body for better error diagnostics
-        try:
-            req = urllib.request.Request(url, headers=headers, method="POST")
-            req.data = json.dumps(body).encode("utf-8")
-            req.add_header("Content-Type", "application/json")
-            with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT) as r:
-                pass  # shouldn't reach here if exc was raised
-        except urllib.error.HTTPError as http_err:
-            err_body = http_err.read().decode("utf-8", errors="replace")
-            print(f"[hotelbeds] HTTP {http_err.code} response body: {err_body[:500]}")
-        except Exception:
-            pass
-        raise exc
+    except urllib.error.HTTPError as exc:
+        err_body = exc.read().decode("utf-8", errors="replace")
+        print(f"[hotelbeds] HTTP {exc.code} response body: {err_body[:500]}")
+        raise
 
     nights = _nights(dates)
     wrapper = resp.get("hotels") or {}

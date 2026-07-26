@@ -16,11 +16,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import random as _rnd
 import re
-import time
-from datetime import datetime
-from typing import Any
 
 from .base import report_progress, trip_days
 from .known_attractions import _known_attractions

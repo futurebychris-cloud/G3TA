@@ -16,7 +16,7 @@ FROM python:3.11-slim AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    BOOKING_AUTOMATION_ENABLED=1
+    BOOKING_AUTOMATION_ENABLED=0
 
 WORKDIR /app
 COPY backend/requirements.txt /app/backend/requirements.txt
